@@ -1,0 +1,26 @@
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temp files
+*.tmp
+.env
+
+# User data directories
+config/
+workspace/
+
+# Personal UnRAID templates (contain local paths)
+my-*.xml
+teamarr.xml
+my-teamarr.xml

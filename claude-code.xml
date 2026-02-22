@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>claude-code</Name>
+  <Repository>claude-code-custom:latest</Repository>
+  <Registry>https://github.com/Jacob-Lasky/claude-code-docker/pkgs/container/claude-code</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Jacob-Lasky/claude-code-docker/issues</Support>
+  <Project>https://github.com/anthropics/claude-code</Project>
+  <Overview>Claude Code is Anthropic's official CLI tool that brings Claude's advanced coding capabilities to your terminal. This container runs claude-code with a web-based terminal interface accessible via your browser.&#xD;
+&#xD;
+Click the WebUI button above to access the terminal in your browser.&#xD;
+Claude starts automatically - just open the web interface and start coding!&#xD;
+&#xD;
+Authentication: Either provide ANTHROPIC_API_KEY or run 'claude login' on first use.&#xD;
+Your authentication will persist in the config volume.</Overview>
+  <Category>Productivity: Tools: Development:</Category>
+  <WebUI>http://[IP]:[PORT:7681]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/Jacob-Lasky/claude-code-docker/main/claude-code.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/Jacob-Lasky/claude-code-docker/main/icon.png</Icon>
+  <ExtraParams>--group-add 281</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="7681" Default="7681" Mode="tcp" Description="Web terminal port (ttyd)" Type="Port" Display="always" Required="true" Mask="false">7681</Config>
+  <Config Name="ANTHROPIC_API_KEY" Target="ANTHROPIC_API_KEY" Default="" Mode="" Description="Optional: Your Anthropic API key. If not provided, run 'claude login' in the terminal on first use." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Workspace" Target="/workspace" Default="/mnt/user/appdata/claude-code/workspace" Mode="rw" Description="Directory where claude-code will work with your files" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/claude-code/workspace</Config>
+  <Config Name="Claude Config" Target="/home/claude/.claude" Default="/mnt/user/appdata/claude-code/config" Mode="rw" Description="Claude configuration and settings directory" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/claude-code/config</Config>
+  <Config Name="Docker Socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="ro" Description="Docker socket for container management (read-only). Allows Claude to restart containers like dispatcharr." Type="Path" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID (default: 99 for Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID (default: 100 for Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+</Container>

@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  claude-code:
+    build: .
+    container_name: claude-code
+    restart: unless-stopped
+
+    # Unraid user permissions (nobody:users)
+    user: "99:100"
+
+    environment:
+      # Optional: Add your Anthropic API key here or use .env file
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PUID=99
+      - PGID=100
+
+    volumes:
+      # Persistent workspace and config
+      - ./workspace:/workspace
+      - ./config:/home/claude/.claude
+
+      # Docker socket access (read-only for safety)
+      # Allows Claude to manage Docker containers (e.g., restart dispatcharr)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    ports:
+      # Web terminal interface (ttyd)
+      - "7681:7681"
+      # Mobile input bridge
+      - "7682:7682"
+
+    # Add to docker group to access socket
+    # Unraid's docker group GID is 281
+    group_add:
+      - 281

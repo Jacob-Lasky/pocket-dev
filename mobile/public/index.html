@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Claude Terminal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    #terminal-frame {
+      flex: 1;
+      border: none;
+      min-height: 0;
+      background: #0d1117;
+      display: block;
+      /* Allow vertical touch-scroll to reach the iframe content */
+      touch-action: pan-y;
+    }
+
+    #controls {
+      flex-shrink: 0;
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .action-btn {
+      flex: 1;
+      background: #21262d;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0 8px;
+      height: 40px;
+      font-size: 14px;
+      font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 0.1s, border-color 0.1s, color 0.1s;
+    }
+
+    .action-btn:active {
+      background: #388bfd22;
+      border-color: #388bfd;
+    }
+
+    .action-btn.ctrl-active {
+      background: #388bfd33;
+      border-color: #388bfd;
+      color: #58a6ff;
+    }
+
+    #input-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    #cmd-input {
+      flex: 1;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0 12px;
+      height: 44px;
+      font-size: 16px;
+      font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+      outline: none;
+      transition: border-color 0.1s;
+    }
+
+    #cmd-input.ctrl-active { border-color: #388bfd; }
+    #cmd-input::placeholder { color: #484f58; }
+    #cmd-input:focus        { border-color: #388bfd; }
+
+    #send-btn {
+      background: #238636;
+      color: #fff;
+      border: 1px solid #2ea043;
+      border-radius: 6px;
+      padding: 0 18px;
+      height: 44px;
+      font-size: 18px;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 0.1s;
+      flex-shrink: 0;
+    }
+
+    #send-btn:active { background: #2ea043; }
+
+    @media (min-width: 768px) {
+      #controls {
+        flex-direction: row;
+        align-items: center;
+        padding: 6px 12px;
+        gap: 10px;
+      }
+
+      #btn-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex-shrink: 0;
+      }
+
+      .btn-row { gap: 4px; }
+
+      .action-btn {
+        flex: none;
+        height: 28px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      #input-row { flex: 1; }
+
+      #cmd-input {
+        height: 34px;
+        font-size: 14px;
+        padding: 0 10px;
+      }
+
+      #send-btn {
+        height: 34px;
+        font-size: 15px;
+        padding: 0 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <iframe id="terminal-frame" title="Claude Terminal"></iframe>
+    <div id="controls">
+      <div id="btn-group">
+        <div class="btn-row">
+          <button id="ctrl-btn" class="action-btn" onclick="toggleCtrl()" title="Ctrl modifier — press then type a letter">Ctrl</button>
+          <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
+          <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
+        </div>
+        <div class="btn-row">
+          <button class="action-btn" onclick="sendKey('left')"  title="Left arrow">←</button>
+          <button class="action-btn" onclick="sendKey('right')" title="Right arrow">→</button>
+          <button class="action-btn" onclick="historyUp()"      title="Previous command">↑</button>
+          <button class="action-btn" onclick="historyDown()"    title="Next command">↓</button>
+        </div>
+      </div>
+      <div id="input-row">
+        <input
+          id="cmd-input"
+          type="text"
+          placeholder="Type a message…"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        >
+        <button id="send-btn" onclick="sendText()" title="Send">→</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const frame   = document.getElementById('terminal-frame');
+    const input   = document.getElementById('cmd-input');
+    const ctrlBtn = document.getElementById('ctrl-btn');
+
+    frame.src = '/ttyd/';
+
+    // ── Touch-to-scroll: translate finger swipes into wheel events for xterm.js ──
+    // The iframe is same-origin so we can attach listeners to its document.
+    function attachTouchScroll() {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || !doc.body) return;
+
+        let lastY = 0;
+
+        doc.addEventListener('touchstart', e => {
+          lastY = e.touches[0].clientY;
+        }, { passive: true });
+
+        doc.addEventListener('touchmove', e => {
+          const y   = e.touches[0].clientY;
+          const dy  = lastY - y;   // positive = finger moved up = scroll down
+          lastY = y;
+          if (Math.abs(dy) < 1) return;
+
+          // Target xterm's scrollable viewport element; fall back to touch target
+          const el = doc.querySelector('.xterm-viewport') ?? e.target;
+          el.dispatchEvent(new WheelEvent('wheel', {
+            deltaY:    dy * 3,
+            deltaMode: 0,          // DOM_DELTA_PIXEL
+            bubbles:   true,
+          }));
+        }, { passive: true });
+      } catch (_) {
+        // Cross-origin or timing issue — silent fail
+      }
+    }
+
+    frame.addEventListener('load', attachTouchScroll);
+
+    // ── Ctrl toggle ──
+    let ctrlActive = false;
+
+    function toggleCtrl() {
+      ctrlActive = !ctrlActive;
+      ctrlBtn.classList.toggle('ctrl-active', ctrlActive);
+      input.classList.toggle('ctrl-active', ctrlActive);
+      if (ctrlActive) input.focus();
+    }
+
+    function deactivateCtrl() {
+      ctrlActive = false;
+      ctrlBtn.classList.remove('ctrl-active');
+      input.classList.remove('ctrl-active');
+    }
+
+    // ── Command history ──
+    const cmdHistory = [];
+    let historyIndex = -1;
+
+    function historyUp() {
+      if (cmdHistory.length === 0) return;
+      historyIndex = Math.min(historyIndex + 1, cmdHistory.length - 1);
+      input.value = cmdHistory[historyIndex];
+      setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+    }
+
+    function historyDown() {
+      if (historyIndex <= 0) {
+        historyIndex = -1;
+        input.value = '';
+        return;
+      }
+      historyIndex--;
+      input.value = cmdHistory[historyIndex];
+      setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
+    }
+
+    // ── Keyboard handling ──
+    input.addEventListener('keydown', (e) => {
+      if (ctrlActive) {
+        const letter = e.key.toLowerCase();
+        if (letter.length === 1 && /^[a-z]$/.test(letter)) {
+          e.preventDefault();
+          deactivateCtrl();
+          sendKey(`ctrl-${letter}`);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          deactivateCtrl();
+          return;
+        }
+      }
+
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendText();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        historyUp();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        historyDown();
+      }
+    });
+
+    if (window.innerWidth >= 768) input.focus();
+
+    if (window.visualViewport) {
+      const app = document.getElementById('app');
+      const onViewportChange = () => {
+        app.style.height = window.visualViewport.height + 'px';
+      };
+      window.visualViewport.addEventListener('resize', onViewportChange);
+      onViewportChange();
+    }
+
+    async function sendText() {
+      const text = input.value.trim();
+      deactivateCtrl();
+      if (!text) return;
+      if (cmdHistory[0] !== text) cmdHistory.unshift(text);
+      historyIndex = -1;
+      input.value = '';
+      await post('/send', { text });
+    }
+
+    async function sendKey(key) {
+      deactivateCtrl();
+      await post('/key', { key });
+    }
+
+    async function post(url, body) {
+      try {
+        await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch (e) {
+        console.error('Request failed:', e);
+      }
+    }
+  </script>
+</body>
+</html>
