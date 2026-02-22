@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>pocket-dev</title>
-  <link rel="stylesheet" href="/xterm/css/xterm.css">
+
+<link rel="stylesheet" href="/xterm/css/xterm.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; }
 
@@ -24,16 +25,58 @@
     #terminal-container {
       flex: 1;
       min-height: 0;
-      overflow: hidden;
+      position: relative;
       background: #0d1117;
       padding: 4px;
     }
 
-    /* xterm.js fills its container */
     #terminal-container .xterm,
     #terminal-container .xterm-viewport,
     #terminal-container .xterm-screen { height: 100%; }
 
+    /* Connection status dot */
+    #conn-dot {
+      position: absolute;
+      top: 10px; right: 10px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #484f58;
+      z-index: 10;
+      transition: background 0.4s;
+      pointer-events: none;
+    }
+    #conn-dot.connected    { background: #3fb950; box-shadow: 0 0 4px #3fb95088; }
+    #conn-dot.connecting   { background: #d29922; }
+    #conn-dot.disconnected { background: #ff7b72; box-shadow: 0 0 4px #ff7b7288; }
+
+    /* Scroll-to-bottom button */
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 2px 10px rgba(0,0,0,0.5); border-color: #388bfd; }
+      50%       { box-shadow: 0 2px 18px rgba(56,139,253,0.55); border-color: #79c0ff; }
+    }
+
+    #scroll-bottom {
+      position: fixed;
+      right: 14px;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: #21262d;
+      border: 1px solid #388bfd;
+      color: #58a6ff;
+      font-size: 16px;
+      cursor: pointer;
+      touch-action: manipulation;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #scroll-bottom.visible       { display: flex; }
+    #scroll-bottom.has-new-output { animation: pulse-glow 1.2s ease-in-out infinite; background: #1b2a3b; }
+    #scroll-bottom:active        { background: #388bfd33; }
+
+    /* Controls */
     #controls {
       flex-shrink: 0;
       background: #161b22;
@@ -43,6 +86,17 @@
       flex-direction: column;
       gap: 6px;
     }
+
+    #btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: hidden;
+      transition: max-height 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
+      max-height: 100px;
+      opacity: 1;
+    }
+    #btn-group.collapsed { max-height: 0; opacity: 0; margin: 0; }
 
     .btn-row { display: flex; gap: 6px; }
 
@@ -57,8 +111,10 @@
     }
     .action-btn:active        { background: #388bfd22; border-color: #388bfd; }
     .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
+    .action-btn.select-btn    { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
+    .action-btn.select-btn:active { background: #3fb95022; }
 
-    #input-row { display: flex; gap: 8px; }
+    #input-row { display: flex; gap: 8px; align-items: center; }
 
     #cmd-input {
       flex: 1; background: #0d1117; color: #e6edf3;
@@ -80,20 +136,97 @@
     }
     #send-btn:active { background: #2ea043; }
 
+    #collapse-btn {
+      background: none; color: #484f58;
+      border: none;
+      width: 32px; height: 44px; font-size: 16px;
+      cursor: pointer; touch-action: manipulation;
+      flex-shrink: 0; padding: 0;
+      transition: color 0.1s, transform 0.2s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #collapse-btn:active  { color: #e6edf3; }
+    #collapse-btn.collapsed { transform: rotate(180deg); }
+
+    /* ── Select Mode Overlay ───────────────────────────────────────────── */
+    #select-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: none;
+      flex-direction: column;
+      background: #0d1117;
+      z-index: 1000;
+    }
+    #select-overlay.active { display: flex; }
+
+    #select-topbar {
+      flex-shrink: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      gap: 10px;
+    }
+    #select-hint {
+      font-size: 13px;
+      color: #8b949e;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #select-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+    .sel-btn {
+      background: #21262d; color: #e6edf3;
+      border: 1px solid #30363d; border-radius: 6px;
+      padding: 0 14px; height: 36px; font-size: 13px;
+      cursor: pointer; touch-action: manipulation;
+      white-space: nowrap;
+    }
+    .sel-btn:active   { background: #388bfd22; border-color: #388bfd; }
+    .sel-btn.exit-btn { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
+
+    #select-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #select-content {
+      margin: 0;
+      padding: 10px 12px;
+      font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #e6edf3;
+      white-space: pre;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    /* Desktop layout */
     @media (min-width: 768px) {
       #controls { flex-direction: row; align-items: center; padding: 6px 12px; gap: 10px; }
-      #btn-group { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
-      .btn-row   { gap: 4px; }
+      #btn-group { flex-direction: column; gap: 4px; flex-shrink: 0; max-height: 70px; }
+      #btn-group.collapsed { max-height: 0; }
+      .btn-row    { gap: 4px; }
       .action-btn { flex: none; height: 28px; padding: 0 10px; font-size: 12px; }
       #input-row  { flex: 1; }
       #cmd-input  { height: 34px; font-size: 14px; padding: 0 10px; }
       #send-btn   { height: 34px; font-size: 15px; padding: 0 14px; }
+      #collapse-btn { height: 34px; }
     }
   </style>
 </head>
 <body>
   <div id="app">
-    <div id="terminal-container"></div>
+    <div id="terminal-container">
+      <div id="conn-dot" title="WebSocket disconnected"></div>
+    </div>
     <div id="controls">
       <div id="btn-group">
         <div class="btn-row">
@@ -101,6 +234,7 @@
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
+          <button class="action-btn select-btn" onclick="enterSelectMode()" title="Select &amp; copy terminal text">Select</button>
         </div>
         <div class="btn-row">
           <button class="action-btn" onclick="sendKey('left')"  title="Left">←</button>
@@ -113,20 +247,41 @@
         <input id="cmd-input" type="text" placeholder="Type a message…"
                autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <button id="send-btn" onclick="sendText()" title="Send">→</button>
+        <button id="collapse-btn" class="collapsed" onclick="toggleCollapse()" title="Toggle toolbar">⌄</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Scroll-to-bottom button -->
+  <button id="scroll-bottom" onclick="scrollToBottom()" title="Scroll to bottom">↓</button>
+
+  <!-- Select Mode Overlay -->
+  <div id="select-overlay">
+    <div id="select-topbar">
+      <span id="select-hint">Swipe to select · use system copy or tap Copy All</span>
+      <div id="select-actions">
+        <button class="sel-btn" onclick="copyAll()">Copy All</button>
+        <button class="sel-btn exit-btn" onclick="exitSelectMode()">✕ Live</button>
+      </div>
+    </div>
+    <div id="select-scroll">
+      <pre id="select-content"></pre>
     </div>
   </div>
 
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
   <script>
+    // ── Saved preferences ───────────────────────────────────────────────────
+    const savedFontSize      = parseInt(localStorage.getItem('pd-font-size'))       || 14;
+    const savedCollapsed     = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
+
     // ── Terminal setup ──────────────────────────────────────────────────────
     const term = new Terminal({
       cursorBlink: true,
-      scrollback:    5000,
-      copyOnSelect:  true,
+      scrollback:  5000,
+      fontSize:    savedFontSize,
       fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
-      fontSize:    14,
       theme: {
         background:          '#0d1117',
         foreground:          '#e6edf3',
@@ -144,39 +299,146 @@
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(document.getElementById('terminal-container'));
-    // Fit after first paint so the container has real dimensions
     requestAnimationFrame(() => fitAddon.fit());
 
+    // Apply saved collapsed state
+    const btnGroup    = document.getElementById('btn-group');
+    const collapseBtn = document.getElementById('collapse-btn');
+    let toolbarCollapsed = savedCollapsed;
+    btnGroup.classList.toggle('collapsed', toolbarCollapsed);
+    collapseBtn.classList.toggle('collapsed', toolbarCollapsed);
+
+    // ── Scroll-to-bottom button ─────────────────────────────────────────────
+    const scrollBtn = document.getElementById('scroll-bottom');
+
+    function updateScrollBtn() {
+      const buf = term.buffer.active;
+      const atBottom = buf.viewportY >= buf.baseY;
+      scrollBtn.classList.toggle('visible', !atBottom);
+      if (atBottom) scrollBtn.classList.remove('has-new-output');
+    }
+
+    function scrollToBottom() {
+      term.scrollToBottom();
+      scrollBtn.classList.remove('has-new-output');
+    }
+
+    term.onScroll(updateScrollBtn);
+
+    function positionScrollBtn() {
+      const controls = document.getElementById('controls');
+      scrollBtn.style.bottom = (controls.offsetHeight + 12) + 'px';
+    }
+
     // ── WebSocket ───────────────────────────────────────────────────────────
-    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
+    const connDot = document.getElementById('conn-dot');
 
-    ws.onopen = () => {
-      fitAndResize();
-    };
+    function setConnStatus(status) {
+      connDot.className = status;
+      const labels = { connected: 'Connected', connecting: 'Connecting…', disconnected: 'Disconnected' };
+      connDot.title = labels[status] || status;
+    }
 
-    ws.onmessage = e => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+    setConnStatus('connecting');
 
-    // xterm.js keyboard input → WebSocket
+    let ws;
+    function connectWS() {
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${wsProto}//${location.host}/ws`);
+
+      ws.onopen = () => {
+        setConnStatus('connected');
+        fitAndResize();
+        acquireWakeLock();
+      };
+
+      ws.onmessage = e => {
+        term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+        // Pulse scroll button if user is scrolled up
+        const buf = term.buffer.active;
+        if (buf.viewportY < buf.baseY) {
+          scrollBtn.classList.add('has-new-output');
+        }
+      };
+
+      ws.onclose = () => {
+        setConnStatus('disconnected');
+        releaseWakeLock();
+        setTimeout(connectWS, 2000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connectWS();
+
     term.onData(data => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
     function fitAndResize() {
       fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN)
+      if (ws && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     }
 
-    window.addEventListener('resize', fitAndResize);
+    window.addEventListener('resize', () => { fitAndResize(); positionScrollBtn(); });
 
-    // Keep layout correct when mobile soft keyboard opens
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', () => {
         document.getElementById('app').style.height = window.visualViewport.height + 'px';
         fitAndResize();
+        positionScrollBtn();
       });
     }
+
+    positionScrollBtn();
+
+    // ── Wake Lock ───────────────────────────────────────────────────────────
+    let wakeLock = null;
+
+    async function acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && ws?.readyState === WebSocket.OPEN)
+        acquireWakeLock();
+    });
+
+    // ── Pinch-to-zoom font size ─────────────────────────────────────────────
+    const termContainer = document.getElementById('terminal-container');
+    let pinchStartDist     = 0;
+    let pinchStartFontSize = savedFontSize;
+
+    termContainer.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) {
+        pinchStartDist     = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        pinchStartFontSize = term.options.fontSize;
+      }
+    }, { passive: true });
+
+    termContainer.addEventListener('touchmove', e => {
+      if (e.touches.length !== 2) return;
+      const dist  = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const newSize = Math.min(28, Math.max(8, Math.round(pinchStartFontSize * dist / pinchStartDist)));
+      if (newSize !== term.options.fontSize) {
+        term.options.fontSize = newSize;
+        fitAddon.fit();
+        localStorage.setItem('pd-font-size', newSize);
+      }
+    }, { passive: true });
 
     // ── Ctrl toggle ─────────────────────────────────────────────────────────
     const input   = document.getElementById('cmd-input');
@@ -194,6 +456,15 @@
       ctrlActive = false;
       ctrlBtn.classList.remove('ctrl-active');
       input.classList.remove('ctrl-active');
+    }
+
+    // ── Toolbar collapse ────────────────────────────────────────────────────
+    function toggleCollapse() {
+      toolbarCollapsed = !toolbarCollapsed;
+      btnGroup.classList.toggle('collapsed', toolbarCollapsed);
+      collapseBtn.classList.toggle('collapsed', toolbarCollapsed);
+      localStorage.setItem('pd-toolbar-collapsed', toolbarCollapsed);
+      setTimeout(() => { fitAndResize(); positionScrollBtn(); }, 220);
     }
 
     // ── Command history ─────────────────────────────────────────────────────
@@ -255,6 +526,78 @@
         });
       } catch (e) { console.error('Request failed:', e); }
     }
+
+    // ── Select Mode ─────────────────────────────────────────────────────────
+    function enterSelectMode() {
+      const buffer = term.buffer.active;
+      const totalLines = buffer.length;
+      const lines = [];
+
+      for (let y = 0; y < totalLines; y++) {
+        const line = buffer.getLine(y);
+        if (!line) { lines.push(''); continue; }
+        let text = '';
+        for (let x = 0; x < term.cols; x++) {
+          const cell = line.getCell(x);
+          text += cell ? (cell.getChars() || ' ') : ' ';
+        }
+        lines.push(text.trimEnd());
+      }
+
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      document.getElementById('select-content').textContent = lines.join('\n');
+
+      const overlay = document.getElementById('select-overlay');
+      overlay.classList.add('active');
+
+      requestAnimationFrame(() => {
+        const scrollEl = document.getElementById('select-scroll');
+        const ratio = totalLines > term.rows
+          ? buffer.viewportY / (totalLines - term.rows)
+          : 1;
+        scrollEl.scrollTop = ratio * Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      });
+    }
+
+    function exitSelectMode() {
+      document.getElementById('select-overlay').classList.remove('active');
+    }
+
+    function copyAll() {
+      writeToClipboard(document.getElementById('select-content').textContent, 'All output copied!');
+    }
+
+    function writeToClipboard(text, successMsg) {
+      const hint  = document.getElementById('select-hint');
+      const reset = 'Swipe to select · use system copy or tap Copy All';
+      const finish = ok => {
+        hint.textContent = ok ? successMsg : 'Copy failed — use system copy';
+        setTimeout(() => { hint.textContent = reset; }, 2500);
+      };
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(execCopy(text)));
+      } else {
+        finish(execCopy(text));
+      }
+    }
+
+    function execCopy(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+      return ok;
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('select-overlay').classList.contains('active'))
+        exitSelectMode();
+    });
+
   </script>
 </body>
 </html>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#0d1117"/>
+  <!-- Terminal chevron prompt > -->
+  <path d="M110 200 L220 256 L110 312" stroke="#3fb950" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Cursor block _ -->
+  <rect x="248" y="290" width="154" height="36" rx="8" fill="#3fb950"/>
+</svg>
