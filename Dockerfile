@@ -1,6 +1,7 @@
 FROM node:20-slim
 
-# Install git, curl, wget, tmux, and Docker CLI
+# Install system dependencies
+# build-essential + python3 are required to compile node-pty (native addon)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -10,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     jq \
+    build-essential \
+    python3 \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
@@ -17,14 +20,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y docker-ce-cli \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Install ttyd (web-based terminal)
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then TTYD_ARCH="x86_64"; \
-    elif [ "$ARCH" = "arm64" ]; then TTYD_ARCH="aarch64"; \
-    else TTYD_ARCH="$ARCH"; fi && \
-    wget -O /usr/local/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" && \
-    chmod +x /usr/local/bin/ttyd
 
 # Create entrypoint script directly in the image (as root before switching users)
 RUN echo '#!/bin/bash\n\
@@ -43,7 +38,8 @@ RUN groupadd -g 281 docker || true && \
     chown -R claude:users /workspace /home/claude/.claude && \
     chmod -R 775 /workspace /home/claude/.claude
 
-# Install mobile bridge (as root, before switching users)
+# Install pocket-dev server (as root, before switching users)
+# npm install compiles node-pty natively here
 COPY mobile/ /mobile/
 RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
     chmod +x /mobile/start.sh && \
@@ -64,11 +60,10 @@ ENV HOME="/home/claude"
 # Set working directory
 WORKDIR /workspace
 
-# Expose ttyd and mobile bridge ports
-EXPOSE 7681 7682
+# Expose web terminal port
+EXPOSE 7681
 
 # Set entrypoint to fix permissions on startup
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-# Start mobile bridge (background) + ttyd (foreground)
 CMD ["/mobile/start.sh"]

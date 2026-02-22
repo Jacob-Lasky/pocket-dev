@@ -3,16 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Claude Terminal</title>
+  <title>pocket-dev</title>
+  <link rel="stylesheet" href="/xterm/css/xterm.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; }
 
     html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      background: #0d1117;
-      color: #e6edf3;
+      margin: 0; padding: 0; height: 100%;
+      background: #0d1117; color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       overflow: hidden;
     }
@@ -23,15 +21,18 @@
       height: 100dvh;
     }
 
-    #terminal-frame {
+    #terminal-container {
       flex: 1;
-      border: none;
       min-height: 0;
+      overflow: hidden;
       background: #0d1117;
-      display: block;
-      /* Allow vertical touch-scroll to reach the iframe content */
-      touch-action: pan-y;
+      padding: 4px;
     }
+
+    /* xterm.js fills its container */
+    #terminal-container .xterm,
+    #terminal-container .xterm-viewport,
+    #terminal-container .xterm-screen { height: 100%; }
 
     #controls {
       flex-shrink: 0;
@@ -43,190 +44,143 @@
       gap: 6px;
     }
 
-    .btn-row {
-      display: flex;
-      gap: 6px;
-    }
+    .btn-row { display: flex; gap: 6px; }
 
     .action-btn {
       flex: 1;
-      background: #21262d;
-      color: #e6edf3;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 0 8px;
-      height: 40px;
-      font-size: 14px;
+      background: #21262d; color: #e6edf3;
+      border: 1px solid #30363d; border-radius: 6px;
+      padding: 0 8px; height: 40px; font-size: 14px;
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
-      cursor: pointer;
-      touch-action: manipulation;
+      cursor: pointer; touch-action: manipulation;
       transition: background 0.1s, border-color 0.1s, color 0.1s;
     }
+    .action-btn:active        { background: #388bfd22; border-color: #388bfd; }
+    .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
 
-    .action-btn:active {
-      background: #388bfd22;
-      border-color: #388bfd;
-    }
-
-    .action-btn.ctrl-active {
-      background: #388bfd33;
-      border-color: #388bfd;
-      color: #58a6ff;
-    }
-
-    #input-row {
-      display: flex;
-      gap: 8px;
-    }
+    #input-row { display: flex; gap: 8px; }
 
     #cmd-input {
-      flex: 1;
-      background: #0d1117;
-      color: #e6edf3;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      padding: 0 12px;
-      height: 44px;
-      font-size: 16px;
+      flex: 1; background: #0d1117; color: #e6edf3;
+      border: 1px solid #30363d; border-radius: 6px;
+      padding: 0 12px; height: 44px; font-size: 16px;
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
-      outline: none;
-      transition: border-color 0.1s;
+      outline: none; transition: border-color 0.1s;
     }
-
-    #cmd-input.ctrl-active { border-color: #388bfd; }
+    #cmd-input.ctrl-active  { border-color: #388bfd; }
     #cmd-input::placeholder { color: #484f58; }
     #cmd-input:focus        { border-color: #388bfd; }
 
     #send-btn {
-      background: #238636;
-      color: #fff;
-      border: 1px solid #2ea043;
-      border-radius: 6px;
-      padding: 0 18px;
-      height: 44px;
-      font-size: 18px;
-      cursor: pointer;
-      touch-action: manipulation;
-      transition: background 0.1s;
-      flex-shrink: 0;
+      background: #238636; color: #fff;
+      border: 1px solid #2ea043; border-radius: 6px;
+      padding: 0 18px; height: 44px; font-size: 18px;
+      cursor: pointer; touch-action: manipulation;
+      transition: background 0.1s; flex-shrink: 0;
     }
-
     #send-btn:active { background: #2ea043; }
 
     @media (min-width: 768px) {
-      #controls {
-        flex-direction: row;
-        align-items: center;
-        padding: 6px 12px;
-        gap: 10px;
-      }
-
-      #btn-group {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        flex-shrink: 0;
-      }
-
-      .btn-row { gap: 4px; }
-
-      .action-btn {
-        flex: none;
-        height: 28px;
-        padding: 0 10px;
-        font-size: 12px;
-      }
-
-      #input-row { flex: 1; }
-
-      #cmd-input {
-        height: 34px;
-        font-size: 14px;
-        padding: 0 10px;
-      }
-
-      #send-btn {
-        height: 34px;
-        font-size: 15px;
-        padding: 0 14px;
-      }
+      #controls { flex-direction: row; align-items: center; padding: 6px 12px; gap: 10px; }
+      #btn-group { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+      .btn-row   { gap: 4px; }
+      .action-btn { flex: none; height: 28px; padding: 0 10px; font-size: 12px; }
+      #input-row  { flex: 1; }
+      #cmd-input  { height: 34px; font-size: 14px; padding: 0 10px; }
+      #send-btn   { height: 34px; font-size: 15px; padding: 0 14px; }
     }
   </style>
 </head>
 <body>
   <div id="app">
-    <iframe id="terminal-frame" title="Claude Terminal"></iframe>
+    <div id="terminal-container"></div>
     <div id="controls">
       <div id="btn-group">
         <div class="btn-row">
-          <button id="ctrl-btn" class="action-btn" onclick="toggleCtrl()" title="Ctrl modifier — press then type a letter">Ctrl</button>
+          <button id="ctrl-btn" class="action-btn" onclick="toggleCtrl()" title="Ctrl — then type a letter">Ctrl</button>
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
+          <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
         </div>
         <div class="btn-row">
-          <button class="action-btn" onclick="sendKey('left')"  title="Left arrow">←</button>
-          <button class="action-btn" onclick="sendKey('right')" title="Right arrow">→</button>
+          <button class="action-btn" onclick="sendKey('left')"  title="Left">←</button>
+          <button class="action-btn" onclick="sendKey('right')" title="Right">→</button>
           <button class="action-btn" onclick="historyUp()"      title="Previous command">↑</button>
           <button class="action-btn" onclick="historyDown()"    title="Next command">↓</button>
         </div>
       </div>
       <div id="input-row">
-        <input
-          id="cmd-input"
-          type="text"
-          placeholder="Type a message…"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck="false"
-        >
+        <input id="cmd-input" type="text" placeholder="Type a message…"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <button id="send-btn" onclick="sendText()" title="Send">→</button>
       </div>
     </div>
   </div>
 
+  <script src="/xterm/lib/xterm.js"></script>
+  <script src="/addon-fit/lib/addon-fit.js"></script>
   <script>
-    const frame   = document.getElementById('terminal-frame');
-    const input   = document.getElementById('cmd-input');
-    const ctrlBtn = document.getElementById('ctrl-btn');
+    // ── Terminal setup ──────────────────────────────────────────────────────
+    const term = new Terminal({
+      cursorBlink: true,
+      scrollback:    5000,
+      copyOnSelect:  true,
+      fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
+      fontSize:    14,
+      theme: {
+        background:          '#0d1117',
+        foreground:          '#e6edf3',
+        cursor:              '#e6edf3',
+        selectionBackground: '#388bfd40',
+        black:   '#484f58', red:     '#ff7b72', green:  '#3fb950', yellow: '#d29922',
+        blue:    '#58a6ff', magenta: '#bc8cff', cyan:   '#39c5cf', white:  '#b1bac4',
+        brightBlack:   '#6e7681', brightRed:     '#ffa198',
+        brightGreen:   '#56d364', brightYellow:  '#e3b341',
+        brightBlue:    '#79c0ff', brightMagenta: '#d2a8ff',
+        brightCyan:    '#56d4dd', brightWhite:   '#f0f6fc',
+      },
+    });
 
-    frame.src = '/ttyd/';
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal-container'));
+    // Fit after first paint so the container has real dimensions
+    requestAnimationFrame(() => fitAddon.fit());
 
-    // ── Touch-to-scroll: translate finger swipes into wheel events for xterm.js ──
-    // The iframe is same-origin so we can attach listeners to its document.
-    function attachTouchScroll() {
-      try {
-        const doc = frame.contentDocument;
-        if (!doc || !doc.body) return;
+    // ── WebSocket ───────────────────────────────────────────────────────────
+    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
 
-        let lastY = 0;
+    ws.onopen = () => {
+      fitAndResize();
+    };
 
-        doc.addEventListener('touchstart', e => {
-          lastY = e.touches[0].clientY;
-        }, { passive: true });
+    ws.onmessage = e => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
 
-        doc.addEventListener('touchmove', e => {
-          const y   = e.touches[0].clientY;
-          const dy  = lastY - y;   // positive = finger moved up = scroll down
-          lastY = y;
-          if (Math.abs(dy) < 1) return;
+    // xterm.js keyboard input → WebSocket
+    term.onData(data => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    });
 
-          // Target xterm's scrollable viewport element; fall back to touch target
-          const el = doc.querySelector('.xterm-viewport') ?? e.target;
-          el.dispatchEvent(new WheelEvent('wheel', {
-            deltaY:    dy * 3,
-            deltaMode: 0,          // DOM_DELTA_PIXEL
-            bubbles:   true,
-          }));
-        }, { passive: true });
-      } catch (_) {
-        // Cross-origin or timing issue — silent fail
-      }
+    function fitAndResize() {
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     }
 
-    frame.addEventListener('load', attachTouchScroll);
+    window.addEventListener('resize', fitAndResize);
 
-    // ── Ctrl toggle ──
+    // Keep layout correct when mobile soft keyboard opens
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        document.getElementById('app').style.height = window.visualViewport.height + 'px';
+        fitAndResize();
+      });
+    }
+
+    // ── Ctrl toggle ─────────────────────────────────────────────────────────
+    const input   = document.getElementById('cmd-input');
+    const ctrlBtn = document.getElementById('ctrl-btn');
     let ctrlActive = false;
 
     function toggleCtrl() {
@@ -242,68 +196,41 @@
       input.classList.remove('ctrl-active');
     }
 
-    // ── Command history ──
+    // ── Command history ─────────────────────────────────────────────────────
     const cmdHistory = [];
     let historyIndex = -1;
 
     function historyUp() {
-      if (cmdHistory.length === 0) return;
+      if (!cmdHistory.length) return;
       historyIndex = Math.min(historyIndex + 1, cmdHistory.length - 1);
       input.value = cmdHistory[historyIndex];
       setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
     }
 
     function historyDown() {
-      if (historyIndex <= 0) {
-        historyIndex = -1;
-        input.value = '';
-        return;
-      }
+      if (historyIndex <= 0) { historyIndex = -1; input.value = ''; return; }
       historyIndex--;
       input.value = cmdHistory[historyIndex];
       setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
     }
 
-    // ── Keyboard handling ──
-    input.addEventListener('keydown', (e) => {
+    // ── Input bar keyboard handling ─────────────────────────────────────────
+    input.addEventListener('keydown', e => {
       if (ctrlActive) {
         const letter = e.key.toLowerCase();
         if (letter.length === 1 && /^[a-z]$/.test(letter)) {
-          e.preventDefault();
-          deactivateCtrl();
-          sendKey(`ctrl-${letter}`);
-          return;
+          e.preventDefault(); deactivateCtrl(); sendKey(`ctrl-${letter}`); return;
         }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          deactivateCtrl();
-          return;
-        }
+        if (e.key === 'Escape') { e.preventDefault(); deactivateCtrl(); return; }
       }
-
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendText();
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        historyUp();
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        historyDown();
-      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); historyUp(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); historyDown(); }
     });
 
     if (window.innerWidth >= 768) input.focus();
 
-    if (window.visualViewport) {
-      const app = document.getElementById('app');
-      const onViewportChange = () => {
-        app.style.height = window.visualViewport.height + 'px';
-      };
-      window.visualViewport.addEventListener('resize', onViewportChange);
-      onViewportChange();
-    }
-
+    // ── Actions ─────────────────────────────────────────────────────────────
     async function sendText() {
       const text = input.value.trim();
       deactivateCtrl();
@@ -326,9 +253,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-      } catch (e) {
-        console.error('Request failed:', e);
-      }
+      } catch (e) { console.error('Request failed:', e); }
     }
   </script>
 </body>
