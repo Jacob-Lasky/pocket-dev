@@ -15,7 +15,9 @@ app.use('/xterm',     express.static(path.join(__dirname, 'node_modules/@xterm/x
 app.use('/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit')));
 
 // ── PTY (tmux → claude) ───────────────────────────────────────────────────────
-const ptyProc = pty.spawn('tmux', ['-u', 'new-session', '-A', '-s', SESSION, CMD], {
+// Wrap CMD in a restart loop so Claude relaunches automatically on exit
+const LOOP_CMD = `bash -c 'while true; do ${CMD}; echo ""; echo "restarting..."; sleep 1; done'`;
+const ptyProc = pty.spawn('tmux', ['-u', 'new-session', '-A', '-s', SESSION, LOOP_CMD], {
   name: 'xterm-256color',
   cols: 220,
   rows: 50,

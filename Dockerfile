@@ -48,8 +48,9 @@ RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
 # Switch to claude user before installing
 USER claude
 
-# Install claude-code using native installer as the claude user
-RUN curl -fsSL https://claude.ai/install.sh | bash
+# Install claude-code and uv as the claude user
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Ensure claude is in user's PATH and HOME is set correctly
 ENV PATH="/home/claude/.local/bin:${PATH}"
