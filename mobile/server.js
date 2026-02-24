@@ -2,6 +2,7 @@ const express  = require('express');
 const http     = require('http');
 const path     = require('path');
 const pty      = require('node-pty');
+const { exec } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const app     = express();
@@ -61,6 +62,10 @@ app.post('/key', (req, res) => {
   if (!seq) return res.status(400).json({ error: 'unknown key' });
   ptyProc.write(seq);
   res.json({ ok: true });
+});
+
+app.post('/refresh', (req, res) => {
+  exec(`tmux list-clients -F '#{client_name}' | xargs -I{} tmux refresh-client -t {}`, { shell: true }, (err) => res.json({ ok: !err }));
 });
 
 // ── WebSocket terminal I/O ────────────────────────────────────────────────────

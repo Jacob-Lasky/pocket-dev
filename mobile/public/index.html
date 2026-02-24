@@ -241,6 +241,7 @@
           <button class="action-btn" onclick="sendKey('right')" title="Right">→</button>
           <button class="action-btn" onclick="historyUp()"      title="Previous command">↑</button>
           <button class="action-btn" onclick="historyDown()"    title="Next command">↓</button>
+          <button class="action-btn" onclick="refreshTerminal()" title="Refresh terminal display">⟳</button>
         </div>
       </div>
       <div id="input-row">
@@ -502,6 +503,10 @@
     if (window.innerWidth >= 768) input.focus();
 
     // ── Actions ─────────────────────────────────────────────────────────────
+    async function refreshTerminal() {
+      await post('/refresh', {});
+    }
+
     async function sendText() {
       const text = input.value.trim();
       deactivateCtrl();
