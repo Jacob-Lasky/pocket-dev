@@ -279,8 +279,9 @@
 
     // ── Terminal setup ──────────────────────────────────────────────────────
     const term = new Terminal({
-      cursorBlink: true,
-      scrollback:  5000,
+      cursorBlink:   true,
+      copyOnSelect:  true,
+      scrollback:    5000,
       fontSize:    savedFontSize,
       fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
       theme: {
