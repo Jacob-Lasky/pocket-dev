@@ -83,11 +83,13 @@ wss.on('connection', ws => {
 
   ws.on('message', data => {
     const msg = data.toString();
-    try {
-      const { type, cols, rows } = JSON.parse(msg);
-      if (type === 'resize' && cols && rows)
-        ptyProc.resize(Math.max(1, cols), Math.max(1, rows));
-    } catch {
+    if (msg.startsWith('{')) {
+      try {
+        const { type, cols, rows } = JSON.parse(msg);
+        if (type === 'resize' && cols && rows)
+          ptyProc.resize(Math.max(1, cols), Math.max(1, rows));
+      } catch {}
+    } else {
       ptyProc.write(msg);   // raw xterm.js keyboard input
     }
   });
