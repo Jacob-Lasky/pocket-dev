@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>claude-code</Name>
-  <Repository>claude-code-custom:latest</Repository>
-  <Registry>https://github.com/Jacob-Lasky/claude-code-docker/pkgs/container/claude-code</Registry>
+  <Repository>ghcr.io/jacob-lasky/pocket-dev:latest</Repository>
+  <Registry>https://github.com/Jacob-Lasky/pocket-dev/pkgs/container/pocket-dev</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/Jacob-Lasky/claude-code-docker/issues</Support>
+  <Support>https://github.com/Jacob-Lasky/pocket-dev/issues</Support>
   <Project>https://github.com/anthropics/claude-code</Project>
   <Overview>Claude Code is Anthropic's official CLI tool that brings Claude's advanced coding capabilities to your terminal. This container runs claude-code with a web-based terminal interface accessible via your browser.&#xD;
 &#xD;
@@ -18,7 +18,7 @@ Authentication: Either provide ANTHROPIC_API_KEY or run 'claude login' on first 
 Your authentication will persist in the config volume.</Overview>
   <Category>Productivity: Tools: Development:</Category>
   <WebUI>http://[IP]:[PORT:7681]</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/Jacob-Lasky/claude-code-docker/main/claude-code.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/Jacob-Lasky/pocket-dev/main/claude-code.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/Jacob-Lasky/claude-code-docker/main/icon.png</Icon>
   <ExtraParams>--group-add 281</ExtraParams>
   <PostArgs/>
