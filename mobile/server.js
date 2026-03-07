@@ -68,6 +68,14 @@ app.post('/refresh', (req, res) => {
   exec(`tmux list-clients -F '#{client_name}' | xargs -I{} tmux refresh-client -t {}`, { shell: true }, (err) => res.json({ ok: !err }));
 });
 
+// Return full tmux scrollback history as plain text
+app.get('/history', (req, res) => {
+  exec(`tmux capture-pane -t ${SESSION} -S - -p -J`, { shell: true, maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).send(stderr || err.message);
+    res.type('text/plain').send(stdout);
+  });
+});
+
 // ── WebSocket terminal I/O ────────────────────────────────────────────────────
 const server  = http.createServer(app);
 const wss     = new WebSocketServer({ noServer: true });

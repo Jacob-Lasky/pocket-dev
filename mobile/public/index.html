@@ -350,6 +350,11 @@
 
       ws.onopen = () => {
         setConnStatus('connected');
+        // Reset xterm.js buffer on every reconnect so the scrollback is always
+        // at the current terminal width (avoids jumbled/double-wrapped lines
+        // caused by the PTY starting at a different column count).
+        // The PTY redraw triggered by fitAndResize() refills the screen immediately.
+        term.reset();
         fitAndResize();
         acquireWakeLock();
       };
@@ -534,34 +539,29 @@
     }
 
     // ── Select Mode ─────────────────────────────────────────────────────────
-    function enterSelectMode() {
-      const buffer = term.buffer.active;
-      const totalLines = buffer.length;
-      const lines = [];
-
-      for (let y = 0; y < totalLines; y++) {
-        const line = buffer.getLine(y);
-        if (!line) { lines.push(''); continue; }
-        let text = '';
-        for (let x = 0; x < term.cols; x++) {
-          const cell = line.getCell(x);
-          text += cell ? (cell.getChars() || ' ') : ' ';
-        }
-        lines.push(text.trimEnd());
-      }
-
-      while (lines.length && lines[lines.length - 1] === '') lines.pop();
-      document.getElementById('select-content').textContent = lines.join('\n');
-
+    // Fetches full scrollback from tmux (not xterm.js buffer) so history
+    // includes Claude's alternate-screen output which xterm.js never captures.
+    async function enterSelectMode() {
       const overlay = document.getElementById('select-overlay');
+      const content = document.getElementById('select-content');
+      const hint    = document.getElementById('select-hint');
+
+      content.textContent = 'Loading history…';
       overlay.classList.add('active');
+
+      try {
+        const resp = await fetch('/history');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        content.textContent = text;
+        hint.textContent = 'Swipe to select · use system copy or tap Copy All';
+      } catch (e) {
+        content.textContent = '(failed to load history: ' + e.message + ')';
+      }
 
       requestAnimationFrame(() => {
         const scrollEl = document.getElementById('select-scroll');
-        const ratio = totalLines > term.rows
-          ? buffer.viewportY / (totalLines - term.rows)
-          : 1;
-        scrollEl.scrollTop = ratio * Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        scrollEl.scrollTop = scrollEl.scrollHeight;
       });
     }
 
