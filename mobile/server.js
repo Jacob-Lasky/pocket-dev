@@ -81,6 +81,13 @@ ptyProc.onData(data => {
 wss.on('connection', ws => {
   clients.add(ws);
 
+  // Force tmux to re-render the current screen for the new client.
+  // A 1-row resize and back triggers a full PTY redraw, so reconnects
+  // immediately show the current terminal state instead of a blank screen.
+  const { cols, rows } = ptyProc;
+  ptyProc.resize(cols, rows > 1 ? rows - 1 : rows + 1);
+  setTimeout(() => ptyProc.resize(cols, rows), 50);
+
   ws.on('message', data => {
     const msg = data.toString();
     if (msg.startsWith('{')) {
