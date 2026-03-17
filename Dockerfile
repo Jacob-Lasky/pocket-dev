@@ -31,6 +31,13 @@ chmod 775 /workspace 2>/dev/null || true\n\
 exec "$@"' > /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
+# Add claude shortcut aliases
+RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
+    && echo 'exec claude --dangerously-skip-permissions --model claude-opus-4-6 "$@"' >> /usr/local/bin/cdspo \
+    && echo '#!/bin/bash' > /usr/local/bin/cdsps \
+    && echo 'exec claude --dangerously-skip-permissions --model claude-sonnet-4-6 "$@"' >> /usr/local/bin/cdsps \
+    && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps
+
 # Create docker group and user with proper permissions
 RUN groupadd -g 281 docker || true && \
     useradd -m -u 99 -g 100 -G 281 claude && \

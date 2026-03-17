@@ -350,11 +350,6 @@
 
       ws.onopen = () => {
         setConnStatus('connected');
-        // Reset xterm.js buffer on every reconnect so the scrollback is always
-        // at the current terminal width (avoids jumbled/double-wrapped lines
-        // caused by the PTY starting at a different column count).
-        // The PTY redraw triggered by fitAndResize() refills the screen immediately.
-        term.reset();
         fitAndResize();
         acquireWakeLock();
       };

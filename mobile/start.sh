@@ -1,5 +1,10 @@
 #!/bin/bash
-# Configure tmux history limit so Select Mode can scroll back far
+# Configure tmux for pocket-dev
 mkdir -p /home/claude
-echo 'set -g history-limit 100000' > /home/claude/.tmux.conf
+cat > /home/claude/.tmux.conf << 'TMUXEOF'
+set -g history-limit 100000
+set -g status off
+set -g escape-time 0
+set -g mouse on
+TMUXEOF
 exec node /mobile/server.js
