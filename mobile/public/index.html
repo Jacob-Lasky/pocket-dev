@@ -113,6 +113,10 @@
     .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
     .action-btn.select-btn    { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
     .action-btn.select-btn:active { background: #3fb95022; }
+    .action-btn.tmux-btn      { background: #1f1f2d; border-color: #bc8cff; color: #bc8cff; }
+    .action-btn.tmux-btn:active { background: #bc8cff22; }
+    .action-btn.tmux-kill      { background: #2d1f1f; border-color: #ff7b72; color: #ff7b72; }
+    .action-btn.tmux-kill:active { background: #ff7b7222; }
 
     #input-row { display: flex; gap: 8px; align-items: center; }
 
@@ -229,18 +233,27 @@
     </div>
     <div id="controls">
       <div id="btn-group">
-        <div class="btn-row">
-          <button id="ctrl-btn" class="action-btn" onclick="toggleCtrl()" title="Ctrl — then type a letter">Ctrl</button>
+        <!-- Normal row -->
+        <div id="btn-row-normal" class="btn-row">
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
           <button class="action-btn select-btn" onclick="enterSelectMode()" title="Select &amp; copy terminal text">Select</button>
+          <button id="tmux-btn" class="action-btn tmux-btn" onclick="showTmuxRow()" title="tmux shortcuts (Ctrl+b)">tmux</button>
+        </div>
+        <!-- Tmux shortcut row (hidden by default) -->
+        <div id="btn-row-tmux" class="btn-row" style="display:none">
+          <button class="action-btn tmux-btn" onclick="tmuxNew()"  title="New window + cdspo">+New</button>
+          <button class="action-btn tmux-btn" onclick="tmuxNext()" title="Next window (Ctrl+b n)">Next</button>
+          <button class="action-btn tmux-btn" onclick="tmuxLast()" title="Last window (Ctrl+b l)">Last</button>
+          <button class="action-btn tmux-kill" onclick="tmuxKill()" title="Kill window (Ctrl+b &amp; y)">Kill</button>
+          <button class="action-btn" onclick="hideTmuxRow()" title="Back to normal buttons">✕</button>
         </div>
         <div class="btn-row">
           <button class="action-btn" onclick="sendKey('left')"  title="Left">←</button>
           <button class="action-btn" onclick="sendKey('right')" title="Right">→</button>
-          <button class="action-btn" onclick="historyUp()"      title="Previous command">↑</button>
-          <button class="action-btn" onclick="historyDown()"    title="Next command">↓</button>
+          <button class="action-btn" onclick="sendKey('up')"    title="Up">↑</button>
+          <button class="action-btn" onclick="sendKey('down')"  title="Down">↓</button>
           <button class="action-btn" onclick="refreshTerminal()" title="Refresh terminal display">⟳</button>
         </div>
       </div>
@@ -449,14 +462,14 @@
 
     function toggleCtrl() {
       ctrlActive = !ctrlActive;
-      ctrlBtn.classList.toggle('ctrl-active', ctrlActive);
+      ctrlBtn && ctrlBtn.classList.toggle('ctrl-active', ctrlActive);
       input.classList.toggle('ctrl-active', ctrlActive);
       if (ctrlActive) input.focus();
     }
 
     function deactivateCtrl() {
       ctrlActive = false;
-      ctrlBtn.classList.remove('ctrl-active');
+      ctrlBtn && ctrlBtn.classList.remove('ctrl-active');
       input.classList.remove('ctrl-active');
     }
 
@@ -502,6 +515,54 @@
     });
 
     if (window.innerWidth >= 768) input.focus();
+
+    // ── Tmux shortcuts ──────────────────────────────────────────────────────────
+    const CTRL_B = String.fromCharCode(2);
+
+    function showTmuxRow() {
+      document.getElementById('btn-row-normal').style.display = 'none';
+      document.getElementById('btn-row-tmux').style.display = 'flex';
+    }
+
+    function hideTmuxRow() {
+      document.getElementById('btn-row-tmux').style.display = 'none';
+      document.getElementById('btn-row-normal').style.display = 'flex';
+    }
+
+    function tmuxSend(afterPrefix) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(CTRL_B);
+        setTimeout(() => {
+          ws.send(afterPrefix);
+          hideTmuxRow();
+        }, 50);
+      }
+    }
+
+    function tmuxNew() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(CTRL_B);
+        setTimeout(() => {
+          ws.send('c');
+          setTimeout(() => ws.send('cdspo\r'), 300);
+          hideTmuxRow();
+        }, 50);
+      }
+    }
+
+    function tmuxNext() { tmuxSend('n'); }
+    function tmuxLast() { tmuxSend('l'); }
+
+    function tmuxKill() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(CTRL_B);
+        setTimeout(() => {
+          ws.send('&');
+          setTimeout(() => ws.send('y'), 300);
+          hideTmuxRow();
+        }, 50);
+      }
+    }
 
     // ── Actions ─────────────────────────────────────────────────────────────
     async function refreshTerminal() {
