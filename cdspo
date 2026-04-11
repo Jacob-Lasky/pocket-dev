@@ -1,2 +1,2 @@
 #!/bin/bash
-claude --dangerously-skip-permissions --model claude-opus-4-6 "$@"
+claude --dangerously-skip-permissions --model opus[1m] "$@"
