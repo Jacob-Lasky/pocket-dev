@@ -7,7 +7,7 @@ const { WebSocketServer } = require('ws');
 
 const app     = express();
 const SESSION = process.env.TMUX_SESSION || 'main';
-const CMD     = process.env.SHELL_CMD    || 'claude --dangerously-skip-permissions --model claude-opus-4-6';
+const CMD     = process.env.SHELL_CMD    || 'claude --dangerously-skip-permissions --model "opus[1m]"';
 
 // ── Static files ──────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -81,6 +81,27 @@ app.post('/key', (req, res) => {
   if (!seq) return res.status(400).json({ error: 'unknown key' });
   ptyProc.write(seq);
   res.json({ ok: true });
+});
+
+app.post('/tmux-kill', (req, res) => {
+  // Get the active window ID, then kill it. If it was the last window, respawn with cdspo.
+  const getActive = `tmux display-message -t ${SESSION} -p '#{window_id}' 2>/dev/null`;
+  const countWindows = `tmux list-windows -t ${SESSION} 2>/dev/null | wc -l`;
+  exec(`${getActive} && ${countWindows}`, { shell: true }, (err, stdout) => {
+    const lines = stdout?.trim().split('\n') || [];
+    const windowId = lines[0];
+    const windowCount = parseInt(lines[1], 10) || 0;
+    if (windowCount <= 1) {
+      // Last window — create a new one with cdspo first, then kill the old one
+      exec(`tmux new-window -t ${SESSION} cdspo; tmux kill-window -t ${windowId} 2>/dev/null || true`, { shell: true }, () => {
+        res.json({ ok: true, respawned: true });
+      });
+    } else {
+      exec(`tmux kill-window -t ${windowId} 2>/dev/null`, { shell: true }, () => {
+        res.json({ ok: true, respawned: false });
+      });
+    }
+  });
 });
 
 app.post('/refresh', (req, res) => {

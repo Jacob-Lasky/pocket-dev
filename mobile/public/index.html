@@ -553,15 +553,9 @@
     function tmuxNext() { tmuxSend('n'); }
     function tmuxLast() { tmuxSend('l'); }
 
-    function tmuxKill() {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(CTRL_B);
-        setTimeout(() => {
-          ws.send('&');
-          setTimeout(() => ws.send('y'), 300);
-          hideTmuxRow();
-        }, 50);
-      }
+    async function tmuxKill() {
+      hideTmuxRow();
+      await post('/tmux-kill', {});
     }
 
     // ── Actions ─────────────────────────────────────────────────────────────
