@@ -37,7 +37,7 @@ exec "$@"' > /usr/local/bin/entrypoint.sh && \
 
 # Add claude shortcut aliases
 RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
-    && echo 'exec claude --dangerously-skip-permissions --model "opus[1m]" "$@"' >> /usr/local/bin/cdspo \
+    && echo 'exec claude --dangerously-skip-permissions --model "claude-opus-4-7[1m]" "$@"' >> /usr/local/bin/cdspo \
     && echo '#!/bin/bash' > /usr/local/bin/cdsps \
     && echo 'exec claude --dangerously-skip-permissions --model claude-sonnet-4-6 "$@"' >> /usr/local/bin/cdsps \
     && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps
