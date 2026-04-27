@@ -321,7 +321,12 @@
 
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
-  <script>
+  <script src="/addon-serialize/lib/addon-serialize.js"></script>
+  <script src="/ansi-up/ansi_up.js"></script>
+  <script type="module">
+    import { clipboardWrite } from '/js/clipboard.js';
+    import { ViewRenderer }   from '/js/view.js';
+    import { detectDefaultMode, applyMode } from '/js/mode.js';
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize      = parseInt(localStorage.getItem('pd-font-size'))       || 14;
     const savedCollapsed     = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
@@ -329,8 +334,7 @@
     // ── Terminal setup ──────────────────────────────────────────────────────
     const term = new Terminal({
       cursorBlink:   true,
-      copyOnSelect:  true,
-      scrollback:    5000,
+      scrollback:    10000,
       fontSize:    savedFontSize,
       fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
       theme: {
@@ -349,8 +353,83 @@
 
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
+
+    const serializeAddon = new SerializeAddon.SerializeAddon();
+    term.loadAddon(serializeAddon);
+
     term.open(document.getElementById('terminal-container'));
     requestAnimationFrame(() => fitAddon.fit());
+
+    // ── View mode wiring ──
+    const viewRenderer = new ViewRenderer({
+      scrollEl: document.getElementById('view-pane'),
+      contentEl: document.getElementById('view-content'),
+      ansiUp: new AnsiUp(),
+    });
+
+    function refreshViewIfActive() {
+      if (document.body.dataset.mode === 'view') {
+        viewRenderer.update(serializeAddon.serialize({ excludeAltBuffer: true }));
+      }
+    }
+
+    let viewRefreshTimer = null;
+    function scheduleViewRefresh() {
+      if (viewRefreshTimer) return;
+      viewRefreshTimer = setTimeout(() => {
+        viewRefreshTimer = null;
+        refreshViewIfActive();
+      }, 100);
+    }
+
+    // ── Mode toggle ──
+    const modeRefs = {
+      body: document.body,
+      livePane: document.getElementById('terminal-container').querySelector('.xterm') || document.getElementById('terminal-container'),
+      viewPane: document.getElementById('view-pane'),
+      liveBtn: document.getElementById('mode-live'),
+      viewBtn: document.getElementById('mode-view'),
+    };
+
+    window.setMode = function(mode) {
+      applyMode(mode, modeRefs);
+      if (mode === 'view') refreshViewIfActive();
+      else fitAddon.fit();
+    };
+
+    // After xterm.js renders, livePane is the .xterm container — re-grab it.
+    requestAnimationFrame(() => {
+      modeRefs.livePane = document.querySelector('#terminal-container .xterm') || document.getElementById('terminal-container');
+      window.setMode(detectDefaultMode());
+    });
+
+    // ── Copy actions ──
+    term.onSelectionChange(() => {
+      // Auto-copy on selection (replaces copyOnSelect: true, which silently fails on HTTP).
+      if (term.hasSelection()) clipboardWrite(term.getSelection());
+    });
+
+    window.copyAllOutput = async function() {
+      const text = serializeAddon.serialize({ excludeAltBuffer: true })
+        .replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for plain-text copy
+      const ok = await clipboardWrite(text);
+      flashCopyButton(ok);
+    };
+
+    function flashCopyButton(ok) {
+      const btn = document.getElementById('copy-btn');
+      const orig = btn.textContent;
+      btn.textContent = ok ? '✓' : '✗';
+      setTimeout(() => { btn.textContent = orig; }, 800);
+    }
+
+    // Ctrl+Shift+C copies current xterm.js selection (without intercepting Ctrl+C / SIGINT)
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+        e.preventDefault();
+        clipboardWrite(term.getSelection());
+      }
+    });
 
     // Apply saved collapsed state
     const btnGroup    = document.getElementById('btn-group');
@@ -405,7 +484,7 @@
 
       ws.onmessage = e => {
         term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
-        // Pulse scroll button if user is scrolled up
+        scheduleViewRefresh();
         const buf = term.buffer.active;
         if (buf.viewportY < buf.baseY) {
           scrollBtn.classList.add('has-new-output');
