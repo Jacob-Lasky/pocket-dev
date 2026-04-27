@@ -121,15 +121,25 @@ export async function waitForConnection(page, timeout = 5000) {
 // signal we can wait for at fixture-construction time (the only synchronous
 // proof tmux + bash + cat are all live is seeing input echo back), so we
 // do the proof at test time, per send.
+//
+// Whitespace is collapsed before comparison: long lines wrap in xterm.js,
+// so the visible text contains line breaks splitting the marker, but those
+// breaks are layout noise, not data loss.
 export async function sendAndWaitForEcho(page, text, { timeout = 8000 } = {}) {
   await page.fill('#cmd-input', text);
   await page.click('#send-btn');
+  const expected = text.replace(/\s+/g, '');
   await expect
     .poll(
-      () => page.evaluate(() => document.querySelector('#terminal-container').innerText),
+      async () => {
+        const visible = await page.evaluate(
+          () => document.querySelector('#terminal-container').innerText,
+        );
+        return visible.replace(/\s+/g, '');
+      },
       { timeout },
     )
-    .toContain(text);
+    .toContain(expected);
 }
 
 export { expect };
