@@ -29,3 +29,8 @@ node_modules/
 
 # SyncThing conflict files
 *.sync-conflict-*
+
+# Playwright artifacts (kept locally for review, not committed)
+mobile/test-artifacts/
+mobile/test-results/
+mobile/playwright-report/
