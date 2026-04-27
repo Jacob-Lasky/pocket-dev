@@ -167,25 +167,90 @@ View mode re-serializes from xterm.js on a debounced trigger (every ~100ms when 
 
 ## Testing
 
-Verification before claiming done:
+The project currently has no tests. This pass adds the first test infrastructure.
 
-1. **Trailing whitespace:** select a multi-line region in Live mode on desktop → paste into a text editor → confirm no trailing spaces on any line. Repeat in View mode (long-press select on mobile).
-2. **Mobile wrapping:** load on Pixel/Firefox → switch to View mode → confirm long lines wrap, no horizontal scroll.
-3. **Mobile scroll:** scroll View mode on Pixel/Firefox → confirm native momentum scrolling, no jank.
-4. **Mobile copy:** long-press a word → drag handles → tap system Copy → paste elsewhere → confirm clean text.
-5. **Desktop HTTP copy:** load over HTTP (not localhost) → highlight in Live mode → release → paste into another window → confirm copied. Repeat with Ctrl+Shift+C.
-6. **Alt-screen #3 fix:** run Claude Code through pocket-dev, exercise scrolling for several minutes including long Claude responses → confirm no duplicated chunks in scrollback.
-7. **Live updates in View mode:** open View mode, send a command, watch new output appear without manual refresh.
-8. **Mode toggle:** flip Live ↔ View repeatedly under load → confirm xterm.js never disconnects, both views stay current.
+### Tooling
+
+- **Vitest** for unit + server tests. Fast, ESM-native, less ceremony than Jest.
+- **Supertest** for express endpoint assertions.
+- **Playwright** for E2E in headless Firefox and Chromium. Firefox is primary because it's the user's mobile target; Chromium is included to catch regressions.
+- All run via `npm test` from `mobile/`. CI workflow added at `.github/workflows/test.yml`.
+
+### Unit tests (`mobile/test/unit/`)
+
+- `clipboardWrite.test.js`
+  - Strips trailing spaces and tabs per line.
+  - Preserves intentional internal whitespace.
+  - Calls `navigator.clipboard.writeText` when available; resolves on success.
+  - Falls back to `execCopy` when `navigator.clipboard` is undefined.
+  - Falls back to `execCopy` when `navigator.clipboard.writeText` rejects (HTTP / permission denied).
+  - Returns `false` when both paths fail.
+- `viewRenderer.test.js`
+  - Given a known ANSI byte string, produces expected HTML (color spans, line breaks).
+  - Empty input → empty output, no exception.
+  - Buffer cap respected (does not OOM on huge input — sized down to `scrollback` cap).
+  - Sticky-bottom scroll: when user has scrolled up, new output does not auto-scroll; when at bottom, new output keeps view at bottom.
+- `modeDetect.test.js`
+  - `matchMedia('(pointer: coarse)')` true → default mode is `view`.
+  - Pointer fine → default mode is `live`.
+
+### Server tests (`mobile/test/server/`)
+
+- `endpoints.test.js`
+  - `GET /history` returns 404 (endpoint removed).
+  - `GET /` returns the index.html.
+  - WebSocket upgrade succeeds and streams a known string back.
+- `tmuxConfig.test.js`
+  - `pty.spawn` is called with `-f` pointing at the bundled `tmux.conf`.
+  - The bundled `tmux.conf` contains `setw -g alternate-screen off` and `set -g focus-events on` (literal-string check on the file).
+
+### E2E tests (`mobile/test/e2e/`)
+
+Run against a server started fresh per test (random port, `LOOP_CMD` set to a deterministic stub like `cat` so output is predictable).
+
+- `smoke.spec.js`
+  - Page loads; toolbar present with Live, View, and Copy buttons.
+  - WebSocket connects; sending `echo hello\n` shows `hello` in Live xterm.js render.
+  - Toggling to View shows `hello` in the View pane within 200ms.
+  - Sending a second command updates the View pane live.
+  - Long line in View pane wraps (no horizontal scrollbar on a 360px-wide viewport — emulating Pixel).
+- `copy.spec.js`
+  - Click Copy button → `navigator.clipboard.readText()` returns the terminal's current content with no trailing whitespace per line.
+  - In Live mode (Chromium): drag-select a region → release → clipboard contains exactly the selected text, no padding.
+  - HTTP fallback path: monkey-patch `navigator.clipboard.writeText` to reject; click Copy; assert `execCopy` ran (spy on `document.execCommand` calls) and the textarea trick wrote the right text.
+- `firefox-mobile.spec.js`
+  - Run with Playwright Firefox + Pixel 5 emulation profile.
+  - Default mode is View on first load.
+  - Long-press → drag → release produces a real DOM Selection over expected text (sanity check that View mode is selectable; doesn't actually copy because Playwright's mobile context doesn't expose clipboard the same way).
+
+### Manual verification (things automated tests can't cover)
+
+These remain in a `mobile/MANUAL-VERIFICATION.md` checklist, run before tagging a release:
+
+1. Real Pixel + Firefox: long-press select + system Copy menu produces clean text in View mode.
+2. Pocket-dev served over HTTP (not localhost) from another machine on the LAN: highlight in Live xterm.js + Ctrl+Shift+C copies on desktop.
+3. Real Claude Code session for several minutes including long alt-screen-y responses: no duplicated chunks in scrollback.
+4. Browser tab loses then regains focus: Claude Code redraws its UI without stale cursor or stuck spinner.
+
+### Running locally
+
+- `npm test` — unit + server (Vitest)
+- `npm run test:e2e` — Playwright (auto-starts the server)
+- `npm run test:all` — both
 
 ## Files affected
 
 - `mobile/public/index.html` — toolbar, View pane, mode toggle, clipboard handlers, dep `<script>` tags, delete Select overlay
-- `mobile/server.js` — tmux spawn args (use `-f tmux.conf`), delete `/history` endpoint
+- `mobile/server.js` — tmux spawn args (use `-f tmux.conf`), delete `/history` endpoint; refactored so the express app and pty boot logic are exportable for tests
 - `mobile/tmux.conf` — new file; sets `alternate-screen off` and `focus-events on`
 - `mobile/public/` — new files: `addon-serialize.js`, `ansi_up.js` (or CDN-linked)
-- `mobile/package.json` — likely no change unless we install deps locally rather than CDN
-- `Dockerfile` — copy in `mobile/tmux.conf`; verify tmux is recent enough (alt-screen and focus-events are both ancient, any modern tmux is fine)
+- `mobile/test/` — new directory: `unit/`, `server/`, `e2e/` test suites
+- `mobile/MANUAL-VERIFICATION.md` — new checklist for things automated tests can't cover
+- `mobile/package.json` — add `vitest`, `supertest`, `@playwright/test` as devDependencies; add `test`, `test:e2e`, `test:all` scripts
+- `mobile/playwright.config.js` — new; Firefox + Chromium projects, Pixel 5 mobile profile
+- `mobile/vitest.config.js` — new
+- `.github/workflows/test.yml` — new; runs `npm ci && npm run test:all` on push/PR
+- `Dockerfile` — copy in `mobile/tmux.conf`; verify tmux is recent enough (alt-screen and focus-events are both ancient, any modern tmux is fine). Test deps stay dev-only and don't ship to the runtime image.
 
 ## Out of scope / future work
 
