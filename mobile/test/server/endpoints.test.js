@@ -21,4 +21,14 @@ describe('express endpoints', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/javascript/);
   });
+
+  it('serves @xterm/addon-serialize', async () => {
+    const res = await request(app).get('/addon-serialize/lib/addon-serialize.js');
+    expect(res.status).toBe(200);
+  });
+
+  it('serves ansi_up', async () => {
+    const res = await request(app).get('/ansi-up/ansi_up.js');
+    expect(res.status).toBe(200);
+  });
 });

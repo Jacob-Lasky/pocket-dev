@@ -27,6 +27,8 @@ function createApp() {
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/xterm',           express.static(path.join(__dirname, 'node_modules/@xterm/xterm')));
   app.use('/addon-fit',       express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit')));
+  app.use('/addon-serialize', express.static(path.join(__dirname, 'node_modules/@xterm/addon-serialize')));
+  app.use('/ansi-up',         express.static(path.join(__dirname, 'node_modules/ansi_up')));
   return app;
 }
 
