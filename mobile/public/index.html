@@ -336,6 +336,14 @@
       else fitAddon.fit();
     };
 
+    // Expose internals for E2E debug capture under ?test=1
+    if (window.location.search.includes('test=1')) {
+      window.serializeAddon = serializeAddon;
+      window.viewRenderer = viewRenderer;
+      window.refreshViewIfActive = refreshViewIfActive;
+      window.serializedScrollback = serializedScrollback;
+    }
+
     // After xterm.js renders, livePane is the .xterm container — re-grab it.
     requestAnimationFrame(() => {
       modeRefs.livePane = document.querySelector('#terminal-container .xterm') || document.getElementById('terminal-container');

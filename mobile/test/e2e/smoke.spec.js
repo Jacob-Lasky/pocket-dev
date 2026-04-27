@@ -19,26 +19,38 @@ test('toggling to View shows current buffer content', async ({ pdServer, page })
   await sendAndWaitForEcho(page, 'unique-marker-string');
 
   await page.click('#mode-view');
-  // refreshViewIfActive runs synchronously inside setMode('view'), reading
-  // the current xterm.js buffer — which already contains the marker because
-  // sendAndWaitForEcho just confirmed it landed in #terminal-container.
 
-  // Diagnostic capture if this fails — print everything we'd want to know.
   let diag;
   try {
     await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
   } catch (e) {
-    diag = await page.evaluate(() => ({
-      bodyDataMode: document.body.dataset.mode,
-      viewPaneDisplay: getComputedStyle(document.getElementById('view-pane')).display,
-      viewPaneVisibility: getComputedStyle(document.getElementById('view-pane')).visibility,
-      viewContentInnerHTML: document.getElementById('view-content').innerHTML.slice(0, 300),
-      viewContentInnerText: document.getElementById('view-content').innerText.slice(0, 200),
-      viewContentChildCount: document.getElementById('view-content').childNodes.length,
-      terminalInnerText: document.querySelector('#terminal-container').innerText.slice(0, 200),
-      ansiUpAvailable: typeof window.AnsiUp,
-    }));
-    throw new Error(`toContainText failed; diag=${JSON.stringify(diag, null, 2)}; original=${e.message}`);
+    diag = await page.evaluate(() => {
+      const probe = {
+        bodyDataMode: document.body.dataset.mode,
+        viewContentInnerHTML: document.getElementById('view-content').innerHTML.slice(0, 400),
+        rawSerialized: '',
+        rawSerializedLen: 0,
+        rawSerializedSample: '',
+        ansiHtml: '',
+        ansiHtmlLen: 0,
+      };
+      try {
+        const raw = window.serializeAddon?.serialize({ excludeAltBuffer: true }) ?? '<<no-serializeAddon>>';
+        probe.rawSerializedLen = raw.length;
+        probe.rawSerializedSample = JSON.stringify(raw.slice(0, 400));
+        const html = window.viewRenderer?.ansiUp?.ansi_to_html(raw) ?? '<<no-viewRenderer>>';
+        probe.ansiHtml = html.slice(0, 400);
+        probe.ansiHtmlLen = html.length;
+        // Try without excludeAltBuffer to see if alt-screen is involved
+        const rawAlt = window.serializeAddon?.serialize() ?? '';
+        probe.rawSerializedNoExcludeAltLen = rawAlt.length;
+        probe.rawSerializedNoExcludeAltSample = JSON.stringify(rawAlt.slice(0, 400));
+      } catch (probeErr) {
+        probe.probeError = String(probeErr);
+      }
+      return probe;
+    });
+    throw new Error(`toContainText failed; diag=${JSON.stringify(diag, null, 2)}`);
   }
 });
 
