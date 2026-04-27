@@ -22,7 +22,24 @@ test('toggling to View shows current buffer content', async ({ pdServer, page })
   // refreshViewIfActive runs synchronously inside setMode('view'), reading
   // the current xterm.js buffer — which already contains the marker because
   // sendAndWaitForEcho just confirmed it landed in #terminal-container.
-  await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
+
+  // Diagnostic capture if this fails — print everything we'd want to know.
+  let diag;
+  try {
+    await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
+  } catch (e) {
+    diag = await page.evaluate(() => ({
+      bodyDataMode: document.body.dataset.mode,
+      viewPaneDisplay: getComputedStyle(document.getElementById('view-pane')).display,
+      viewPaneVisibility: getComputedStyle(document.getElementById('view-pane')).visibility,
+      viewContentInnerHTML: document.getElementById('view-content').innerHTML.slice(0, 300),
+      viewContentInnerText: document.getElementById('view-content').innerText.slice(0, 200),
+      viewContentChildCount: document.getElementById('view-content').childNodes.length,
+      terminalInnerText: document.querySelector('#terminal-container').innerText.slice(0, 200),
+      ansiUpAvailable: typeof window.AnsiUp,
+    }));
+    throw new Error(`toContainText failed; diag=${JSON.stringify(diag, null, 2)}; original=${e.message}`);
+  }
 });
 
 test('View pane wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
