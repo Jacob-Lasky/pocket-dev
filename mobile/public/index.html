@@ -212,6 +212,37 @@
       -webkit-user-select: text;
     }
 
+    /* ── View Pane (wrapped reader) ──────────────────────────────────────── */
+    #view-pane {
+      position: absolute;
+      inset: 0;
+      display: none;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      background: #0d1117;
+      padding: 8px 10px;
+      z-index: 5;
+    }
+
+    body[data-mode="view"] #view-pane { display: block; }
+
+    #view-content {
+      margin: 0;
+      font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #e6edf3;
+      white-space: pre-wrap;
+      word-break: break-word;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    /* Mode toggle styling */
+    .mode-btn.active { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
+
     /* Desktop layout */
     @media (min-width: 768px) {
       #controls { flex-direction: row; align-items: center; padding: 6px 12px; gap: 10px; }
@@ -230,6 +261,9 @@
   <div id="app">
     <div id="terminal-container">
       <div id="conn-dot" title="WebSocket disconnected"></div>
+      <div id="view-pane">
+        <div id="view-content"></div>
+      </div>
     </div>
     <div id="controls">
       <div id="btn-group">
