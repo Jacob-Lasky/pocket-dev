@@ -272,7 +272,9 @@
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
-          <button class="action-btn select-btn" onclick="enterSelectMode()" title="Select &amp; copy terminal text">Select</button>
+          <button id="mode-live" class="action-btn mode-btn" onclick="setMode('live')" title="Live terminal">Live</button>
+          <button id="mode-view" class="action-btn mode-btn" onclick="setMode('view')" title="Wrapped reading view">View</button>
+          <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy terminal output">📋</button>
           <button id="tmux-btn" class="action-btn tmux-btn" onclick="showTmuxRow()" title="tmux shortcuts (Ctrl+b)">tmux</button>
         </div>
         <!-- Tmux shortcut row (hidden by default) -->
