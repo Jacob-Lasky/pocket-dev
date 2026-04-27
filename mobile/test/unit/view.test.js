@@ -5,7 +5,8 @@ class FakeAnsiUp {
   ansi_to_html(s) {
     // Strip ANSI escape codes; return plain text wrapped in a span for sanity.
     const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
-    return `<span>${stripped.replace(/</g, '&lt;')}</span>`;
+    const escaped = stripped.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<span>${escaped}</span>`;
   }
 }
 
@@ -48,10 +49,11 @@ describe('ViewRenderer', () => {
     expect(content.textContent).toBe('');
   });
 
-  it('escapes HTML so embedded markup does not execute', () => {
+  it('does not create executable script elements from injected input', () => {
     renderer.update('<script>x</script>');
-    // FakeAnsiUp escapes; real ansi_up also escapes by default.
-    expect(content.innerHTML).not.toContain('<script>');
+    // FakeAnsiUp escapes < and >; real ansi_up does the same.
+    // The semantic check: no real <script> element should exist in the DOM.
+    expect(content.querySelectorAll('script').length).toBe(0);
   });
 
   it('auto-scrolls to bottom on update when previously at bottom', () => {
