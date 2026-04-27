@@ -24,3 +24,5 @@ workspace/
 my-*.xml
 teamarr.xml
 my-teamarr.xml
+
+node_modules/
