@@ -111,8 +111,6 @@
     }
     .action-btn:active        { background: #388bfd22; border-color: #388bfd; }
     .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
-    .action-btn.select-btn    { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
-    .action-btn.select-btn:active { background: #3fb95022; }
     .action-btn.tmux-btn      { background: #1f1f2d; border-color: #bc8cff; color: #bc8cff; }
     .action-btn.tmux-btn:active { background: #bc8cff22; }
     .action-btn.tmux-kill      { background: #2d1f1f; border-color: #ff7b72; color: #ff7b72; }
@@ -151,66 +149,6 @@
     }
     #collapse-btn:active  { color: #e6edf3; }
     #collapse-btn.collapsed { transform: rotate(180deg); }
-
-    /* ── Select Mode Overlay ───────────────────────────────────────────── */
-    #select-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      display: none;
-      flex-direction: column;
-      background: #0d1117;
-      z-index: 1000;
-    }
-    #select-overlay.active { display: flex; }
-
-    #select-topbar {
-      flex-shrink: 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 14px;
-      background: #161b22;
-      border-bottom: 1px solid #30363d;
-      gap: 10px;
-    }
-    #select-hint {
-      font-size: 13px;
-      color: #8b949e;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    #select-actions { display: flex; gap: 8px; flex-shrink: 0; }
-
-    .sel-btn {
-      background: #21262d; color: #e6edf3;
-      border: 1px solid #30363d; border-radius: 6px;
-      padding: 0 14px; height: 36px; font-size: 13px;
-      cursor: pointer; touch-action: manipulation;
-      white-space: nowrap;
-    }
-    .sel-btn:active   { background: #388bfd22; border-color: #388bfd; }
-    .sel-btn.exit-btn { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
-
-    #select-scroll {
-      flex: 1;
-      overflow-y: auto;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    #select-content {
-      margin: 0;
-      padding: 10px 12px;
-      font-family: 'SF Mono', Consolas, 'Courier New', monospace;
-      font-size: 13px;
-      line-height: 1.45;
-      color: #e6edf3;
-      white-space: pre;
-      cursor: text;
-      user-select: text;
-      -webkit-user-select: text;
-    }
 
     /* ── View Pane (wrapped reader) ──────────────────────────────────────── */
     #view-pane {
@@ -304,20 +242,6 @@
 
   <!-- Scroll-to-bottom button -->
   <button id="scroll-bottom" onclick="scrollToBottom()" title="Scroll to bottom">↓</button>
-
-  <!-- Select Mode Overlay -->
-  <div id="select-overlay">
-    <div id="select-topbar">
-      <span id="select-hint">Swipe to select · use system copy or tap Copy All</span>
-      <div id="select-actions">
-        <button class="sel-btn" onclick="copyAll()">Copy All</button>
-        <button class="sel-btn exit-btn" onclick="exitSelectMode()">✕ Live</button>
-      </div>
-    </div>
-    <div id="select-scroll">
-      <pre id="select-content"></pre>
-    </div>
-  </div>
 
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
@@ -702,72 +626,6 @@
         });
       } catch (e) { console.error('Request failed:', e); }
     }
-
-    // ── Select Mode ─────────────────────────────────────────────────────────
-    // Fetches full scrollback from tmux (not xterm.js buffer) so history
-    // includes Claude's alternate-screen output which xterm.js never captures.
-    async function enterSelectMode() {
-      const overlay = document.getElementById('select-overlay');
-      const content = document.getElementById('select-content');
-      const hint    = document.getElementById('select-hint');
-
-      content.textContent = 'Loading history…';
-      overlay.classList.add('active');
-
-      try {
-        const resp = await fetch('/history');
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const text = await resp.text();
-        content.textContent = text;
-        hint.textContent = 'Swipe to select · use system copy or tap Copy All';
-      } catch (e) {
-        content.textContent = '(failed to load history: ' + e.message + ')';
-      }
-
-      requestAnimationFrame(() => {
-        const scrollEl = document.getElementById('select-scroll');
-        scrollEl.scrollTop = scrollEl.scrollHeight;
-      });
-    }
-
-    function exitSelectMode() {
-      document.getElementById('select-overlay').classList.remove('active');
-    }
-
-    function copyAll() {
-      writeToClipboard(document.getElementById('select-content').textContent, 'All output copied!');
-    }
-
-    function writeToClipboard(text, successMsg) {
-      const hint  = document.getElementById('select-hint');
-      const reset = 'Swipe to select · use system copy or tap Copy All';
-      const finish = ok => {
-        hint.textContent = ok ? successMsg : 'Copy failed — use system copy';
-        setTimeout(() => { hint.textContent = reset; }, 2500);
-      };
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(execCopy(text)));
-      } else {
-        finish(execCopy(text));
-      }
-    }
-
-    function execCopy(text) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-      document.body.appendChild(ta);
-      ta.select();
-      let ok = false;
-      try { ok = document.execCommand('copy'); } catch {}
-      document.body.removeChild(ta);
-      return ok;
-    }
-
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape' && document.getElementById('select-overlay').classList.contains('active'))
-        exitSelectMode();
-    });
 
   </script>
 </body>
