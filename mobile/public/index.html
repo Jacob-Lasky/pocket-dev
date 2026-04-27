@@ -628,6 +628,13 @@
       } catch (e) { console.error('Request failed:', e); }
     }
 
+    // Expose pre-existing functions on window so HTML inline `onclick` handlers can reach them
+    // (the `<script type="module">` change scoped these to the module otherwise).
+    Object.assign(window, {
+      sendText, sendKey, scrollToBottom, toggleCollapse, refreshTerminal,
+      showTmuxRow, hideTmuxRow, tmuxNew, tmuxNext, tmuxLast, tmuxKill,
+    });
+
   </script>
 </body>
 </html>

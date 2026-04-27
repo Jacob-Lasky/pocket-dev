@@ -6,7 +6,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   use: {
-    baseURL: 'http://localhost:7682',
+    baseURL: 'about:blank',
     trace: 'retain-on-failure',
   },
   projects: [
