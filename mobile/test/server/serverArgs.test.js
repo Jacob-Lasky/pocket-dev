@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import path from 'node:path';
-import { buildTmuxSpawnArgs } from '../../server.js';
+import { buildTmuxSpawnArgs, TMUX_CONF_PATH } from '../../server.js';
 
 describe('buildTmuxSpawnArgs', () => {
   it('returns args that load mobile/tmux.conf via -f', () => {
     const args = buildTmuxSpawnArgs('main', "echo hi");
     const fIdx = args.indexOf('-f');
     expect(fIdx).toBeGreaterThanOrEqual(0);
-    expect(args[fIdx + 1]).toBe(path.resolve(__dirname, '../../tmux.conf'));
+    expect(args[fIdx + 1]).toBe(TMUX_CONF_PATH);
   });
 
   it('passes through session name and command', () => {
