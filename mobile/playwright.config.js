@@ -3,8 +3,10 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './test/e2e',
   timeout: 30000,
-  fullyParallel: false,
-  workers: 1,
+  // Each test gets its own pdServer / pdStaticServer fixture instance on a
+  // random port (see fixtures.js), so parallel workers don't collide.
+  fullyParallel: true,
+  workers: 2,
   use: {
     baseURL: 'about:blank',
     trace: 'retain-on-failure',

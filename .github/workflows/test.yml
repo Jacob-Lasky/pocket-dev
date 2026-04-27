@@ -32,7 +32,18 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: npm ci
-      - run: npx playwright install --with-deps firefox chromium
+      - id: pw-version
+        working-directory: mobile
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.v }}
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps firefox chromium
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps firefox chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
