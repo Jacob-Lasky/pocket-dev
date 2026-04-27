@@ -76,21 +76,30 @@ The per-line trailing-whitespace strip is belt-and-suspenders: `term.getSelectio
 
 `execCopy` already exists in `index.html:640` — keep it.
 
-### Server: kill alt-screen
+### Server: tmux config
 
-In `mobile/server.js:39`, change the tmux spawn to disable alternate-screen:
+In `mobile/server.js:39`, the tmux spawn needs two new settings:
+
+- `setw -g alternate-screen off` — eliminates duplicated-chunks scrollback (#3) by keeping all output in the main buffer.
+- `set -g focus-events on` — forwards focus-in/focus-out escape sequences from xterm.js into Claude Code, so Claude knows when the browser tab regains focus and can redraw/refresh its UI state instead of leaving stale render. Default is `off` and Claude Code does emit focus events.
+
+Implementation: ship a small `tmux.conf` via `-f /path/to/tmux.conf` with both settings, rather than threading them through `;` separators in the spawn args (cleaner, easier to add future settings):
+
+```
+# pocket-dev tmux config
+setw -g alternate-screen off
+set -g focus-events on
+```
 
 ```js
 const ptyProc = pty.spawn('tmux', [
-  '-u', 'new-session', '-A', '-s', SESSION,
-  ';', 'setw', '-g', 'alternate-screen', 'off',
-  ';', 'send-keys', LOOP_CMD, 'Enter',
+  '-u',
+  '-f', '/path/to/tmux.conf',
+  'new-session', '-A', '-s', SESSION, LOOP_CMD,
 ], { ... });
 ```
 
-Alternative (cleaner): write a tiny `.tmux.conf` snippet shipped via `-f /path/to/conf` that contains `setw -g alternate-screen off` and any future tmux config. Implementation choice deferred to the plan.
-
-Trade-off: TUI apps inside the session lose alt-screen restore on exit (their final state stays in scrollback instead of disappearing). For pocket-dev's only use case (Claude Code), this is desired behavior — Claude's output stays available to scroll back through.
+Trade-off (alt-screen off): TUI apps inside the session lose alt-screen restore on exit (their final state stays in scrollback instead of disappearing). For pocket-dev's only use case (Claude Code), this is desired — Claude's output stays available to scroll back through.
 
 ### Server: deletions
 
@@ -172,10 +181,11 @@ Verification before claiming done:
 ## Files affected
 
 - `mobile/public/index.html` — toolbar, View pane, mode toggle, clipboard handlers, dep `<script>` tags, delete Select overlay
-- `mobile/server.js` — tmux spawn args (alt-screen off), delete `/history` endpoint
+- `mobile/server.js` — tmux spawn args (use `-f tmux.conf`), delete `/history` endpoint
+- `mobile/tmux.conf` — new file; sets `alternate-screen off` and `focus-events on`
 - `mobile/public/` — new files: `addon-serialize.js`, `ansi_up.js` (or CDN-linked)
 - `mobile/package.json` — likely no change unless we install deps locally rather than CDN
-- `Dockerfile` — possibly bump to ensure tmux ≥ 3.0 (alt-screen toggle is older than 3.4, so any modern tmux is fine)
+- `Dockerfile` — copy in `mobile/tmux.conf`; verify tmux is recent enough (alt-screen and focus-events are both ancient, any modern tmux is fine)
 
 ## Out of scope / future work
 
