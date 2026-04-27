@@ -110,7 +110,6 @@
       transition: background 0.1s, border-color 0.1s, color 0.1s;
     }
     .action-btn:active        { background: #388bfd22; border-color: #388bfd; }
-    .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
     .action-btn.tmux-btn      { background: #1f1f2d; border-color: #bc8cff; color: #bc8cff; }
     .action-btn.tmux-btn:active { background: #bc8cff22; }
     .action-btn.tmux-kill      { background: #2d1f1f; border-color: #ff7b72; color: #ff7b72; }
@@ -125,7 +124,6 @@
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
       outline: none; transition: border-color 0.1s;
     }
-    #cmd-input.ctrl-active  { border-color: #388bfd; }
     #cmd-input::placeholder { color: #484f58; }
     #cmd-input:focus        { border-color: #388bfd; }
 
@@ -285,19 +283,35 @@
     if (window.location.search.includes('test=1')) window.term = term;
     requestAnimationFrame(() => fitAddon.fit());
 
-    // ── View mode wiring ──
+    // ── View mode + copy helpers ──
     const viewRenderer = new ViewRenderer({
       scrollEl: document.getElementById('view-pane'),
       contentEl: document.getElementById('view-content'),
       ansiUp: new AnsiUp(),
     });
 
+    // Single source of the "give me everything in the buffer worth showing" call so
+    // the View renderer and the Copy button can't drift apart on excludeAltBuffer.
+    function serializedScrollback() {
+      return serializeAddon.serialize({ excludeAltBuffer: true });
+    }
+
+    // Single copy-on-selection path used by both onSelectionChange and Ctrl+Shift+C.
+    function copyCurrentSelection() {
+      if (term.hasSelection()) clipboardWrite(term.getSelection());
+    }
+
     function refreshViewIfActive() {
       if (document.body.dataset.mode === 'view') {
-        viewRenderer.update(serializeAddon.serialize({ excludeAltBuffer: true }));
+        viewRenderer.update(serializedScrollback());
       }
     }
 
+    // Leading-edge-suppress with trailing fire: first scheduleViewRefresh() in a 100ms
+    // window arms the timer, subsequent calls during the window are dropped, the timer
+    // fires once at the end. We render at most once per 100ms during bursty WS output,
+    // but always pick up the LATEST state because refreshViewIfActive() reads the live
+    // xterm.js buffer when it actually runs.
     let viewRefreshTimer = null;
     function scheduleViewRefresh() {
       if (viewRefreshTimer) return;
@@ -329,14 +343,11 @@
     });
 
     // ── Copy actions ──
-    term.onSelectionChange(() => {
-      // Auto-copy on selection (replaces copyOnSelect: true, which silently fails on HTTP).
-      if (term.hasSelection()) clipboardWrite(term.getSelection());
-    });
+    // Auto-copy on selection (replaces copyOnSelect: true, which silently fails on HTTP).
+    term.onSelectionChange(copyCurrentSelection);
 
     window.copyAllOutput = async function() {
-      const text = serializeAddon.serialize({ excludeAltBuffer: true })
-        .replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for plain-text copy
+      const text = serializedScrollback().replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for plain-text copy
       const ok = await clipboardWrite(text);
       flashCopyButton(ok);
     };
@@ -348,11 +359,11 @@
       setTimeout(() => { btn.textContent = orig; }, 800);
     }
 
-    // Ctrl+Shift+C copies current xterm.js selection (without intercepting Ctrl+C / SIGINT)
+    // Ctrl+Shift+C copies current xterm.js selection (without intercepting Ctrl+C / SIGINT).
     document.addEventListener('keydown', e => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
         e.preventDefault();
-        clipboardWrite(term.getSelection());
+        copyCurrentSelection();
       }
     });
 
@@ -495,23 +506,7 @@
       }
     }, { passive: true });
 
-    // ── Ctrl toggle ─────────────────────────────────────────────────────────
-    const input   = document.getElementById('cmd-input');
-    const ctrlBtn = document.getElementById('ctrl-btn');
-    let ctrlActive = false;
-
-    function toggleCtrl() {
-      ctrlActive = !ctrlActive;
-      ctrlBtn && ctrlBtn.classList.toggle('ctrl-active', ctrlActive);
-      input.classList.toggle('ctrl-active', ctrlActive);
-      if (ctrlActive) input.focus();
-    }
-
-    function deactivateCtrl() {
-      ctrlActive = false;
-      ctrlBtn && ctrlBtn.classList.remove('ctrl-active');
-      input.classList.remove('ctrl-active');
-    }
+    const input = document.getElementById('cmd-input');
 
     // ── Toolbar collapse ────────────────────────────────────────────────────
     function toggleCollapse() {
@@ -542,13 +537,6 @@
 
     // ── Input bar keyboard handling ─────────────────────────────────────────
     input.addEventListener('keydown', e => {
-      if (ctrlActive) {
-        const letter = e.key.toLowerCase();
-        if (letter.length === 1 && /^[a-z]$/.test(letter)) {
-          e.preventDefault(); deactivateCtrl(); sendKey(`ctrl-${letter}`); return;
-        }
-        if (e.key === 'Escape') { e.preventDefault(); deactivateCtrl(); return; }
-      }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
       else if (e.key === 'ArrowUp')   { e.preventDefault(); historyUp(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); historyDown(); }
@@ -605,7 +593,6 @@
 
     async function sendText() {
       const text = input.value.trim();
-      deactivateCtrl();
       if (!text) return;
       if (cmdHistory[0] !== text) cmdHistory.unshift(text);
       historyIndex = -1;
@@ -614,7 +601,6 @@
     }
 
     async function sendKey(key) {
-      deactivateCtrl();
       await post('/key', { key });
     }
 
