@@ -248,6 +248,7 @@
     import { clipboardWrite } from '/js/clipboard.js';
     import { ViewRenderer }   from '/js/view.js';
     import { detectDefaultMode, applyMode } from '/js/mode.js';
+    import { maybeInterceptCopyKey } from '/js/keys.js';
     import { AnsiUp } from '/ansi-up/ansi_up.js';
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize      = parseInt(localStorage.getItem('pd-font-size'))       || 14;
@@ -359,13 +360,15 @@
       setTimeout(() => { btn.textContent = orig; }, 800);
     }
 
-    // Ctrl+Shift+C copies current xterm.js selection (without intercepting Ctrl+C / SIGINT).
-    document.addEventListener('keydown', e => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
-        e.preventDefault();
-        copyCurrentSelection();
-      }
-    });
+    // Selection-aware Ctrl+C + explicit Ctrl+Shift+C, both routed through xterm.js's
+    // pre-handler so we can suppress SIGINT when there's a selection to copy.
+    term.attachCustomKeyEventHandler(e => maybeInterceptCopyKey(e, {
+      hasSelection: () => term.hasSelection(),
+      copy: () => {
+        clipboardWrite(term.getSelection());
+        term.clearSelection();
+      },
+    }));
 
     // Apply saved collapsed state
     const btnGroup    = document.getElementById('btn-group');
