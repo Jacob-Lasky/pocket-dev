@@ -322,11 +322,11 @@
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
   <script src="/addon-serialize/lib/addon-serialize.js"></script>
-  <script src="/ansi-up/ansi_up.js"></script>
   <script type="module">
     import { clipboardWrite } from '/js/clipboard.js';
     import { ViewRenderer }   from '/js/view.js';
     import { detectDefaultMode, applyMode } from '/js/mode.js';
+    import { AnsiUp } from '/ansi-up/ansi_up.js';
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize      = parseInt(localStorage.getItem('pd-font-size'))       || 14;
     const savedCollapsed     = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
