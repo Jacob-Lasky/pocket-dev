@@ -1,4 +1,4 @@
-import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
+import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
 test('toolbar shows Live / View / Copy buttons', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
@@ -10,25 +10,18 @@ test('toolbar shows Live / View / Copy buttons', async ({ pdServer, page }) => {
 test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
-
-  await page.fill('#cmd-input', 'hello');
-  await page.click('#send-btn');
-
-  // The xterm.js DOM should eventually contain "hello"
-  await expect.poll(async () => {
-    return await page.evaluate(() => document.querySelector('#terminal-container').innerText);
-  }, { timeout: 5000 }).toContain('hello');
+  await sendAndWaitForEcho(page, 'hello');
 });
 
 test('toggling to View shows current buffer content', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
-
-  await page.fill('#cmd-input', 'unique-marker-string');
-  await page.click('#send-btn');
-  await page.waitForTimeout(500);
+  await sendAndWaitForEcho(page, 'unique-marker-string');
 
   await page.click('#mode-view');
+  // refreshViewIfActive runs synchronously inside setMode('view'), reading
+  // the current xterm.js buffer — which already contains the marker because
+  // sendAndWaitForEcho just confirmed it landed in #terminal-container.
   await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
 });
 
@@ -39,11 +32,11 @@ test('View pane wraps long lines on a 360px viewport', async ({ pdServer, browse
   await waitForConnection(page);
 
   const longLine = 'x'.repeat(200);
-  await page.fill('#cmd-input', longLine);
-  await page.click('#send-btn');
-  await page.waitForTimeout(500);
+  await sendAndWaitForEcho(page, longLine);
   await page.click('#mode-view');
-  await page.waitForTimeout(500);
+  // Wait for the View pane to actually contain the long line, not just
+  // a fixed time — same root cause as the toggle test.
+  await expect(page.locator('#view-content')).toContainText(longLine, { timeout: 3000 });
 
   // No horizontal scrollbar on the view pane
   const overflow = await page.evaluate(() => {

@@ -112,4 +112,24 @@ export async function waitForConnection(page, timeout = 5000) {
   );
 }
 
+// Type a marker into the input bar, click Send, and wait for the marker to
+// actually arrive back in xterm.js's terminal DOM (proves the full PTY
+// roundtrip: POST /send → tmux → bash → cat → echo → ws → term.write).
+//
+// Replaces the older `fill + click + waitForTimeout(500)` pattern, which
+// was racing cat-startup on CI runners. There is no "fixture is ready"
+// signal we can wait for at fixture-construction time (the only synchronous
+// proof tmux + bash + cat are all live is seeing input echo back), so we
+// do the proof at test time, per send.
+export async function sendAndWaitForEcho(page, text, { timeout = 8000 } = {}) {
+  await page.fill('#cmd-input', text);
+  await page.click('#send-btn');
+  await expect
+    .poll(
+      () => page.evaluate(() => document.querySelector('#terminal-container').innerText),
+      { timeout },
+    )
+    .toContain(text);
+}
+
 export { expect };
