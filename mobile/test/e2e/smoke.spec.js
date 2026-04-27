@@ -1,14 +1,14 @@
 import { test, expect } from './fixtures.js';
 
 test('toolbar shows Live / View / Copy buttons', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL);
+  await page.goto(pdServer.baseURL + '/?test=1');
   await expect(page.locator('#mode-live')).toBeVisible();
   await expect(page.locator('#mode-view')).toBeVisible();
   await expect(page.locator('#copy-btn')).toBeVisible();
 });
 
 test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL);
+  await page.goto(pdServer.baseURL + '/?test=1');
   // Wait for WebSocket connection
   await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'), null, { timeout: 5000 });
 
@@ -23,7 +23,7 @@ test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pd
 });
 
 test('toggling to View shows current buffer content', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL);
+  await page.goto(pdServer.baseURL + '/?test=1');
   await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
 
   await page.fill('#cmd-input', 'unique-marker-string');
@@ -37,7 +37,7 @@ test('toggling to View shows current buffer content', async ({ pdServer, page })
 test('View pane wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
   const page = await ctx.newPage();
-  await page.goto(pdServer.baseURL);
+  await page.goto(pdServer.baseURL + '/?test=1');
   await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
 
   const longLine = 'x'.repeat(200);

@@ -282,6 +282,7 @@
     term.loadAddon(serializeAddon);
 
     term.open(document.getElementById('terminal-container'));
+    if (window.location.search.includes('test=1')) window.term = term;
     requestAnimationFrame(() => fitAddon.fit());
 
     // ── View mode wiring ──
