@@ -26,3 +26,6 @@ teamarr.xml
 my-teamarr.xml
 
 node_modules/
+
+# SyncThing conflict files
+*.sync-conflict-*
