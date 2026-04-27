@@ -110,9 +110,6 @@
       transition: background 0.1s, border-color 0.1s, color 0.1s;
     }
     .action-btn:active        { background: #388bfd22; border-color: #388bfd; }
-    .action-btn.ctrl-active   { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
-    .action-btn.select-btn    { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
-    .action-btn.select-btn:active { background: #3fb95022; }
     .action-btn.tmux-btn      { background: #1f1f2d; border-color: #bc8cff; color: #bc8cff; }
     .action-btn.tmux-btn:active { background: #bc8cff22; }
     .action-btn.tmux-kill      { background: #2d1f1f; border-color: #ff7b72; color: #ff7b72; }
@@ -127,7 +124,6 @@
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
       outline: none; transition: border-color 0.1s;
     }
-    #cmd-input.ctrl-active  { border-color: #388bfd; }
     #cmd-input::placeholder { color: #484f58; }
     #cmd-input:focus        { border-color: #388bfd; }
 
@@ -152,65 +148,36 @@
     #collapse-btn:active  { color: #e6edf3; }
     #collapse-btn.collapsed { transform: rotate(180deg); }
 
-    /* ── Select Mode Overlay ───────────────────────────────────────────── */
-    #select-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
+    /* ── View Pane (wrapped reader) ──────────────────────────────────────── */
+    #view-pane {
+      position: absolute;
+      inset: 0;
       display: none;
-      flex-direction: column;
-      background: #0d1117;
-      z-index: 1000;
-    }
-    #select-overlay.active { display: flex; }
-
-    #select-topbar {
-      flex-shrink: 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 14px;
-      background: #161b22;
-      border-bottom: 1px solid #30363d;
-      gap: 10px;
-    }
-    #select-hint {
-      font-size: 13px;
-      color: #8b949e;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    #select-actions { display: flex; gap: 8px; flex-shrink: 0; }
-
-    .sel-btn {
-      background: #21262d; color: #e6edf3;
-      border: 1px solid #30363d; border-radius: 6px;
-      padding: 0 14px; height: 36px; font-size: 13px;
-      cursor: pointer; touch-action: manipulation;
-      white-space: nowrap;
-    }
-    .sel-btn:active   { background: #388bfd22; border-color: #388bfd; }
-    .sel-btn.exit-btn { background: #1f2d1f; border-color: #3fb950; color: #3fb950; }
-
-    #select-scroll {
-      flex: 1;
       overflow-y: auto;
-      overflow-x: auto;
+      overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
+      background: #0d1117;
+      padding: 8px 10px;
+      z-index: 5;
     }
 
-    #select-content {
+    body[data-mode="view"] #view-pane { display: block; }
+
+    #view-content {
       margin: 0;
-      padding: 10px 12px;
       font-family: 'SF Mono', Consolas, 'Courier New', monospace;
       font-size: 13px;
       line-height: 1.45;
       color: #e6edf3;
-      white-space: pre;
+      white-space: pre-wrap;
+      word-break: break-word;
       cursor: text;
       user-select: text;
       -webkit-user-select: text;
     }
+
+    /* Mode toggle styling */
+    .mode-btn.active { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
 
     /* Desktop layout */
     @media (min-width: 768px) {
@@ -230,6 +197,9 @@
   <div id="app">
     <div id="terminal-container">
       <div id="conn-dot" title="WebSocket disconnected"></div>
+      <div id="view-pane">
+        <div id="view-content"></div>
+      </div>
     </div>
     <div id="controls">
       <div id="btn-group">
@@ -238,7 +208,9 @@
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
-          <button class="action-btn select-btn" onclick="enterSelectMode()" title="Select &amp; copy terminal text">Select</button>
+          <button id="mode-live" class="action-btn mode-btn" onclick="setMode('live')" title="Live terminal">Live</button>
+          <button id="mode-view" class="action-btn mode-btn" onclick="setMode('view')" title="Wrapped reading view">View</button>
+          <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy terminal output">📋</button>
           <button id="tmux-btn" class="action-btn tmux-btn" onclick="showTmuxRow()" title="tmux shortcuts (Ctrl+b)">tmux</button>
         </div>
         <!-- Tmux shortcut row (hidden by default) -->
@@ -269,23 +241,14 @@
   <!-- Scroll-to-bottom button -->
   <button id="scroll-bottom" onclick="scrollToBottom()" title="Scroll to bottom">↓</button>
 
-  <!-- Select Mode Overlay -->
-  <div id="select-overlay">
-    <div id="select-topbar">
-      <span id="select-hint">Swipe to select · use system copy or tap Copy All</span>
-      <div id="select-actions">
-        <button class="sel-btn" onclick="copyAll()">Copy All</button>
-        <button class="sel-btn exit-btn" onclick="exitSelectMode()">✕ Live</button>
-      </div>
-    </div>
-    <div id="select-scroll">
-      <pre id="select-content"></pre>
-    </div>
-  </div>
-
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
-  <script>
+  <script src="/addon-serialize/lib/addon-serialize.js"></script>
+  <script type="module">
+    import { clipboardWrite } from '/js/clipboard.js';
+    import { ViewRenderer }   from '/js/view.js';
+    import { detectDefaultMode, applyMode } from '/js/mode.js';
+    import { AnsiUp } from '/ansi-up/ansi_up.js';
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize      = parseInt(localStorage.getItem('pd-font-size'))       || 14;
     const savedCollapsed     = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
@@ -293,8 +256,7 @@
     // ── Terminal setup ──────────────────────────────────────────────────────
     const term = new Terminal({
       cursorBlink:   true,
-      copyOnSelect:  true,
-      scrollback:    5000,
+      scrollback:    10000,
       fontSize:    savedFontSize,
       fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
       theme: {
@@ -313,8 +275,97 @@
 
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
+
+    const serializeAddon = new SerializeAddon.SerializeAddon();
+    term.loadAddon(serializeAddon);
+
     term.open(document.getElementById('terminal-container'));
+    if (window.location.search.includes('test=1')) window.term = term;
     requestAnimationFrame(() => fitAddon.fit());
+
+    // ── View mode + copy helpers ──
+    const viewRenderer = new ViewRenderer({
+      scrollEl: document.getElementById('view-pane'),
+      contentEl: document.getElementById('view-content'),
+      ansiUp: new AnsiUp(),
+    });
+
+    // Single source of the "give me everything in the buffer worth showing" call so
+    // the View renderer and the Copy button can't drift apart on excludeAltBuffer.
+    function serializedScrollback() {
+      return serializeAddon.serialize({ excludeAltBuffer: true });
+    }
+
+    // Single copy-on-selection path used by both onSelectionChange and Ctrl+Shift+C.
+    function copyCurrentSelection() {
+      if (term.hasSelection()) clipboardWrite(term.getSelection());
+    }
+
+    function refreshViewIfActive() {
+      if (document.body.dataset.mode === 'view') {
+        viewRenderer.update(serializedScrollback());
+      }
+    }
+
+    // Leading-edge-suppress with trailing fire: first scheduleViewRefresh() in a 100ms
+    // window arms the timer, subsequent calls during the window are dropped, the timer
+    // fires once at the end. We render at most once per 100ms during bursty WS output,
+    // but always pick up the LATEST state because refreshViewIfActive() reads the live
+    // xterm.js buffer when it actually runs.
+    let viewRefreshTimer = null;
+    function scheduleViewRefresh() {
+      if (viewRefreshTimer) return;
+      viewRefreshTimer = setTimeout(() => {
+        viewRefreshTimer = null;
+        refreshViewIfActive();
+      }, 100);
+    }
+
+    // ── Mode toggle ──
+    const modeRefs = {
+      body: document.body,
+      livePane: document.getElementById('terminal-container').querySelector('.xterm') || document.getElementById('terminal-container'),
+      viewPane: document.getElementById('view-pane'),
+      liveBtn: document.getElementById('mode-live'),
+      viewBtn: document.getElementById('mode-view'),
+    };
+
+    window.setMode = function(mode) {
+      applyMode(mode, modeRefs);
+      if (mode === 'view') refreshViewIfActive();
+      else fitAddon.fit();
+    };
+
+    // After xterm.js renders, livePane is the .xterm container — re-grab it.
+    requestAnimationFrame(() => {
+      modeRefs.livePane = document.querySelector('#terminal-container .xterm') || document.getElementById('terminal-container');
+      window.setMode(detectDefaultMode());
+    });
+
+    // ── Copy actions ──
+    // Auto-copy on selection (replaces copyOnSelect: true, which silently fails on HTTP).
+    term.onSelectionChange(copyCurrentSelection);
+
+    window.copyAllOutput = async function() {
+      const text = serializedScrollback().replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for plain-text copy
+      const ok = await clipboardWrite(text);
+      flashCopyButton(ok);
+    };
+
+    function flashCopyButton(ok) {
+      const btn = document.getElementById('copy-btn');
+      const orig = btn.textContent;
+      btn.textContent = ok ? '✓' : '✗';
+      setTimeout(() => { btn.textContent = orig; }, 800);
+    }
+
+    // Ctrl+Shift+C copies current xterm.js selection (without intercepting Ctrl+C / SIGINT).
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+        e.preventDefault();
+        copyCurrentSelection();
+      }
+    });
 
     // Apply saved collapsed state
     const btnGroup    = document.getElementById('btn-group');
@@ -369,7 +420,7 @@
 
       ws.onmessage = e => {
         term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
-        // Pulse scroll button if user is scrolled up
+        scheduleViewRefresh();
         const buf = term.buffer.active;
         if (buf.viewportY < buf.baseY) {
           scrollBtn.classList.add('has-new-output');
@@ -455,23 +506,7 @@
       }
     }, { passive: true });
 
-    // ── Ctrl toggle ─────────────────────────────────────────────────────────
-    const input   = document.getElementById('cmd-input');
-    const ctrlBtn = document.getElementById('ctrl-btn');
-    let ctrlActive = false;
-
-    function toggleCtrl() {
-      ctrlActive = !ctrlActive;
-      ctrlBtn && ctrlBtn.classList.toggle('ctrl-active', ctrlActive);
-      input.classList.toggle('ctrl-active', ctrlActive);
-      if (ctrlActive) input.focus();
-    }
-
-    function deactivateCtrl() {
-      ctrlActive = false;
-      ctrlBtn && ctrlBtn.classList.remove('ctrl-active');
-      input.classList.remove('ctrl-active');
-    }
+    const input = document.getElementById('cmd-input');
 
     // ── Toolbar collapse ────────────────────────────────────────────────────
     function toggleCollapse() {
@@ -502,13 +537,6 @@
 
     // ── Input bar keyboard handling ─────────────────────────────────────────
     input.addEventListener('keydown', e => {
-      if (ctrlActive) {
-        const letter = e.key.toLowerCase();
-        if (letter.length === 1 && /^[a-z]$/.test(letter)) {
-          e.preventDefault(); deactivateCtrl(); sendKey(`ctrl-${letter}`); return;
-        }
-        if (e.key === 'Escape') { e.preventDefault(); deactivateCtrl(); return; }
-      }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
       else if (e.key === 'ArrowUp')   { e.preventDefault(); historyUp(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); historyDown(); }
@@ -565,7 +593,6 @@
 
     async function sendText() {
       const text = input.value.trim();
-      deactivateCtrl();
       if (!text) return;
       if (cmdHistory[0] !== text) cmdHistory.unshift(text);
       historyIndex = -1;
@@ -574,7 +601,6 @@
     }
 
     async function sendKey(key) {
-      deactivateCtrl();
       await post('/key', { key });
     }
 
@@ -588,70 +614,11 @@
       } catch (e) { console.error('Request failed:', e); }
     }
 
-    // ── Select Mode ─────────────────────────────────────────────────────────
-    // Fetches full scrollback from tmux (not xterm.js buffer) so history
-    // includes Claude's alternate-screen output which xterm.js never captures.
-    async function enterSelectMode() {
-      const overlay = document.getElementById('select-overlay');
-      const content = document.getElementById('select-content');
-      const hint    = document.getElementById('select-hint');
-
-      content.textContent = 'Loading history…';
-      overlay.classList.add('active');
-
-      try {
-        const resp = await fetch('/history');
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const text = await resp.text();
-        content.textContent = text;
-        hint.textContent = 'Swipe to select · use system copy or tap Copy All';
-      } catch (e) {
-        content.textContent = '(failed to load history: ' + e.message + ')';
-      }
-
-      requestAnimationFrame(() => {
-        const scrollEl = document.getElementById('select-scroll');
-        scrollEl.scrollTop = scrollEl.scrollHeight;
-      });
-    }
-
-    function exitSelectMode() {
-      document.getElementById('select-overlay').classList.remove('active');
-    }
-
-    function copyAll() {
-      writeToClipboard(document.getElementById('select-content').textContent, 'All output copied!');
-    }
-
-    function writeToClipboard(text, successMsg) {
-      const hint  = document.getElementById('select-hint');
-      const reset = 'Swipe to select · use system copy or tap Copy All';
-      const finish = ok => {
-        hint.textContent = ok ? successMsg : 'Copy failed — use system copy';
-        setTimeout(() => { hint.textContent = reset; }, 2500);
-      };
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).then(() => finish(true)).catch(() => finish(execCopy(text)));
-      } else {
-        finish(execCopy(text));
-      }
-    }
-
-    function execCopy(text) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-      document.body.appendChild(ta);
-      ta.select();
-      let ok = false;
-      try { ok = document.execCommand('copy'); } catch {}
-      document.body.removeChild(ta);
-      return ok;
-    }
-
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape' && document.getElementById('select-overlay').classList.contains('active'))
-        exitSelectMode();
+    // Expose pre-existing functions on window so HTML inline `onclick` handlers can reach them
+    // (the `<script type="module">` change scoped these to the module otherwise).
+    Object.assign(window, {
+      sendText, sendKey, scrollToBottom, toggleCollapse, refreshTerminal,
+      showTmuxRow, hideTmuxRow, tmuxNew, tmuxNext, tmuxLast, tmuxKill,
     });
 
   </script>
