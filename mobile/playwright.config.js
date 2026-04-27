@@ -12,6 +12,8 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox',  use: { ...devices['Desktop Firefox'] } },
-    { name: 'pixel5-firefox', use: { ...devices['Pixel 5'], browserName: 'firefox' } },
+    // No pixel5-firefox project: Playwright Firefox doesn't support isMobile/hasTouch
+    // (which the Pixel 5 device descriptor sets to true), so the context fails to
+    // create. Mobile-shape coverage comes from the 360px-viewport test in smoke.spec.
   ],
 });

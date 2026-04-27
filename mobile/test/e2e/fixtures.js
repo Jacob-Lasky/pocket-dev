@@ -91,8 +91,16 @@ export const test = base.extend({
 });
 
 // Common helpers used by multiple specs. Kept in the fixture module so the
-// `test=1` query string and the connected-dot wait stay in one place.
+// `test=1` query string, the toolbar-expand init script, and the connected-dot
+// wait all stay in one place.
 export async function gotoTest(page, server) {
+  // Default localStorage state has the toolbar collapsed (max-height: 0), which
+  // makes Live/View/Copy buttons unreachable for clicks (the parent #controls
+  // intercepts pointer events). Expand it before navigation so any test can
+  // click toolbar buttons without per-spec boilerplate.
+  await page.addInitScript(() => {
+    localStorage.setItem('pd-toolbar-collapsed', 'false');
+  });
   await page.goto(server.baseURL + '/?test=1');
 }
 

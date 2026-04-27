@@ -7,7 +7,7 @@
 // and we deliberately tolerate it. We assert the static UI renders correctly
 // regardless.
 
-import { test, expect } from './fixtures.js';
+import { test, expect, gotoTest } from './fixtures.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -15,16 +15,6 @@ const ARTIFACTS_DIR = path.resolve(__dirname, '../../test-artifacts');
 
 test.beforeAll(() => {
   if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
-});
-
-// Expand the toolbar so #mode-live / #mode-view / #copy-btn are click-targets
-// in CI, not just visible-in-DOM. Default localStorage state has the toolbar
-// collapsed (max-height: 0) and clicks would otherwise be intercepted by the
-// parent #controls element.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('pd-toolbar-collapsed', 'false');
-  });
 });
 
 test('index.html loads without JS errors and renders the toolbar', async ({ pdStaticServer, page }) => {
@@ -36,7 +26,7 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   });
   page.on('pageerror', err => pageErrors.push(err.message));
 
-  await page.goto(pdStaticServer.baseURL + '/?test=1');
+  await gotoTest(page, pdStaticServer);
   await expect(page).toHaveTitle('pocket-dev');
 
   // Toolbar elements all rendered
@@ -68,7 +58,7 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
 });
 
 test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdStaticServer, page }) => {
-  await page.goto(pdStaticServer.baseURL + '/?test=1');
+  await gotoTest(page, pdStaticServer);
   await expect(page.locator('#mode-view')).toBeVisible();
 
   await page.click('#mode-view');
@@ -79,7 +69,7 @@ test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdS
 });
 
 test('every onclick handler resolves to a real function on window', async ({ pdStaticServer, page }) => {
-  await page.goto(pdStaticServer.baseURL + '/?test=1');
+  await gotoTest(page, pdStaticServer);
 
   const result = await page.evaluate(() => {
     const onclickAttrs = Array.from(document.querySelectorAll('[onclick]'))

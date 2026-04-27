@@ -1,5 +1,15 @@
 import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
 
+// Playwright doesn't expose clipboard-read / clipboard-write permissions in
+// Firefox (they're chromium-only). Run the entire clipboard E2E suite under
+// chromium; the underlying clipboardWrite logic is already covered for both
+// the navigator.clipboard path and the document.execCommand fallback by the
+// unit tests in test/unit/clipboard.test.js, so we don't lose coverage.
+test.skip(
+  ({ browserName }) => browserName !== 'chromium',
+  'clipboard permissions only available in chromium',
+);
+
 test.use({
   permissions: ['clipboard-read', 'clipboard-write'],
 });
