@@ -1,17 +1,17 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
 
 test.describe('Firefox + Pixel 5 emulation', () => {
   test.skip(({ browserName }) => browserName !== 'firefox', 'firefox-only');
 
   test('default mode is View on a coarse-pointer device', async ({ pdServer, page }) => {
-    await page.goto(pdServer.baseURL + '/?test=1');
+    await gotoTest(page, pdServer);
     await page.waitForFunction(() => document.body.dataset.mode);
     expect(await page.evaluate(() => document.body.dataset.mode)).toBe('view');
   });
 
   test('View pane is selectable text (long-press emulation)', async ({ pdServer, page }) => {
-    await page.goto(pdServer.baseURL + '/?test=1');
-    await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
+    await gotoTest(page, pdServer);
+    await waitForConnection(page);
 
     await page.fill('#cmd-input', 'mobile-select-marker');
     await page.click('#send-btn');

@@ -1,12 +1,12 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
 
 test.use({
   permissions: ['clipboard-read', 'clipboard-write'],
 });
 
 test('Copy button writes terminal output to clipboard with no trailing whitespace', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL + '/?test=1');
-  await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
 
   await page.fill('#cmd-input', 'clipboard-test-marker');
   await page.click('#send-btn');
@@ -24,8 +24,8 @@ test('Copy button writes terminal output to clipboard with no trailing whitespac
 });
 
 test('drag-selecting in xterm.js auto-copies via onSelectionChange', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL + '/?test=1');
-  await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
   await page.fill('#cmd-input', 'drag-select-marker');
   await page.click('#send-btn');
   await page.waitForTimeout(500);
@@ -38,8 +38,8 @@ test('drag-selecting in xterm.js auto-copies via onSelectionChange', async ({ pd
 });
 
 test('HTTP fallback path: when navigator.clipboard rejects, execCommand runs', async ({ pdServer, page }) => {
-  await page.goto(pdServer.baseURL + '/?test=1');
-  await page.waitForFunction(() => document.getElementById('conn-dot').classList.contains('connected'));
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
 
   // Patch navigator.clipboard to always reject so the fallback path runs
   await page.evaluate(() => {
