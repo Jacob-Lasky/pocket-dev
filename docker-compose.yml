@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  claude-code:
+  pocket-dev:
     build: .
-    container_name: claude-code
+    container_name: pocket-dev
     restart: unless-stopped
 
     # Unraid user permissions (nobody:users)
@@ -20,15 +20,19 @@ services:
       - ./workspace:/workspace
       - ./config:/home/claude/.claude
 
-      # Docker socket access (read-only for safety)
-      # Allows Claude to manage Docker containers (e.g., restart dispatcharr)
+      # Docker socket — read-only for safety in local dev.
+      # Permits `docker ps` / `docker logs` / `docker inspect` from inside the
+      # container, but NOT `docker restart` / `stop` / `run` (those require rw).
+      # The UnRAID template (pocket-dev.xml) ships the same mode; flip to rw if
+      # you specifically need to manage other containers from this one.
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
     ports:
-      # Web terminal interface (ttyd)
+      # Web terminal — Express serving xterm.js client + WebSocket /ws upgrade.
+      # 7682 used to be a separate mobile-input-bridge port; that bridge was
+      # removed when the stack switched to a single node-pty server in 4548bf8,
+      # so only 7681 is published now.
       - "7681:7681"
-      # Mobile input bridge
-      - "7682:7682"
 
     # Add to docker group to access socket
     # Unraid's docker group GID is 281

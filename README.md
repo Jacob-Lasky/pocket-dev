@@ -1,176 +1,66 @@
-# Claude Code for Unraid
+# pocket-dev
 
-A Docker container that runs [Claude Code](https://github.com/anthropics/claude-code) with a browser-based terminal interface, perfect for Unraid servers.
+A browser-accessible terminal for [Claude Code](https://github.com/anthropics/claude-code), packaged as a Docker container for UnRAID. Open the WebUI from a desktop or phone, get a tmux-backed Claude session that survives disconnects and reconnects.
 
-## Features
+## Architecture
 
-- **Browser-based terminal** - Access Claude Code through your web browser via [ttyd](https://github.com/tsl0922/ttyd)
-- **Persistent sessions** - Uses tmux to maintain your Claude session even when you close the browser
-- **Multi-device access** - Connect from different computers and resume the same session
-- **Docker management** - Claude can manage other Docker containers (restart, view logs, etc.)
-- **Docker container** - Isolated environment for running Claude Code
-- **Unraid template** - Easy installation through Unraid's Docker interface
-- **Secure** - Runs as non-root user (uid 99/gid 100 for Unraid compatibility)
-- **Persistent storage** - Workspace and config directories are mounted volumes
+- `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
+- `mobile/public/` — the client (xterm.js for the live terminal, `ansi_up` for the wrapped View renderer, a small toolbar, an iOS-friendly PWA manifest).
+- `Dockerfile` — `node:20-slim` base. Ships `gh` CLI, `docker-ce-cli`, and the Playwright/chromium headless runtime libs so in-container sessions can run UI probes.
 
-## What is Claude Code?
+For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
 
-Claude Code is Anthropic's official CLI tool that brings Claude's advanced coding capabilities to your terminal. It can help with:
-- Writing and refactoring code
-- Debugging issues
-- Explaining code
-- Generating documentation
-- And much more!
+## Install on UnRAID
 
-## Installation
+1. Docker tab → Add Container.
+2. Either point Template URL at the raw `pocket-dev.xml` in this repo, or drop a copy in `/boot/config/plugins/dockerMan/templates-user/`.
+3. Optional: set `ANTHROPIC_API_KEY`. If you skip it, run `claude login` once the container is up.
+4. Apply.
 
-### Unraid Community Applications
+The container exposes port 7681. Click the WebUI button or hit `http://<server>:7681/` from any device on your network. The mobile UI is the same as desktop; iOS users can "Add to Home Screen" for a PWA experience.
 
-1. Open Unraid WebUI
-2. Go to **Apps** tab
-3. Search for **"claude code"**
-4. Click **Install**
-5. **(Optional)** Enter your **ANTHROPIC_API_KEY** for automatic authentication
-   - Or skip this and use `claude login` on first use
-6. Configure paths if needed (defaults are fine)
-7. Click **Apply**
+## Run locally (development)
 
-### Manual Installation
-
-1. Go to **Docker** tab in Unraid
-2. Click **Add Container**
-3. Select **Template**: `claude-code` from dropdown
-4. **(Optional)** Fill in your **ANTHROPIC_API_KEY**
-5. Click **Apply**
-
-## Usage
-
-Once the container is running:
-
-1. **Access the web terminal**: Click the WebUI icon in Unraid, or navigate to `http://YOUR-SERVER-IP:7681`
-2. **Authenticate** (if you didn't provide API key):
-   - Claude will prompt you to authenticate
-   - Run `claude login` and follow the prompts
-   - Your authentication persists in the config volume
-3. **Start coding**: Claude Code is ready - ask Claude to help with your coding tasks!
-
-### Command Line Access (Alternative)
-
-You can also access Claude Code via SSH:
-
-```bash
-# Interactive bash shell
-docker exec -it claude-code bash
-
-# Run claude directly
-docker exec -it claude-code claude
-
-# Run a specific command
-docker exec -it claude-code claude "help me with this code"
+```sh
+git clone https://github.com/Jacob-Lasky/pocket-dev.git
+cd pocket-dev
+docker compose up -d --build
+# WebUI at http://localhost:7681
 ```
 
-## Configuration
+`docker-compose.yml` mirrors the UnRAID template but uses `./workspace` and `./config` as host paths so local data doesn't collide with a deployed instance. The docker socket is mounted `:ro` for safety in dev.
 
-### Environment Variables
+## Volumes (UnRAID defaults)
 
-- **ANTHROPIC_API_KEY** (optional): Your Anthropic API key from https://console.anthropic.com/
-  - If not provided, use `claude login` in the terminal to authenticate via OAuth
+| Host path | Container path | Purpose |
+|---|---|---|
+| `/mnt/user/appdata/claude-code/workspace` | `/workspace` | Claude's working directory; persists files between container recreates |
+| `/mnt/user/appdata/claude-code/config` | `/home/claude/.claude` | Claude config + auth state |
+| `/mnt/user/appdata/claude-code/claude.json` | `/home/claude/.claude.json` | MCP server configs + Claude settings (file-level mount) |
+| `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Inspect-only access to the host's docker daemon. Read `docker ps`, `docker logs`, `docker inspect` — **not** restart / stop / run (those need `:rw`) |
 
-### Ports
+## Tests
 
-- **7681**: Web terminal interface (ttyd)
+The Playwright + vitest suite under `mobile/` runs on every push and PR:
 
-### Volumes
-
-- **/workspace**: Your working directory where Claude Code can read/write files
-  - Default: `/mnt/user/appdata/claude-code/workspace`
-- **/home/claude/.claude**: Claude configuration and settings
-  - Default: `/mnt/user/appdata/claude-code/config`
-- **/var/run/docker.sock**: Docker socket for container management (read-only)
-  - Allows Claude to run commands like `docker restart dispatcharr`
-  - **Security note**: Provides container management capabilities; read-only mount prevents daemon modification
-
-## Building from Source
-
-### Using Docker Compose (Recommended)
-
-```bash
-# Clone the repository
-git clone https://github.com/Jacob-Lasky/claude-code-docker.git
-cd claude-code-docker
-
-# (Optional) Create .env file with your API key
-echo "ANTHROPIC_API_KEY=your-api-key" > .env
-
-# Build and start
-docker-compose up -d --build
-
-# View logs
-docker-compose logs -f
+```sh
+cd mobile
+npm ci
+npm test               # vitest (unit + server)
+npm run test:e2e       # Playwright on chromium + firefox + webkit
 ```
 
-### Using Docker CLI
+WebKit is in the matrix because mobile Safari's CSS engine has historically interpreted some properties (e.g. `word-break: break-word`) differently than Chromium and Firefox; without it, Safari-only mobile-UI regressions ship green.
 
-```bash
-# Build the image
-docker build -t claude-code:latest .
+## Tech
 
-# Run the container
-docker run -d \
-  --name=claude-code \
-  --group-add 281 \
-  -e ANTHROPIC_API_KEY=your-api-key \
-  -p 7681:7681 \
-  -v /mnt/user/appdata/claude-code/workspace:/workspace \
-  -v /mnt/user/appdata/claude-code/config:/home/claude/.claude \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  claude-code:latest
-```
-
-## Technical Details
-
-- **Base Image**: `node:20-slim`
-- **Terminal**: ttyd v1.7.7
-- **User**: claude (uid 99, gid 100)
-- **Architecture**: Supports amd64 (x86_64) and arm64 (aarch64)
-
-## Troubleshooting
-
-### Container won't start
-- Check that you've provided a valid ANTHROPIC_API_KEY
-- Ensure ports are not already in use
-
-### Can't access web terminal
-- Verify the container is running: `docker ps | grep claude-code`
-- Check the port mapping is correct (default: 7681)
-- Try accessing via IP address instead of hostname
-
-### Claude command not found
-- The `claude` command should be available in PATH automatically
-- Try running: `which claude` to verify installation
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- Base: `node:20-slim` (Debian Bookworm)
+- Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-serialize`
+- View renderer: `ansi_up` (ANSI → HTML, wrapped reading layout)
+- Session persistence: `tmux`
+- Architectures: `linux/amd64` + `linux/arm64`
+- Container user: `claude` (uid 99, gid 100; matches UnRAID's `nobody:users`)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details
-
-## Links
-
-- [Claude Code Official Repository](https://github.com/anthropics/claude-code)
-- [Anthropic Documentation](https://docs.anthropic.com/)
-- [ttyd - Terminal over web](https://github.com/tsl0922/ttyd)
-
-## Support
-
-- For issues with this container: [GitHub Issues](https://github.com/Jacob-Lasky/claude-code-docker/issues)
-- For Claude Code issues: [Claude Code Issues](https://github.com/anthropics/claude-code/issues)
-- For Unraid support: [Unraid Forums](https://forums.unraid.net/)
-
-## Credits
-
-- Created for the Unraid community
-- Built with [Claude Code](https://github.com/anthropics/claude-code) by Anthropic
-- Web terminal powered by [ttyd](https://github.com/tsl0922/ttyd)
+MIT. See `LICENSE`.
