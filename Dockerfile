@@ -1,7 +1,15 @@
 FROM node:20-slim
 
 # Install system dependencies
-# build-essential + python3 are required to compile node-pty (native addon)
+# build-essential + python3 are required to compile node-pty (native addon).
+# The lib*/fonts-* group is Playwright/chromium's headless runtime — only the
+# system libs, NOT the chromium binary itself. Sessions that want Playwright
+# still run `npx playwright install chromium` to pull the browser; the bundled
+# binary then dlopens these libs without `--with-deps` (which needs sudo apt,
+# which this container does not have). Don't drop one of these on a Debian
+# upgrade without checking Playwright's per-distro deps list — a missing
+# libglib2 or libnss3 is what punted a prior session into asking the user to
+# verify the UI manually instead of running the probe.
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -13,6 +21,25 @@ RUN apt-get update && apt-get install -y \
     jq \
     build-essential \
     python3 \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libgbm1 \
+    libasound2 \
+    fonts-liberation \
+    fonts-noto-color-emoji \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \

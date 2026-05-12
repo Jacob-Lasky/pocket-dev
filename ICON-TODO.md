@@ -1,17 +1,5 @@
 # Icon TODO
 
-You need to add an `icon.png` file to this repository for the Unraid template.
+`pocket-dev.xml` references `icon.png` at the repo root (URL is `https://raw.githubusercontent.com/Jacob-Lasky/pocket-dev/main/icon.png`) for UnRAID's container card. The file doesn't exist yet; UnRAID gracefully renders a placeholder, so this is cosmetic only.
 
-## Options:
-
-1. **Use the Anthropic logo**: Download from https://www.anthropic.com/press
-2. **Create a custom icon**:
-   - Recommended size: 256x256px or 512x512px
-   - Format: PNG with transparency
-   - Should represent Claude Code or AI coding assistant
-
-## Once you have the icon:
-1. Save it as `icon.png` in the root of this repository
-2. Commit and push: `git add icon.png && git commit -m "Add icon" && git push`
-
-For now, the template references `icon.png` which should be added before publishing to Community Apps.
+To add an icon: drop a 256x256 (or 512x512) PNG at `./icon.png`, commit, push. The next UnRAID template refresh will pick it up.

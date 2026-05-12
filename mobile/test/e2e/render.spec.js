@@ -68,6 +68,58 @@ test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdS
   await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-view-mode.png'), fullPage: true });
 });
 
+// Regression for "View mode wraps =====-style separators horribly on Safari".
+//
+// The existing PTY-driven wrap test in smoke.spec.js sends 200 'x's through
+// the cat-echo path, but xterm.js sees those input cols at the terminal's
+// fitted width (~40 cols at 360px) and the buffer it serializes already has
+// line breaks inserted. The text that lands in #view-content is therefore
+// pre-wrapped — not an unbroken run.
+//
+// The real bug condition is an unbroken character run wider than the
+// viewport (eg. when a desktop client had previously emitted 160-col '=' bars
+// into the buffer, and the phone then reads them via View mode). That can
+// only be deterministically simulated by injecting the content directly,
+// bypassing the PTY/serialize path.
+//
+// At the CSS layer, `word-break: break-word` is interpreted differently
+// across engines: Chromium and modern Firefox treat it as equivalent to
+// `overflow-wrap: anywhere`, but WebKit/Safari only breaks at natural
+// opportunities — so an unbroken run overflows horizontally. The fix is
+// `overflow-wrap: anywhere`, the spec-stable form. This test asserts the
+// invariant on every browser in the matrix.
+test('View pane wraps an unbroken character run at 360px viewport', async ({ pdStaticServer, browser, browserName }) => {
+  const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
+  const page = await ctx.newPage();
+  await gotoTest(page, pdStaticServer);
+
+  await page.click('#mode-view');
+  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('view');
+
+  // Inject an unbroken 300-char run of '=' directly into the view content.
+  // At 360px viewport with the 13px monospace font, that's ~4x the visible
+  // width — needs to break at character boundaries to fit without overflow.
+  await page.evaluate(() => {
+    document.getElementById('view-content').textContent = '='.repeat(300);
+  });
+
+  await page.screenshot({
+    path: path.join(ARTIFACTS_DIR, `view-wrap-${browserName}.png`),
+    fullPage: true,
+  });
+
+  const horizontal = await page.evaluate(() => {
+    const el = document.getElementById('view-pane');
+    return { scroll: el.scrollWidth, client: el.clientWidth };
+  });
+  expect(
+    horizontal.scroll,
+    `${browserName}: #view-pane scrollWidth=${horizontal.scroll} should not exceed clientWidth=${horizontal.client}`,
+  ).toBeLessThanOrEqual(horizontal.client);
+
+  await ctx.close();
+});
+
 test('every onclick handler resolves to a real function on window', async ({ pdStaticServer, page }) => {
   await gotoTest(page, pdStaticServer);
 
