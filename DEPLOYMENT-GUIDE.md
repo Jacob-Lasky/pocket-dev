@@ -52,15 +52,31 @@ ssh tower 'docker inspect pocket-dev --format "{{.Image}}"'
 ssh tower 'docker images ghcr.io/jacob-lasky/pocket-dev --format "{{.ID}} {{.CreatedSince}}"'
 ```
 
-For UI-touching changes, open `http://192.168.86.183:7681/` on the device that will actually use it (typically a phone) and exercise the affected flow. Mobile Safari and desktop Chromium can render the same CSS differently — there is an open follow-up to add WebKit to the test matrix, but until that lands, the phone is the canonical "did the fix land" check.
+For UI-touching changes, open `http://192.168.86.183:7681/` on the device that will actually use it (typically a phone) and exercise the affected flow. Mobile Safari and desktop Chromium can render the same CSS differently; the Playwright suite runs against chromium + firefox + webkit, but a real phone is still worth the 10 seconds before declaring the deploy good.
 
 ## Rolling back
 
+The `docker-publish.yml` workflow does not push per-commit SHA tags. The tag set it produces is `latest` + `main` for default-branch pushes, `pr-N` for the lifetime of an open PR, and `v{version}` / `{major}.{minor}` / `{major}` for `v*` git tag pushes (none of which exist today).
+
+Two paths to undo a bad deploy:
+
+**Revert + republish (preferred).** Revert the offending commit on `main` and push — CI rebuilds and `latest` points at the reverted code. Round-trip is the same ~5 minutes as a normal deploy.
+
+**Pull a prior manifest by content digest (when CI can't wait).** GHCR keeps every manifest addressable by `sha256:` digest:
+
 ```sh
-ssh tower
-docker pull ghcr.io/jacob-lasky/pocket-dev:<previous-sha-or-tag>
-docker tag ghcr.io/jacob-lasky/pocket-dev:<previous> ghcr.io/jacob-lasky/pocket-dev:latest
-# Then re-create the container via the UnRAID tab as above.
+# List recent published manifests + their digests + tags
+gh api "/users/Jacob-Lasky/packages/container/pocket-dev/versions" \
+  --jq '.[:10] | .[] | {name, created_at, tags: .metadata.container.tags}'
+
+# Pull the chosen digest and re-tag as :latest on Tower
+ssh tower bash <<'EOF'
+PREV='sha256:...'
+docker pull "ghcr.io/jacob-lasky/pocket-dev@${PREV}"
+docker tag  "ghcr.io/jacob-lasky/pocket-dev@${PREV}" ghcr.io/jacob-lasky/pocket-dev:latest
+EOF
+
+# Then re-create the container via the UnRAID tab as in the deploy section.
 ```
 
-Previous SHAs are visible in the GHCR package page (`https://github.com/users/Jacob-Lasky/packages/container/pocket-dev`). Branch tags from open PRs (`pr-N`) are also pullable if a hotfix needs to come from a branch.
+The retag-to-latest step is what UnRAID's template-driven "Force Update" can find on the next pull.
