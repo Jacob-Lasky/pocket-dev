@@ -41,12 +41,20 @@ async function killProcAndWait(proc) {
 }
 
 // Tmux server keeps running after our spawned `node server.js` exits — explicitly
-// kill the test session so repeated local runs don't accumulate orphan sessions.
-async function killTmuxSession(name) {
+// kill all sessions matching the fixture's prefix so repeated local runs don't
+// accumulate orphans. Server uses TMUX_SESSION as a BASE NAME and creates
+// `${base}-1`, `${base}-2`, ... so we list and match by prefix.
+async function killTmuxSessionsByPrefix(prefix) {
+  let stdout = '';
   try {
-    await execFile('tmux', ['kill-session', '-t', name]);
+    ({ stdout } = await execFile('tmux', ['ls', '-F', '#{session_name}']));
   } catch {
-    // Either tmux isn't installed or the session no longer exists; both are fine.
+    // No tmux server running, or tmux not installed — nothing to clean.
+    return;
+  }
+  const names = stdout.split('\n').filter(n => n === prefix || n.startsWith(`${prefix}-`));
+  for (const name of names) {
+    try { await execFile('tmux', ['kill-session', '-t', name]); } catch {}
   }
 }
 
@@ -70,7 +78,7 @@ export const test = base.extend({
     await use({ port, baseURL: `http://localhost:${port}` });
 
     await killProcAndWait(proc);
-    await killTmuxSession(sessionName);
+    await killTmuxSessionsByPrefix(sessionName);
   },
 
   // Static-serving only (no PTY, no WebSocket, no tmux). The page's WS connection
