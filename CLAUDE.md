@@ -1,6 +1,14 @@
 # pocket-dev
 
-Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) spawns a tmux session running Claude, exposes it via WebSocket to xterm.js in the browser. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main.
+Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) hosts N independent tmux sessions — each its own pty, each surfaced as its own xterm.js instance in a single browser tab. The `+New / Next / Last / Kill` toolbar row switches between them; only one is visible at a time, but each retains its own main-buffer scrollback so browser scroll (wheel + touch) never shows the wrong session's history. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main.
+
+## Per-session model — why it exists
+
+An earlier architecture multiplexed everything through one tmux session, one pty, one xterm.js. Switching tmux windows (`Ctrl-b n`) painted the new window into the same xterm.js main buffer, so the browser's scrollback was the *union* of every window's output — you couldn't scroll back into "this window's history" because there was no such thing in the browser.
+
+The fix was structural: each toolbar tab is a real isolated session with its own pty, its own tmux session (named `${TMUX_SESSION}-1`, `-2`, …), and its own xterm.js with its own main-buffer scrollback. Switching tabs is now a pure DOM toggle. The bleed is impossible because the bytes never share a buffer.
+
+`mobile/test/e2e/sessions.spec.js` is the regression guard. If you flatten the architecture back to one xterm.js, that spec fails.
 
 ## Two layers of alt-screen — disable only the OUTER one
 
@@ -32,7 +40,11 @@ If you change anything in the buffer / serialize / focus / alt-screen path, manu
 
 ## Architecture cheat sheet
 
-- **Server** (`mobile/server.js`): exports `buildTmuxSpawnArgs`, `createApp`, `TMUX_CONF_PATH`. Auto-boots only when run directly (`require.main === module`); requiring it for tests does nothing. Endpoints: `/send`, `/key`, `/tmux-kill`, `/refresh`, plus `/ws` upgrade. No `/history` endpoint — View mode replaces it client-side.
+- **Server** (`mobile/server.js`): exports `buildTmuxSpawnArgs`, `createApp`, `createSessionsApi`, `TMUX_CONF_PATH`, `SAFE_ID`. Auto-boots only when run directly (`require.main === module`); requiring it for tests does nothing.
+  - **`createApp({ sessionsApi })`**: returns an Express app. Session-aware routes (`GET/POST/DELETE /sessions`, plus `/send /key /refresh`) only wire up if `sessionsApi` is passed; the static `render.spec.js` boots `createApp()` with no api on purpose to get an unwired test surface.
+  - **`createSessionsApi()`**: stateful factory holding `Map<id, SessionState>`. Each session owns a pty, a 512 KB replay buffer, and the set of connected WebSocket clients. `attachWs(ws, sessionId)` wires an upgraded WS into the matching session and replays buffered bytes.
+  - Endpoints: `GET /sessions` (list), `POST /sessions` (create + return id), `DELETE /sessions/:id` (terminate), `POST /send { session, text }`, `POST /key { session, key }`, `POST /refresh { session }`, `/ws?session=<id>` upgrade. No `/tmux-kill` — replaced by `DELETE /sessions/:id`. No `/history` — View mode replaces it client-side.
+  - `SAFE_ID = /^[A-Za-z0-9._-]+$/` guards every session id that touches shell interpolation (notably `/refresh`, which lists tmux clients via shell pipe).
 - **Client modules** (`mobile/public/js/*.js`, all ESM):
   - `clipboard.js` — `clipboardWrite` strips trailing whitespace, falls back to `document.execCommand('copy')` on HTTP where `navigator.clipboard` is unavailable.
   - `view.js` — `ViewRenderer` takes ANSI text, renders via `ansi_up` into a `pre-wrap` div with sticky-bottom scroll.
@@ -42,10 +54,11 @@ If you change anything in the buffer / serialize / focus / alt-screen path, manu
 
 ## View mode contract
 
-`window.copyAllOutput` and `refreshViewIfActive` both call `serializedScrollback()`, which is `serializeAddon.serialize({ excludeAltBuffer: true })`. This deliberately reads only the main buffer:
+`window.copyAllOutput` and `refreshViewIfActive` both call `serializedScrollback()`, which is `serializeAddon.serialize({ excludeAltBuffer: true })` **on the active session's xterm.js**. This deliberately reads only the main buffer:
 
 - When Claude is in TUI mode (alt-buffer active), View shows the **main buffer scrollback** — i.e., past output from when Claude was between TUI invocations. This is the "read history" use case.
 - The user's TUI is visible in **Live mode**, not View. Switching to View while Claude is mid-response shows static history, not the current TUI frame. That's intended.
+- View is per-session — switching to another tab via `Next / Last` re-renders View against that tab's buffer. There is no cross-session aggregated view.
 
 If you find yourself wanting to drop `excludeAltBuffer: true`, the right move is to add a separate "live snapshot" mode — don't conflate it with the scrollback-reading View mode.
 

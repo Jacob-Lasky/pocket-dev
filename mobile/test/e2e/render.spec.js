@@ -48,8 +48,17 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   const mode = await page.evaluate(() => document.body.dataset.mode);
   expect(['live', 'view']).toContain(mode);
 
-  // Filter expected WebSocket failure noise (no ws server in static mode).
-  const realConsoleErrors = consoleErrors.filter(e => !/WebSocket|ws:\/\//i.test(e));
+  // Filter expected noise in static mode:
+  //   - WebSocket / ws:// — there is no ws server attached.
+  //   - 404 on /sessions — createApp() is booted without sessionsApi, so the
+  //     bootstrap GET/POST against /sessions return 404 by design. The client
+  //     swallows the rejection via console.warn (not console.error), but
+  //     browsers ALSO emit a network-layer "Failed to load resource" error
+  //     for any non-2xx response that we can't suppress from the client.
+  const realConsoleErrors = consoleErrors.filter(e =>
+    !/WebSocket|ws:\/\//i.test(e)
+    && !/Failed to load resource.*404/i.test(e),
+  );
   expect(realConsoleErrors, `Unexpected console errors: ${realConsoleErrors.join(' | ')}`).toEqual([]);
   expect(pageErrors,       `Unhandled page errors: ${pageErrors.join(' | ')}`).toEqual([]);
 
