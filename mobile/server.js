@@ -36,6 +36,18 @@ function createApp({ sessionsApi } = {}) {
   app.use('/ansi-up',         express.static(path.join(__dirname, 'node_modules/ansi_up')));
 
   if (sessionsApi) {
+    // Validate body.session against SAFE_ID and resolve to state — or short-circuit
+    // with the right 400/404 if missing/unknown. Attaches `req.session` for the handler.
+    function requireSession(req, res, next) {
+      const session = req.body && req.body.session;
+      if (!session || !SAFE_ID.test(session))
+        return res.status(400).json({ error: 'session required' });
+      const state = sessionsApi.get(session);
+      if (!state) return res.status(404).json({ error: 'session not found' });
+      req.session = state;
+      next();
+    }
+
     app.get('/sessions', (req, res) => {
       res.json(sessionsApi.list());
     });
@@ -51,28 +63,20 @@ function createApp({ sessionsApi } = {}) {
       sessionsApi.destroy(req.params.id, (ok) => res.json({ ok }));
     });
 
-    app.post('/send', (req, res) => {
-      const { session, text } = req.body || {};
+    app.post('/send', requireSession, (req, res) => {
+      const { text } = req.body;
       if (typeof text !== 'string' || !text.length)
         return res.status(400).json({ error: 'text required' });
-      if (!session || !SAFE_ID.test(session))
-        return res.status(400).json({ error: 'session required' });
-      const state = sessionsApi.get(session);
-      if (!state) return res.status(404).json({ error: 'session not found' });
-      state.pty.write(text);
-      state.pty.write('\r');
+      req.session.pty.write(text);
+      req.session.pty.write('\r');
       res.json({ ok: true });
     });
 
-    app.post('/key', (req, res) => {
-      const { session, key } = req.body || {};
-      if (!session || !SAFE_ID.test(session))
-        return res.status(400).json({ error: 'session required' });
-      const state = sessionsApi.get(session);
-      if (!state) return res.status(404).json({ error: 'session not found' });
+    app.post('/key', requireSession, (req, res) => {
+      const { key } = req.body;
       const ctrlMatch = key && key.match(/^ctrl-([a-z])$/);
       if (ctrlMatch) {
-        state.pty.write(String.fromCharCode(ctrlMatch[1].charCodeAt(0) - 96));
+        req.session.pty.write(String.fromCharCode(ctrlMatch[1].charCodeAt(0) - 96));
         return res.json({ ok: true });
       }
       const sequences = {
@@ -81,21 +85,16 @@ function createApp({ sessionsApi } = {}) {
       };
       const seq = sequences[key];
       if (!seq) return res.status(400).json({ error: 'unknown key' });
-      state.pty.write(seq);
+      req.session.pty.write(seq);
       res.json({ ok: true });
     });
 
-    app.post('/refresh', (req, res) => {
-      const { session } = req.body || {};
-      if (!session || !SAFE_ID.test(session))
-        return res.status(400).json({ error: 'session required' });
-      if (!sessionsApi.get(session))
-        return res.status(404).json({ error: 'session not found' });
+    app.post('/refresh', requireSession, (req, res) => {
       // tmux refresh-client targets clients, not sessions. List clients of
-      // this session, then refresh each. SAFE_ID guard above guarantees no
-      // shell metacharacters in `session`.
+      // this session, then refresh each. SAFE_ID guard in requireSession
+      // guarantees no shell metacharacters in `req.session.id`.
       exec(
-        `tmux list-clients -t '${session}' -F '#{client_name}' | xargs -r -I{} tmux refresh-client -t {}`,
+        `tmux list-clients -t '${req.session.id}' -F '#{client_name}' | xargs -r -I{} tmux refresh-client -t {}`,
         { shell: '/bin/bash' },
         (err) => res.json({ ok: !err }),
       );

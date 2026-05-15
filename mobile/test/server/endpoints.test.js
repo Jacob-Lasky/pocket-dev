@@ -128,7 +128,8 @@ describe('session-aware endpoints', () => {
   it('POST /send rejects missing text', async () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });
-    const res = await request(app).post('/send').send({ session: 'sess-1' });
+    const { body: created } = await request(app).post('/sessions');
+    const res = await request(app).post('/send').send({ session: created.id });
     expect(res.status).toBe(400);
   });
 
@@ -156,5 +157,29 @@ describe('session-aware endpoints', () => {
       .post('/key')
       .send({ session: created.id, key: 'banana' });
     expect(res.status).toBe(400);
+  });
+
+  it('POST /refresh requires a valid session (400 if missing, 404 if unknown)', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+
+    const missing = await request(app).post('/refresh').send({});
+    expect(missing.status).toBe(400);
+
+    const unknown = await request(app).post('/refresh').send({ session: 'nope-such' });
+    expect(unknown.status).toBe(404);
+  });
+
+  it('rejects session ids with shell metacharacters across endpoints', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const evil = "x';rm -rf /;'";
+    for (const path of ['/send', '/key', '/refresh']) {
+      const body = path === '/send' ? { session: evil, text: 'x' }
+                 : path === '/key'  ? { session: evil, key: 'enter' }
+                 :                    { session: evil };
+      const res = await request(app).post(path).send(body);
+      expect(res.status, `${path} should 400 on unsafe id`).toBe(400);
+    }
   });
 });

@@ -503,7 +503,6 @@
 
     // ── Bootstrap ───────────────────────────────────────────────────────────
     async function bootstrap() {
-      setActive(null); // forces dot to disconnected until we have something
       applyConnStatusToDot('connecting');
       let list = [];
       try { list = await listSessions(); }
