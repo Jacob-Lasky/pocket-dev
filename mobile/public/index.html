@@ -30,9 +30,13 @@
       padding: 4px;
     }
 
-    /* Stack of one .terminal-pane per session. Only .active is visible; the
-       others are display:none so each xterm.js instance keeps its own
-       independent scrollback in main buffer. */
+    /* Stack of one .terminal-pane per session. Only .active is interactable;
+       the others stay mounted but invisible via `visibility: hidden` (NOT
+       display:none) so xterm.js's term.open() can measure cell dimensions
+       at construction time. With display:none the pane has 0×0 layout, the
+       cell-measurement div xterm.js relies on returns 0px, and the renderer
+       bakes degenerate dimensions that fit() can't fully recover from — you
+       get a viewport whose bottom rows are clipped until a hard refresh. */
     #terminal-stack {
       position: absolute;
       inset: 4px;
@@ -40,9 +44,13 @@
     .terminal-pane {
       position: absolute;
       inset: 0;
-      display: none;
+      visibility: hidden;
+      pointer-events: none;
     }
-    .terminal-pane.active { display: block; }
+    .terminal-pane.active {
+      visibility: visible;
+      pointer-events: auto;
+    }
     .terminal-pane .xterm,
     .terminal-pane .xterm-viewport,
     .terminal-pane .xterm-screen { height: 100%; }
@@ -291,13 +299,57 @@
 
     // ── Session model ───────────────────────────────────────────────────────
     // Each session owns its own xterm.js + WS + scrollback. Only one .pane
-    // is .active (display:block) at a time; the others stay mounted but
-    // hidden so their main-buffer scrollback persists.
+    // is .active at a time; the others stay mounted (visibility:hidden) so
+    // each main-buffer scrollback persists and so xterm.js's cell-dimension
+    // measurement stays correct across switches.
     const sessions = new Map();            // id → SessionState
     const order    = [];                   // creation order, for Next cycling
     let   activeId        = null;
     let   previousId      = null;
     let   currentFontSize = savedFontSize;
+
+    // ── tmux-style prefix keymap (Ctrl-B then n/p/c/l/&) ───────────────────
+    // Intercepted at the xterm.js level (terminal must be focused). Mirrors
+    // the buttons in the session-switch row so users with tmux muscle memory
+    // can keep using it. A second Ctrl-B inside the prefix window sends a
+    // literal Ctrl-B (\x02) to the inner program — escape hatch for vim
+    // page-up etc.
+    let prefixActive = false;
+    let prefixTimer  = null;
+    const PREFIX_TIMEOUT_MS = 1500;
+
+    function maybeHandlePrefix(e) {
+      if (e.type !== 'keydown') return false;
+      // Bare modifier keydowns must not toggle prefix state.
+      if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return false;
+
+      if (e.ctrlKey && (e.key === 'b' || e.key === 'B')) {
+        if (prefixActive) {
+          // Second Ctrl-B in a row → pass through so the inner app sees \x02.
+          prefixActive = false;
+          clearTimeout(prefixTimer);
+          return false;
+        }
+        prefixActive = true;
+        clearTimeout(prefixTimer);
+        prefixTimer = setTimeout(() => { prefixActive = false; }, PREFIX_TIMEOUT_MS);
+        return true;
+      }
+
+      if (!prefixActive) return false;
+
+      prefixActive = false;
+      clearTimeout(prefixTimer);
+      const k = e.key.toLowerCase();
+      if (k === 'n') { cycleActive(+1); return true; }
+      if (k === 'p') { cycleActive(-1); return true; }
+      if (k === 'c') { tmuxNew();      return true; }
+      if (k === 'l') { tmuxLast();     return true; }
+      if (e.key === '&') { tmuxKill(); return true; }
+      // Unmatched follow-up: drop the prefix silently (matches tmux's "no
+      // binding" behavior — we don't replay the swallowed Ctrl-B either).
+      return false;
+    }
 
     function termTheme() {
       return {
@@ -339,13 +391,16 @@
           if (activeId !== this.id) return;
           if (this.term.hasSelection()) clipboardWrite(this.term.getSelection());
         });
-        this.term.attachCustomKeyEventHandler(e => maybeInterceptCopyKey(e, {
-          hasSelection: () => this.term.hasSelection(),
-          copy:         () => {
-            clipboardWrite(this.term.getSelection());
-            this.term.clearSelection();
-          },
-        }));
+        this.term.attachCustomKeyEventHandler(e => {
+          if (maybeHandlePrefix(e)) return false;
+          return maybeInterceptCopyKey(e, {
+            hasSelection: () => this.term.hasSelection(),
+            copy:         () => {
+              clipboardWrite(this.term.getSelection());
+              this.term.clearSelection();
+            },
+          });
+        });
 
         this.term.onData(data => {
           if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(data);
