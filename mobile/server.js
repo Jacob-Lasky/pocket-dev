@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 
 const SESSION = process.env.TMUX_SESSION || 'main';
 const CMD     = process.env.SHELL_CMD    || 'claude --dangerously-skip-permissions --model "opus[1m]"';
+const RESPAWN = process.env.RESPAWN_CMD  || 'cdspo';
 const PORT    = parseInt(process.env.PORT, 10) || 7681;
 
 const LOOP_CMD = `bash -c 'while true; do ${CMD}; echo ; echo restarting...; sleep 1; done'`;
@@ -98,7 +99,7 @@ function startServer() {
       const windowId = lines[0];
       const windowCount = parseInt(lines[1], 10) || 0;
       if (windowCount <= 1) {
-        exec(`tmux new-window -t ${SESSION} cdspo; tmux kill-window -t ${windowId} 2>/dev/null || true`, { shell: true }, () => {
+        exec(`tmux new-window -t ${SESSION} ${RESPAWN}; tmux kill-window -t ${windowId} 2>/dev/null || true`, { shell: true }, () => {
           res.json({ ok: true, respawned: true });
         });
       } else {
@@ -111,6 +112,10 @@ function startServer() {
 
   app.post('/refresh', (req, res) => {
     exec(`tmux list-clients -F '#{client_name}' | xargs -I{} tmux refresh-client -t {}`, { shell: true }, (err) => res.json({ ok: !err }));
+  });
+
+  app.get('/config', (req, res) => {
+    res.json({ respawn: RESPAWN });
   });
 
   const server  = http.createServer(app);

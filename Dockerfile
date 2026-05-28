@@ -25,29 +25,35 @@ RUN apt-get update && apt-get install -y \
 RUN curl -fsSL https://github.com/cli/cli/releases/latest/download/gh_$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name' | sed 's/^v//')_linux_$(dpkg --print-architecture).tar.gz \
     | tar xz -C /usr/local --strip-components=1
 
+# Install OpenAI Codex CLI globally (system-wide; pure JS, no native deps)
+RUN npm install -g @openai/codex@latest
+
 # Create entrypoint script directly in the image (as root before switching users)
 RUN echo '#!/bin/bash\n\
 set -e\n\
 # Ensure proper permissions on mounted volumes\n\
 chmod 775 /home/claude/.claude 2>/dev/null || true\n\
+chmod 775 /home/claude/.codex 2>/dev/null || true\n\
 chmod 775 /workspace 2>/dev/null || true\n\
 # Execute the main command\n\
 exec "$@"' > /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
-# Add claude shortcut aliases
+# Add CLI shortcut aliases
 RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
-    && echo 'exec claude --dangerously-skip-permissions --model "claude-opus-4-7[1m]" "$@"' >> /usr/local/bin/cdspo \
+    && echo 'exec claude --dangerously-skip-permissions --model "claude-opus-4-8[1m]" "$@"' >> /usr/local/bin/cdspo \
     && echo '#!/bin/bash' > /usr/local/bin/cdsps \
     && echo 'exec claude --dangerously-skip-permissions --model claude-sonnet-4-6 "$@"' >> /usr/local/bin/cdsps \
-    && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps
+    && echo '#!/bin/bash' > /usr/local/bin/cdy \
+    && echo 'exec codex --dangerously-bypass-approvals-and-sandbox "$@"' >> /usr/local/bin/cdy \
+    && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps /usr/local/bin/cdy
 
 # Create docker group and user with proper permissions
 RUN groupadd -g 281 docker || true && \
     useradd -m -u 99 -g 100 -G 281 claude && \
-    mkdir -p /workspace /home/claude/.claude && \
-    chown -R claude:users /workspace /home/claude/.claude && \
-    chmod -R 775 /workspace /home/claude/.claude
+    mkdir -p /workspace /home/claude/.claude /home/claude/.codex && \
+    chown -R claude:users /workspace /home/claude/.claude /home/claude/.codex && \
+    chmod -R 775 /workspace /home/claude/.claude /home/claude/.codex
 
 # Install pocket-dev server (as root, before switching users)
 # npm install compiles node-pty natively here

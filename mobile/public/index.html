@@ -215,7 +215,7 @@
         </div>
         <!-- Tmux shortcut row (hidden by default) -->
         <div id="btn-row-tmux" class="btn-row" style="display:none">
-          <button class="action-btn tmux-btn" onclick="tmuxNew()"  title="New window + cdspo">+New</button>
+          <button class="action-btn tmux-btn" onclick="tmuxNew()"  title="New window + respawn cmd">+New</button>
           <button class="action-btn tmux-btn" onclick="tmuxNext()" title="Next window (Ctrl+b n)">Next</button>
           <button class="action-btn tmux-btn" onclick="tmuxLast()" title="Last window (Ctrl+b l)">Last</button>
           <button class="action-btn tmux-kill" onclick="tmuxKill()" title="Kill window (Ctrl+b &amp; y)">Kill</button>
@@ -439,6 +439,9 @@
       ws.onerror = () => ws.close();
     }
 
+    let respawnCmd = 'cdspo';
+    fetch('/config').then(r => r.json()).then(cfg => { if (cfg && cfg.respawn) respawnCmd = cfg.respawn; }).catch(() => {});
+
     connectWS();
 
     term.onData(data => {
@@ -575,7 +578,7 @@
         ws.send(CTRL_B);
         setTimeout(() => {
           ws.send('c');
-          setTimeout(() => ws.send('cdspo\r'), 300);
+          setTimeout(() => ws.send(respawnCmd + '\r'), 300);
           hideTmuxRow();
         }, 50);
       }
