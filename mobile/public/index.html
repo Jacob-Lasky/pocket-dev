@@ -276,13 +276,11 @@
 
   <script src="/xterm/lib/xterm.js"></script>
   <script src="/addon-fit/lib/addon-fit.js"></script>
-  <script src="/addon-serialize/lib/addon-serialize.js"></script>
   <script type="module">
     import { clipboardWrite } from '/js/clipboard.js';
-    import { ViewRenderer }   from '/js/view.js';
+    import { ViewRenderer, buildPalette, renderTerminalHtml, renderTerminalText, cleanCopyText } from '/js/view.js';
     import { detectDefaultMode, applyMode } from '/js/mode.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
-    import { AnsiUp } from '/ansi-up/ansi_up.js';
 
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize  = parseInt(localStorage.getItem('pd-font-size')) || 14;
@@ -382,9 +380,7 @@
           theme:       termTheme(),
         });
         this.fitAddon       = new FitAddon.FitAddon();
-        this.serializeAddon = new SerializeAddon.SerializeAddon();
         this.term.loadAddon(this.fitAddon);
-        this.term.loadAddon(this.serializeAddon);
         this.term.open(this.pane);
 
         this.term.onSelectionChange(() => {
@@ -575,23 +571,47 @@
     }
 
     // ── View mode + copy helpers (scoped to ACTIVE session) ─────────────────
+    // View renders the ACTIVE session's parsed buffer directly (see view.js for
+    // why we don't round-trip through serialize()+ansi_up — it drops spaces).
+    const viewPalette  = buildPalette(termTheme());
     const viewRenderer = new ViewRenderer({
       scrollEl:  viewPaneEl,
       contentEl: viewContent,
-      ansiUp:    new AnsiUp(),
     });
 
-    function serializedScrollback() {
+    function activeTerm() {
       const s = sessions.get(activeId);
-      if (!s) return '';
-      return s.serializeAddon.serialize({ excludeAltBuffer: true });
+      return s ? s.term : null;
+    }
+
+    // A live text selection inside the view pane must survive incoming output.
+    // Rebuilding innerHTML collapses the selection, so while the user holds a
+    // selection we defer the refresh and flush it once the selection clears.
+    let pendingViewRefresh = false;
+
+    function viewHasSelection() {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+      return viewPaneEl.contains(sel.anchorNode) || viewPaneEl.contains(sel.focusNode);
+    }
+
+    function renderViewNow() {
+      const term = activeTerm();
+      viewRenderer.update(term ? renderTerminalHtml(term, { palette: viewPalette, theme: termTheme() }) : '');
+      pendingViewRefresh = false;
     }
 
     function refreshViewIfActive() {
-      if (document.body.dataset.mode === 'view') {
-        viewRenderer.update(serializedScrollback());
-      }
+      if (document.body.dataset.mode !== 'view') return;
+      // Don't rebuild the DOM out from under an in-progress text selection — it
+      // collapses the highlight. Defer and flush once the selection clears.
+      if (viewHasSelection()) { pendingViewRefresh = true; return; }
+      renderViewNow();
     }
+
+    document.addEventListener('selectionchange', () => {
+      if (pendingViewRefresh && !viewHasSelection()) refreshViewIfActive();
+    });
 
     let viewRefreshTimer = null;
     function scheduleViewRefresh() {
@@ -616,8 +636,30 @@
       else { const s = sessions.get(activeId); s && s.fitAndResize(); }
     };
 
+    // Copy the VISIBLE View window — the rows currently on screen, not the whole
+    // scrollback. Each rendered line is a .vrow block; we keep the ones whose box
+    // intersects the view pane's viewport, then clean the text (real spaces, no
+    // escape codes, collapsed blanks). In Live mode there's no rendered reader,
+    // so fall back to the live terminal's current screen.
+    function visibleViewText() {
+      const paneRect = viewPaneEl.getBoundingClientRect();
+      const picked = [];
+      for (const row of viewContent.querySelectorAll('.vrow')) {
+        const r = row.getBoundingClientRect();
+        if (r.bottom > paneRect.top + 1 && r.top < paneRect.bottom - 1) picked.push(row.textContent);
+      }
+      return cleanCopyText(picked.join('\n'));
+    }
+
     window.copyAllOutput = async function() {
-      const text = serializedScrollback().replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for plain-text copy
+      let text = '';
+      if (document.body.dataset.mode === 'view') {
+        if (!viewHasSelection()) renderViewNow(); // make sure visible rows are current
+        text = visibleViewText();
+      } else {
+        const term = activeTerm();
+        text = term ? cleanCopyText(renderTerminalText(term)) : '';
+      }
       const ok = await clipboardWrite(text);
       flashCopyButton(ok);
     };
@@ -684,6 +726,22 @@
         fitActive();
         positionScrollBtn();
       });
+    }
+
+    // Auto-refit whenever the terminal box actually changes size. xterm's fit is
+    // a snapshot of the container at one instant; if layout settles to a
+    // different size afterwards (browser chrome show/hide, rotation, font load,
+    // late reflow) nothing re-fits and the live grid renders jumbled — until the
+    // user pokes it (e.g. collapsing/expanding the toolbar, which fits after its
+    // animation). A ResizeObserver makes that workaround automatic and covers
+    // size changes the window/visualViewport 'resize' events miss.
+    if (window.ResizeObserver) {
+      let roTimer = null;
+      const ro = new ResizeObserver(() => {
+        clearTimeout(roTimer);
+        roTimer = setTimeout(() => { fitActive(); positionScrollBtn(); }, 80);
+      });
+      ro.observe(document.getElementById('terminal-container'));
     }
 
     positionScrollBtn();
@@ -802,8 +860,20 @@
     }
 
     // ── Actions ────────────────────────────────────────────────────────────
+    // The ⟳ button is the "my display is messed up — fix it" escape hatch.
+    // It repaints whichever pane you're looking at: in View it force-re-renders
+    // from the current buffer (ignoring the selection guard — an explicit tap
+    // means "redraw now"); in Live it re-fits and forces a full xterm redraw to
+    // clear a jumbled grid. It also asks the server/tmux to repaint.
     async function refreshTerminal() {
       if (!activeId) return;
+      const s = sessions.get(activeId);
+      if (document.body.dataset.mode === 'view') {
+        renderViewNow();
+      } else if (s) {
+        s.fitAndResize();
+        s.term.refresh(0, s.term.rows - 1);
+      }
       await post('/refresh', { session: activeId });
     }
 

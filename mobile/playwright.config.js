@@ -1,4 +1,16 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
+
+// Playwright's bundled Chromium can fail to launch on distros it doesn't
+// officially support (Arch: library/symbol mismatches). When a system
+// Chromium-family browser is present, point the chromium project at it. On CI
+// (Ubuntu) none of these paths exist, so the bundled browser is used unchanged.
+const SYSTEM_CHROMIUM = ['/usr/bin/chromium', '/usr/bin/google-chrome-stable', '/usr/bin/brave']
+  .find(p => existsSync(p));
+const chromiumUse = {
+  ...devices['Desktop Chrome'],
+  ...(SYSTEM_CHROMIUM ? { launchOptions: { executablePath: SYSTEM_CHROMIUM } } : {}),
+};
 
 export default defineConfig({
   testDir: './test/e2e',
@@ -12,7 +24,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', use: chromiumUse },
     { name: 'firefox',  use: { ...devices['Desktop Firefox'] } },
     // WebKit project is load-bearing: Safari's CSS engine has interpreted
     // `word-break: break-word` differently than Chromium/Firefox in the

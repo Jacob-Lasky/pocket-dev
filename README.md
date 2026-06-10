@@ -5,7 +5,7 @@ A browser-accessible terminal for [Claude Code](https://github.com/anthropics/cl
 ## Architecture
 
 - `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
-- `mobile/public/` — the client (xterm.js for the live terminal, `ansi_up` for the wrapped View renderer, a small toolbar, an iOS-friendly PWA manifest).
+- `mobile/public/` — the client (xterm.js for the live terminal; the wrapped View renderer walks xterm's parsed buffer directly in `js/view.js`; a small toolbar; an iOS-friendly PWA manifest).
 - `Dockerfile` — `node:20-slim` base. Ships `gh` CLI, `docker-ce-cli`, and the Playwright/chromium headless runtime libs so in-container sessions can run UI probes.
 
 For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
@@ -55,8 +55,8 @@ WebKit is in the matrix because mobile Safari's CSS engine has historically inte
 ## Tech
 
 - Base: `node:20-slim` (Debian Bookworm)
-- Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-serialize`
-- View renderer: `ansi_up` (ANSI → HTML, wrapped reading layout)
+- Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit`
+- View renderer: in-house buffer walk in `mobile/public/js/view.js` (reads xterm's parsed buffer → colour-preserving wrapped HTML; no ANSI round-trip)
 - Session persistence: `tmux`
 - Architectures: `linux/amd64` + `linux/arm64`
 - Container user: `claude` (uid 99, gid 100; matches UnRAID's `nobody:users`)
