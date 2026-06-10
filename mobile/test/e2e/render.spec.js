@@ -80,16 +80,11 @@ test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdS
 // Regression for "View mode wraps =====-style separators horribly on Safari".
 //
 // The existing PTY-driven wrap test in smoke.spec.js sends 200 'x's through
-// the cat-echo path, but xterm.js sees those input cols at the terminal's
-// fitted width (~40 cols at 360px) and the buffer it serializes already has
-// line breaks inserted. The text that lands in #view-content is therefore
-// pre-wrapped — not an unbroken run.
-//
-// The real bug condition is an unbroken character run wider than the
-// viewport (eg. when a desktop client had previously emitted 160-col '=' bars
-// into the buffer, and the phone then reads them via View mode). That can
-// only be deterministically simulated by injecting the content directly,
-// bypassing the PTY/serialize path.
+// the cat-echo path. The View renderer rejoins soft-wrapped buffer rows into
+// one logical line, so the markup it produces leans on CSS to reflow — and the
+// assertion there strips whitespace anyway. To pin the pure CSS invariant
+// deterministically (no PTY, no buffer state), this test injects an unbroken
+// run straight into #view-content.
 //
 // At the CSS layer, `word-break: break-word` is interpreted differently
 // across engines: Chromium and modern Firefox treat it as equivalent to

@@ -22,13 +22,8 @@ describe('express endpoints (static + assets)', () => {
     expect(res.headers['content-type']).toMatch(/javascript/);
   });
 
-  it('serves @xterm/addon-serialize', async () => {
-    const res = await request(app).get('/addon-serialize/lib/addon-serialize.js');
-    expect(res.status).toBe(200);
-  });
-
-  it('serves ansi_up', async () => {
-    const res = await request(app).get('/ansi-up/ansi_up.js');
+  it('serves @xterm/addon-fit', async () => {
+    const res = await request(app).get('/addon-fit/lib/addon-fit.js');
     expect(res.status).toBe(200);
   });
 
