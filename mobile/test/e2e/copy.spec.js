@@ -21,10 +21,12 @@ test('Copy button writes terminal output to clipboard with no trailing whitespac
 
   await page.click('#copy-btn');
   // Poll the clipboard until the marker shows up — clipboardWrite is async
-  // and there's no DOM signal we can wait on. ~200ms is typical, 3s is safe.
+  // and there's no DOM signal we can wait on. ~200ms is typical locally, but
+  // headless chromium's clipboard read can lag well past 3s under CI's
+  // parallel load (observed flaking at 3s), so poll generously.
   await expect.poll(
     () => page.evaluate(() => navigator.clipboard.readText()),
-    { timeout: 3000 },
+    { timeout: 8000 },
   ).toContain('clipboard-test-marker');
 
   const clip = await page.evaluate(() => navigator.clipboard.readText());
@@ -42,7 +44,7 @@ test('drag-selecting in xterm.js auto-copies via onSelectionChange', async ({ pd
   await page.evaluate(() => window.term.selectAll());
   await expect.poll(
     () => page.evaluate(() => navigator.clipboard.readText()),
-    { timeout: 3000 },
+    { timeout: 8000 },
   ).toContain('drag-select-marker');
 });
 
@@ -70,6 +72,6 @@ test('HTTP fallback path: when navigator.clipboard rejects, execCommand runs', a
   // after the clipboardWrite promise rejects, which depends on microtask order.
   await expect.poll(
     () => page.evaluate(() => window.__execCommandCalls),
-    { timeout: 3000 },
+    { timeout: 8000 },
   ).toContain('copy');
 });
