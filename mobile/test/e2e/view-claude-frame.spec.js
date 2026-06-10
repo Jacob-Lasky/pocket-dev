@@ -48,10 +48,13 @@ test('View reconstructs spaces from a real Claude alt-screen frame', async ({ pd
   const viewText = await page.evaluate(() => document.getElementById('view-content').innerText);
   expect(viewText).not.toMatch(/\[\d+G/); // no bare CHA sequences
 
-  // Colour is preserved: the amber header rule is truecolor #ffc107.
-  const hasColour = await page.evaluate(() =>
-    !!document.querySelector('#view-content span[style*="color:#ffc107"]'));
-  expect(hasColour).toBe(true);
+  // NOTE: colour preservation is asserted deterministically in the unit test
+  // (view.test.js "preserves the banner colour", direct xterm write). We do NOT
+  // assert it here: which of the frame's *coloured* lines (the leading amber
+  // rule, the menu) survive depends on the tmux version's handling of the
+  // frame's leading terminal-reset bytes, which differs between local tmux and
+  // CI's — making any specific-colour assertion env-fragile. The robust,
+  // pipeline-unique value of this test is the space reconstruction above.
 
   // Visual artifact (required for UI-touching diffs).
   await page.screenshot({
