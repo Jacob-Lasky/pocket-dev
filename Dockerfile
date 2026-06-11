@@ -81,6 +81,13 @@ RUN mkdir -p /etc/apt/keyrings \
 # Create entrypoint script directly in the image (as root before switching users)
 RUN echo '#!/bin/bash\n\
 set -e\n\
+# Group-writable umask (002). DO NOT raise back to 022. The container runs as\n\
+# claude:users (uid 99, gid 100) and writes to /coding (= host /mnt/user/misc/coding,\n\
+# an SMB share). The mediauser SMB account is also gid 100 (users); with the default\n\
+# 022 umask, everything Claude creates is 0755/0644 and same-group SMB users cannot\n\
+# write into it. 002 makes new files 0664/dirs 0775 so the shared tree is two-way\n\
+# writable. Explicit chmods (ssh keys 600, etc.) are unaffected by umask.\n\
+umask 002\n\
 # Ensure proper permissions on mounted volumes\n\
 chmod 775 /home/claude/.claude 2>/dev/null || true\n\
 chmod 775 /workspace 2>/dev/null || true\n\
