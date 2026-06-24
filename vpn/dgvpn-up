@@ -16,7 +16,10 @@ PORT="${DGVPN_PROXY_PORT:-1055}"
 DIR="${DGVPN_DIR:-/home/claude/.dgvpn}"
 LOG="${DGVPN_LOG:-/tmp/dgvpn.log}"
 PIDFILE="${DIR}/dgvpn-proxy.pid"
-READY_WAIT="${DGVPN_READY_WAIT:-15}"
+# Generous default: a cold tsnet resume after a container restart (DERP +
+# netmap re-establish) routinely takes 20-40s. A short window made the first
+# dgvpn call after a deploy spuriously fail while the proxy was still connecting.
+READY_WAIT="${DGVPN_READY_WAIT:-45}"
 
 mkdir -p "$DIR"
 
@@ -47,12 +50,14 @@ if ! running; then
   echo $! > "$PIDFILE"
 fi
 
-url_shown=0
 iters=$(( READY_WAIT * 2 ))
 for _ in $(seq 1 "$iters"); do
   port_open && exit 0
-  if [ "$url_shown" -eq 0 ] && grep -q "ACTION REQUIRED" "$LOG" 2>/dev/null; then
-    url_shown=1
+  # If interactive login is required, surface the URL and stop waiting now:
+  # a human must complete SSO out-of-band, so blocking the rest of the window
+  # buys nothing and just delays the caller. The proxy keeps polling in the
+  # background, so the next dgvpn call connects once SSO is done.
+  if grep -q "ACTION REQUIRED" "$LOG" 2>/dev/null; then
     {
       echo ""
       echo "==> Deepgram tailnet needs a one-time login (valid ~24h):"
@@ -60,13 +65,11 @@ for _ in $(seq 1 "$iters"); do
       echo "    Open that URL, complete SSO, then re-run your dgvpn command."
       echo ""
     } >&2
+    exit 3
   fi
   sleep 0.5
 done
 
-if [ "$url_shown" -eq 1 ]; then
-  exit 3
-fi
 echo "dgvpn: proxy did not become ready in ${READY_WAIT}s. Recent log:" >&2
 tail -n 15 "$LOG" >&2
 exit 1
