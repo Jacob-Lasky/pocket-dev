@@ -72,6 +72,23 @@ If you find yourself wanting to read `.active` (the alt buffer) here, the right 
 - Tower: `ssh tower`, `docker pull ghcr.io/jacob-lasky/pocket-dev:latest`, stop/rm/run with the canonical args. The UnRAID template at `/boot/config/plugins/dockerMan/templates-user/my-pocket-dev.xml` is the source of truth for volumes / env / `--group-add 281`.
 - The runtime container does NOT include devDependencies — `npm install --production` in the Dockerfile excludes vitest/playwright/etc.
 
+## Deepgram tailnet access (dgvpn)
+
+`dgvpn` gives commands selective, opt-in access to Deepgram-internal services (`.consul`, request-raid, anything on the `controlplane.deepgram.com` tailnet) without putting the whole container on the VPN. It exists so the in-container Claude can reach those services on its own:
+
+```
+dgvpn curl http://request-raid.service.awsw2.consul:9008/health   # routed via tailnet
+dgvpn gh repo view ...                                            # public egress, untouched
+```
+
+- **`dgvpn <cmd>`** runs `<cmd>` with `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` pointed at the local proxy, then execs. Only hosts matching a tailnet suffix (`.consul` by default, `DGVPN_TAILNET_SUFFIXES` to extend) take the tunnel; everything else dials direct, so `dgvpn` is safe to prefix on any command.
+- **`dgvpn-up`** brings the tunnel up (idempotent). Auth is interactive Keycloak SSO, valid ~24h: on first use in a window it prints a login URL to open once. `dgvpn` calls `dgvpn-up` for you and exits with code 3 (not running the command) when login is pending, so the caller authenticates and retries.
+- State persists under `/home/claude/.dgvpn` (the `dgvpn State` volume in `pocket-dev.xml`), so a container recreate does not force a re-auth inside the key's life.
+
+**Architecture lives in `vpn/`.** A static Go binary (`dgvpn-proxy`) holds one userspace `tsnet` identity and runs a localhost HTTP CONNECT/forward proxy. `main.go` is the single-identity lifecycle (tsnet up, `RouteAll=true`, surface the SSO URL, start proxy); `proxy.go` is lifted from deephive's `services/tsnet/proxy.go`. It runs as the unprivileged `claude` user: userspace tsnet needs no TUN device and no `NET_ADMIN`. Go tests: `cd vpn && go test ./...`.
+
+**DO NOT replace the Go sidecar with `tailscale up` / `tailscaled`.** This is the load-bearing reason the code exists. Userspace `tailscaled` cannot resolve `.consul` split-DNS for outbound connections (tailscale#16906, tailscale#4677): it answers only globally-resolvable or MagicDNS names, and `.consul` is neither. The sidecar works around this exactly as deephive did (#380), resolving names itself via the tsnet LocalAPI (`proxy.go`'s `resolveViaLocalAPI`) before dialing. Kernel-mode `tailscaled` would also need a TUN device and `NET_ADMIN`, which this unprivileged container does not have. If you "simplify" this to a stock tailscale client, `.consul` silently stops resolving.
+
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.

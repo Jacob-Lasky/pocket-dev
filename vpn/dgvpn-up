@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Bring up the Deepgram tailnet proxy if it is not already running, and surface
+# the one-time SSO login URL when interactive auth is required. Idempotent: a
+# no-op when the proxy is already accepting connections.
+#
+# Exit codes:
+#   0  proxy ready (HTTP_PROXY can be pointed at it)
+#   3  login pending: the SSO URL was printed; a human must complete it, ~24h
+#   1  startup failed; recent log lines are printed
+#
+# The `dgvpn` wrapper branches on these. Auth is interactive Keycloak SSO, so
+# code 3 is the expected first-run / post-expiry state, not an error.
+set -uo pipefail
+
+PORT="${DGVPN_PROXY_PORT:-1055}"
+DIR="${DGVPN_DIR:-/home/claude/.dgvpn}"
+LOG="${DGVPN_LOG:-/tmp/dgvpn.log}"
+PIDFILE="${DIR}/dgvpn-proxy.pid"
+READY_WAIT="${DGVPN_READY_WAIT:-15}"
+
+mkdir -p "$DIR"
+
+# /dev/tcp is a bash feature; the proxy binds 127.0.0.1 only.
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; }
+# kill -0 is a shell builtin, so this needs no procps in the slim image.
+running()   { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; }
+
+# Fast path: already accepting connections.
+port_open && exit 0
+
+# Start a detached proxy only if one is not already alive. Two tsnet servers on
+# the same state dir would collide, so the liveness check guards against a
+# double start from back-to-back invocations. nohup (not setsid) so $! is the
+# proxy's own pid and survives this shell exiting.
+if ! running; then
+  : > "$LOG"
+  nohup dgvpn-proxy >>"$LOG" 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+fi
+
+url_shown=0
+iters=$(( READY_WAIT * 2 ))
+for _ in $(seq 1 "$iters"); do
+  port_open && exit 0
+  if [ "$url_shown" -eq 0 ] && grep -q "ACTION REQUIRED" "$LOG" 2>/dev/null; then
+    url_shown=1
+    {
+      echo ""
+      echo "==> Deepgram tailnet needs a one-time login (valid ~24h):"
+      grep -A1 "ACTION REQUIRED" "$LOG" | tail -n1 | sed 's/^[[:space:]]*/    /'
+      echo "    Open that URL, complete SSO, then re-run your dgvpn command."
+      echo ""
+    } >&2
+  fi
+  sleep 0.5
+done
+
+if [ "$url_shown" -eq 1 ]; then
+  exit 3
+fi
+echo "dgvpn: proxy did not become ready in ${READY_WAIT}s. Recent log:" >&2
+tail -n 15 "$LOG" >&2
+exit 1

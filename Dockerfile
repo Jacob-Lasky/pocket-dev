@@ -1,3 +1,18 @@
+# dgvpn-proxy: a single-user userspace Tailscale identity plus a localhost HTTP
+# proxy that routes only .consul/tailnet traffic through the Deepgram tailnet
+# (everything else dials direct). DO NOT replace this with `tailscale up` or
+# tailscaled: userspace tailscaled cannot resolve .consul split-DNS for outbound
+# connections (tailscale#16906, tailscale#4677), which is the entire point here.
+# The Go side in vpn/ resolves names via the tsnet LocalAPI instead. Built static
+# (CGO_ENABLED=0) so it drops into the node:20-slim final image with no runtime
+# deps. Pin matches vpn/go.mod's `go 1.26`.
+FROM golang:1.26-bookworm AS dgvpn-builder
+WORKDIR /build/vpn
+COPY vpn/go.mod vpn/go.sum* ./
+RUN go mod download
+COPY vpn/ ./
+RUN CGO_ENABLED=0 go build -o /dgvpn-proxy -ldflags='-s -w' .
+
 FROM node:20-slim
 
 # Install system dependencies
@@ -86,6 +101,23 @@ RUN groupadd -g 281 docker || true && \
     mkdir -p /workspace /home/claude/.claude && \
     chown -R claude:users /workspace /home/claude/.claude && \
     chmod -R 775 /workspace /home/claude/.claude
+
+# dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
+# as root into /usr/local/bin (on PATH for the claude user). The proxy runs as
+# the unprivileged claude user at runtime: userspace tsnet needs no TUN device
+# and no NET_ADMIN, so this works in the unprivileged container. State persists
+# under /home/claude/.dgvpn so the tailnet registration survives restarts.
+COPY --from=dgvpn-builder /dgvpn-proxy /usr/local/bin/dgvpn-proxy
+COPY vpn/dgvpn vpn/dgvpn-up /usr/local/bin/
+RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
+    chmod +x /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgvpn-proxy && \
+    mkdir -p /home/claude/.dgvpn && chown claude:users /home/claude/.dgvpn
+# Single source of truth for the proxy port at runtime. The Go binary and both
+# wrapper scripts read DGVPN_PROXY_PORT; their in-code defaults are fallbacks
+# only. Set it once here so the three never drift. Override via the template to
+# move the port. DGVPN_DIR matches the persisted `dgvpn State` volume in pocket-dev.xml.
+ENV DGVPN_PROXY_PORT=1055
+ENV DGVPN_DIR=/home/claude/.dgvpn
 
 # Install pocket-dev server (as root, before switching users)
 # npm install compiles node-pty natively here
