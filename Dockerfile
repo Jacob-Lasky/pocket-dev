@@ -9,9 +9,14 @@
 FROM golang:1.26-bookworm AS dgvpn-builder
 WORKDIR /build/vpn
 COPY vpn/go.mod vpn/go.sum* ./
-RUN go mod download
+# Cache mounts persist the module cache and the Go build cache across CI runs
+# (the workflow's buildx gha backend stores them), so the large tailscale.com
+# dependency graph is compiled incrementally instead of from scratch each build.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY vpn/ ./
-RUN CGO_ENABLED=0 go build -o /dgvpn-proxy -ldflags='-s -w' .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /dgvpn-proxy -ldflags='-s -w' .
 
 FROM node:20-slim
 
@@ -109,11 +114,23 @@ RUN groupadd -g 281 docker || true && \
     chown -R claude:users /workspace /home/claude/.claude && \
     chmod -R 775 /workspace /home/claude/.claude
 
+# Install pocket-dev server (as root, before switching users)
+# npm install compiles node-pty natively here. This is an expensive layer, so it
+# comes BEFORE the dgvpn block: dgvpn changes far more often than mobile/, and
+# putting the frequently-changing dgvpn COPY after this keeps the node-pty
+# rebuild cached on vpn-only changes.
+COPY mobile/ /mobile/
+RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
+    chmod +x /mobile/start.sh && \
+    chown -R claude:users /mobile
+
 # dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
 # as root into /usr/local/bin (on PATH for the claude user). The proxy runs as
 # the unprivileged claude user at runtime: userspace tsnet needs no TUN device
 # and no NET_ADMIN, so this works in the unprivileged container. State persists
-# under /home/claude/.dgvpn so the tailnet registration survives restarts.
+# under /home/claude/.dgvpn so the tailnet registration survives restarts. Kept
+# last (just before USER claude) so iterating on vpn/ does not bust the apt or
+# npm layers above.
 COPY --from=dgvpn-builder /dgvpn-proxy /usr/local/bin/dgvpn-proxy
 COPY vpn/dgvpn vpn/dgvpn-up /usr/local/bin/
 RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
@@ -125,13 +142,6 @@ RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
 # move the port. DGVPN_DIR matches the persisted `dgvpn State` volume in pocket-dev.xml.
 ENV DGVPN_PROXY_PORT=1055
 ENV DGVPN_DIR=/home/claude/.dgvpn
-
-# Install pocket-dev server (as root, before switching users)
-# npm install compiles node-pty natively here
-COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
-    chmod +x /mobile/start.sh && \
-    chown -R claude:users /mobile
 
 # Switch to claude user before installing
 USER claude
