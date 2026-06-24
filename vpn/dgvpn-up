@@ -22,8 +22,17 @@ mkdir -p "$DIR"
 
 # /dev/tcp is a bash feature; the proxy binds 127.0.0.1 only.
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; }
-# kill -0 is a shell builtin, so this needs no procps in the slim image.
-running()   { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; }
+# True only if the pidfile points at a LIVE dgvpn-proxy. The /proc/comm check
+# guards against PID reuse: kill -0 alone returns true for any process that
+# happens to inherit the recorded PID, which would wrongly suppress a needed
+# restart. kill -0 and /proc are builtin/kernel, so no procps in the slim image.
+running() {
+	[ -f "$PIDFILE" ] || return 1
+	pid="$(cat "$PIDFILE" 2>/dev/null)"
+	[ -n "$pid" ] || return 1
+	kill -0 "$pid" 2>/dev/null || return 1
+	[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "dgvpn-proxy" ]
+}
 
 # Fast path: already accepting connections.
 port_open && exit 0

@@ -41,11 +41,6 @@ const (
 	defaultProxyPort  = 1055
 	defaultStateDir   = "/home/claude/.dgvpn"
 	defaultSuffixes   = ".consul"
-
-	// loginDeadline caps how long we wait for a human to complete the SSO
-	// before giving up, so `dgvpn-up` cannot hang a session forever. Matches
-	// deephive's UI poll timeout.
-	loginDeadline = 10 * time.Minute
 )
 
 func main() {
@@ -92,6 +87,19 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Wire SIGTERM/SIGINT to cancel ctx up front, before the login wait. The
+	// container sends SIGTERM on `docker stop`; cancelling ctx unblocks both the
+	// login poll and the post-READY block so deferred ts.Close runs and the node
+	// shuts down gracefully instead of waiting for SIGKILL. Set up before
+	// waitUntilRunning so a stop during a pending SSO also exits cleanly.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		log.Printf("shutting down")
+		cancel()
+	}()
+
 	// RouteAll=true so Headscale-pushed subnet routes (the internal .consul
 	// DNS resolver and any other advertised subnet) are accepted into tsnet's
 	// netstack. Userspace tsnet defaults this false on Linux; without it,
@@ -113,27 +121,29 @@ func run() error {
 	}
 	log.Printf("READY proxy=http://127.0.0.1:%d suffixes=%s", port, strings.Join(suffixes, ","))
 
-	// Block until SIGTERM/SIGINT, then tear down cleanly so the node deregisters
-	// gracefully on `docker stop` rather than waiting for SIGKILL.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	<-sigCh
-	log.Printf("shutting down")
+	// Serve until the signal handler cancels ctx, then tear down the listener.
+	<-ctx.Done()
 	_ = srv.Close()
 	return nil
 }
 
 // waitUntilRunning polls the tsnet backend until it reaches Running, printing
-// the SSO login URL once if interactive auth is required. Returns an error if
-// the login deadline elapses without reaching Running.
+// the SSO login URL once if interactive auth is required. It polls until the
+// node is Running or ctx is cancelled (SIGTERM); there is no fixed deadline.
+//
+// A fixed deadline was wrong: the proxy is a long-lived daemon, and a human
+// completing SSO out-of-band may take minutes. Giving up would orphan the
+// pending registration on the control plane, and re-arming kept reusing the
+// same persisted nodekey, which the control plane eventually rejects with
+// "could not register machine". Polling until cancelled keeps one live poller
+// behind the printed URL for as long as the container runs.
 func waitUntilRunning(ctx context.Context, ts *tsnet.Server) error {
 	lc, err := ts.LocalClient()
 	if err != nil {
 		return fmt.Errorf("local client: %w", err)
 	}
-	deadline := time.Now().Add(loginDeadline)
 	urlPrinted := false
-	for time.Now().Before(deadline) {
+	for {
 		st, err := lc.StatusWithoutPeers(ctx)
 		if err == nil {
 			if st.BackendState == "Running" {
@@ -154,10 +164,9 @@ func waitUntilRunning(ctx context.Context, ts *tsnet.Server) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(time.Second):
 		}
 	}
-	return fmt.Errorf("timed out after %s waiting for tailnet login", loginDeadline)
 }
 
 // enableRouteAll flips Prefs.RouteAll=true so peer-advertised subnet routes are
