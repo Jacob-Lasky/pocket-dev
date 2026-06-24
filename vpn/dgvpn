@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Run a command with HTTP egress routed through the Deepgram tailnet for
+# tailnet-suffix hosts (.consul by default); all other egress dials directly.
+# This makes `dgvpn` a safe prefix for any command: only internal Deepgram
+# targets take the tunnel.
+#
+#   dgvpn curl http://request-raid.service.awsw2.consul:9008/health
+#   dgvpn gh ...        # public egress, untouched by the tunnel
+#
+# Brings the tunnel up first if needed, which may print a one-time SSO URL
+# (valid ~24h). If login is pending, this exits without running the command so
+# the caller can authenticate and retry.
+set -uo pipefail
+
+PORT="${DGVPN_PROXY_PORT:-1055}"
+
+if [ "$#" -eq 0 ]; then
+  {
+    echo "usage: dgvpn <command> [args...]"
+    echo "  Routes .consul/tailnet HTTP egress through the Deepgram tailnet;"
+    echo "  everything else dials direct. Brings the tunnel up if needed."
+  } >&2
+  exit 2
+fi
+
+dgvpn-up
+rc=$?
+if [ "$rc" -eq 3 ]; then
+  echo "dgvpn: tailnet login required (see URL above). Re-run after authenticating." >&2
+  exit 3
+elif [ "$rc" -ne 0 ]; then
+  echo "dgvpn: could not bring up the tailnet proxy (rc=$rc)." >&2
+  exit "$rc"
+fi
+
+PROXY="http://127.0.0.1:${PORT}"
+# Set both upper- and lower-case forms: curl honors lower-case, many libraries
+# honor upper-case, some honor only one. NO_PROXY is intentionally unset: the
+# proxy itself decides per-host (suffix routing), so a NO_PROXY list here would
+# be a second, drift-prone source of truth for the same decision.
+exec env \
+  HTTP_PROXY="$PROXY" HTTPS_PROXY="$PROXY" ALL_PROXY="$PROXY" \
+  http_proxy="$PROXY" https_proxy="$PROXY" all_proxy="$PROXY" \
+  "$@"

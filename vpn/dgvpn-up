@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Bring up the Deepgram tailnet proxy if it is not already running, and surface
+# the one-time SSO login URL when interactive auth is required. Idempotent: a
+# no-op when the proxy is already accepting connections.
+#
+# Exit codes:
+#   0  proxy ready (HTTP_PROXY can be pointed at it)
+#   3  login pending: the SSO URL was printed; a human must complete it, ~24h
+#   1  startup failed; recent log lines are printed
+#
+# The `dgvpn` wrapper branches on these. Auth is interactive Keycloak SSO, so
+# code 3 is the expected first-run / post-expiry state, not an error.
+set -uo pipefail
+
+PORT="${DGVPN_PROXY_PORT:-1055}"
+DIR="${DGVPN_DIR:-/home/claude/.dgvpn}"
+LOG="${DGVPN_LOG:-/tmp/dgvpn.log}"
+PIDFILE="${DIR}/dgvpn-proxy.pid"
+# Generous default: a cold tsnet resume after a container restart (DERP +
+# netmap re-establish) routinely takes 20-40s. A short window made the first
+# dgvpn call after a deploy spuriously fail while the proxy was still connecting.
+READY_WAIT="${DGVPN_READY_WAIT:-45}"
+
+mkdir -p "$DIR"
+
+# /dev/tcp is a bash feature; the proxy binds 127.0.0.1 only.
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; }
+# True only if the pidfile points at a LIVE dgvpn-proxy. The /proc/comm check
+# guards against PID reuse: kill -0 alone returns true for any process that
+# happens to inherit the recorded PID, which would wrongly suppress a needed
+# restart. kill -0 and /proc are builtin/kernel, so no procps in the slim image.
+running() {
+	[ -f "$PIDFILE" ] || return 1
+	pid="$(cat "$PIDFILE" 2>/dev/null)"
+	[ -n "$pid" ] || return 1
+	kill -0 "$pid" 2>/dev/null || return 1
+	[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "dgvpn-proxy" ]
+}
+
+# Fast path: already accepting connections.
+port_open && exit 0
+
+# Start a detached proxy only if one is not already alive. Two tsnet servers on
+# the same state dir would collide, so the liveness check guards against a
+# double start from back-to-back invocations. nohup (not setsid) so $! is the
+# proxy's own pid and survives this shell exiting.
+if ! running; then
+  : > "$LOG"
+  nohup dgvpn-proxy >>"$LOG" 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+fi
+
+iters=$(( READY_WAIT * 2 ))
+for _ in $(seq 1 "$iters"); do
+  port_open && exit 0
+  # If interactive login is required, surface the URL and stop waiting now:
+  # a human must complete SSO out-of-band, so blocking the rest of the window
+  # buys nothing and just delays the caller. The proxy keeps polling in the
+  # background, so the next dgvpn call connects once SSO is done.
+  if grep -q "ACTION REQUIRED" "$LOG" 2>/dev/null; then
+    {
+      echo ""
+      echo "==> Deepgram tailnet needs a one-time login (valid ~24h):"
+      grep -A1 "ACTION REQUIRED" "$LOG" | tail -n1 | sed 's/^[[:space:]]*/    /'
+      echo "    Open that URL, complete SSO, then re-run your dgvpn command."
+      echo ""
+    } >&2
+    exit 3
+  fi
+  sleep 0.5
+done
+
+echo "dgvpn: proxy did not become ready in ${READY_WAIT}s. Recent log:" >&2
+tail -n 15 "$LOG" >&2
+exit 1
