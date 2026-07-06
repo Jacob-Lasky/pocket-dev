@@ -30,8 +30,7 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   await expect(page).toHaveTitle('pocket-dev');
 
   // Toolbar elements all rendered
-  await expect(page.locator('#mode-live')).toBeVisible();
-  await expect(page.locator('#mode-view')).toBeVisible();
+  await expect(page.locator('#mode-select')).toBeVisible();
   await expect(page.locator('#copy-btn')).toBeVisible();
   await expect(page.locator('#cmd-input')).toBeVisible();
   await expect(page.locator('#send-btn')).toBeVisible();
@@ -43,10 +42,9 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   // setMode landed on window (proves applyMode + initial mode-detect ran).
   await expect.poll(() => page.evaluate(() => typeof window.setMode)).toBe('function');
 
-  // Default mode applied. On a desktop emulation profile this is 'live';
-  // we accept either to keep the spec portable across projects.
+  // Default mode applied. Live is now the sole default on every device.
   const mode = await page.evaluate(() => document.body.dataset.mode);
-  expect(['live', 'view']).toContain(mode);
+  expect(mode).toBe('live');
 
   // Filter expected noise in static mode:
   //   - WebSocket / ws:// — there is no ws server attached.
@@ -66,15 +64,15 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-default.png'), fullPage: true });
 });
 
-test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdStaticServer, page }) => {
+test('toggling to Select renders the overlay pane (empty buffer is OK)', async ({ pdStaticServer, page }) => {
   await gotoTest(page, pdStaticServer);
-  await expect(page.locator('#mode-view')).toBeVisible();
+  await expect(page.locator('#mode-select')).toBeVisible();
 
-  await page.click('#mode-view');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('view');
+  await page.click('#mode-select');
+  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
   await expect(page.locator('#view-pane')).toBeVisible();
 
-  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-view-mode.png'), fullPage: true });
+  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-select-mode.png'), fullPage: true });
 });
 
 // Regression for "View mode wraps =====-style separators horribly on Safari".
@@ -92,13 +90,13 @@ test('toggling to View renders the view pane (empty buffer is OK)', async ({ pdS
 // opportunities — so an unbroken run overflows horizontally. The fix is
 // `overflow-wrap: anywhere`, the spec-stable form. This test asserts the
 // invariant on every browser in the matrix.
-test('View pane wraps an unbroken character run at 360px viewport', async ({ pdStaticServer, browser, browserName }) => {
+test('Select overlay wraps an unbroken character run at 360px viewport', async ({ pdStaticServer, browser, browserName }) => {
   const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
   const page = await ctx.newPage();
   await gotoTest(page, pdStaticServer);
 
-  await page.click('#mode-view');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('view');
+  await page.click('#mode-select');
+  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
 
   // Inject an unbroken 300-char run of '=' directly into the view content.
   // At 360px viewport with the 13px monospace font, that's ~4x the visible

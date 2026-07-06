@@ -28,8 +28,8 @@ test('View reconstructs spaces from a real Claude alt-screen frame', async ({ pd
       { timeout: 8000 })
     .toContain('Quicksafetycheck');
 
-  await page.click('#mode-view');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('view');
+  await page.click('#mode-select');
+  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
 
   // The fix: View shows the words WITH the spaces the CHA codes implied.
   // (Strict line-by-line assertions live in the unit test, which writes the
@@ -74,8 +74,8 @@ test('Copy grabs the visible window as clean text (chromium clipboard)', async (
       { timeout: 8000 })
     .toContain('Quicksafetycheck');
 
-  await page.click('#mode-view');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('view');
+  await page.click('#mode-select');
+  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
   await expect(page.locator('#view-content')).toContainText('Quick safety check', { timeout: 3000 });
 
   await page.click('#copy-btn');

@@ -20,7 +20,7 @@ There are two independent "alternate screen" mechanisms in play. They are NOT th
 
 2. **Inner alt-screen**: applications running INSIDE tmux (Claude Code's TUI, vim, less, htop) using alt-screen for their own full-screen UI.
 
-We **disable the outer** so xterm.js's main buffer accumulates a continuous scrollback that View mode reads by walking `term.buffer.normal` (see `view.js`). We **must NOT disable the inner** — Claude Code renders its prompt input area inside an alt-screen TUI; disabling inner alt-screen breaks input handling entirely (user can't type).
+We **disable the outer** so all output lands in xterm.js's normal buffer (which the Select overlay reads by walking `term.buffer.normal`, see `view.js`; for a plain shell this is continuous scrollback, for a TUI coder it is the current frame — see "Mobile scroll + the Select overlay"). We **must NOT disable the inner** — Claude Code renders its prompt input area inside an alt-screen TUI; disabling inner alt-screen breaks input handling entirely (user can't type).
 
 The `mobile/tmux.conf` knobs:
 
@@ -45,26 +45,28 @@ If you change anything in the buffer / View-render / focus / alt-screen path, st
 - **Server** (`mobile/server.js`): exports `buildTmuxSpawnArgs`, `createApp`, `createSessionsApi`, `TMUX_CONF_PATH`, `SAFE_ID`. Auto-boots only when run directly (`require.main === module`); requiring it for tests does nothing.
   - **`createApp({ sessionsApi })`**: returns an Express app. Session-aware routes (`GET/POST/DELETE /sessions`, plus `/send /key /refresh`) only wire up if `sessionsApi` is passed; the static `render.spec.js` boots `createApp()` with no api on purpose to get an unwired test surface.
   - **`createSessionsApi()`**: stateful factory holding `Map<id, SessionState>`. Each session owns a pty, a 512 KB replay buffer, and the set of connected WebSocket clients. `attachWs(ws, sessionId)` wires an upgraded WS into the matching session and replays buffered bytes.
-  - Endpoints: `GET /sessions` (list), `POST /sessions` (create + return id), `DELETE /sessions/:id` (terminate), `POST /send { session, text }`, `POST /key { session, key }`, `POST /refresh { session }`, `/ws?session=<id>` upgrade. No `/tmux-kill` — replaced by `DELETE /sessions/:id`. No `/history` — View mode replaces it client-side.
+  - Endpoints: `GET /sessions` (list), `POST /sessions` (create + return id), `DELETE /sessions/:id` (terminate), `POST /send { session, text }`, `POST /key { session, key }`, `POST /refresh { session }`, `/ws?session=<id>` upgrade. No `/tmux-kill` — replaced by `DELETE /sessions/:id`. No `/history` — the Select overlay replaces it client-side.
   - `SAFE_ID = /^[A-Za-z0-9._-]+$/` guards every session id that touches shell interpolation (notably `/refresh`, which lists tmux clients via shell pipe).
 - **Client modules** (`mobile/public/js/*.js`, all ESM):
   - `clipboard.js` — `clipboardWrite` strips trailing whitespace, falls back to `document.execCommand('copy')` on HTTP where `navigator.clipboard` is unavailable.
-  - `view.js` — walks the active session's `term.buffer.normal` directly to build View output: `renderTerminalHtml` (colour-preserving styled spans, one `<div class="vrow">` per logical line) and `renderTerminalText` (plain text for copy). `buildPalette` maps xterm colour indices to CSS; `cleanCopyText` normalises copied text; `ViewRenderer` owns only the sticky-bottom scroll + innerHTML swap. NO serialize/ansi_up (see the WHY block at the top of the file).
-  - `mode.js` — `detectDefaultMode` (coarse-pointer → view, fine → live), `applyMode` (sets `body.dataset.mode`, hides inactive pane).
+  - `view.js` — walks the active session's `term.buffer.normal` directly to build the Select-overlay output: `renderTerminalHtml` (colour-preserving styled spans, one `<div class="vrow">` per logical line) and `renderTerminalText` (plain text for copy). `buildPalette` maps xterm colour indices to CSS; `cleanCopyText` normalises copied text; `ViewRenderer` owns only the sticky-bottom scroll + innerHTML swap. NO serialize/ansi_up (see the WHY block at the top of the file).
+  - `mode.js` — `detectDefaultMode` (always `live` now — Live is the sole default on every device), `applyMode` (sets `body.dataset.mode` to `live`/`select`, toggles the Select overlay).
+  - `scroll.js` — mobile Live touch-scroll helpers: `scanMouseState` (fold a WS chunk into `{track,sgr}`), `wheelSequence` (SGR/X10 wheel bytes), `wheelStepsFromDelta` (drag px → whole wheel steps). Pure; the DOM wiring lives in `index.html`'s `installTouchScroll`.
   - `keys.js` — `maybeInterceptCopyKey` for `term.attachCustomKeyEventHandler`. Selection-aware Ctrl+C + always-copy Ctrl+Shift+C.
 - **`index.html`**: monolithic by design. Inline `<script type="module">` with imports; toolbar functions exposed on `window` via `Object.assign` so HTML `onclick` attrs can find them. The `mobile/test/unit/onclick-coverage.test.js` test parses the file and asserts every `onclick="X("` resolves to an exposed name — this catches the "scope-leaked-after-converting-to-module" regression class.
 
-## View mode contract
+## Mobile scroll + the Select overlay — what the buffer actually holds
 
-`refreshViewIfActive` and the copy path read the **active session's `term.buffer.normal`** (the main buffer), via `renderTerminalHtml` / `renderTerminalText` in `view.js`. Reading `.normal` (not `.active`) is the contract: it deliberately excludes the alt buffer.
+**Measured reality (verify before theorising).** With a full-screen TUI coder (Claude Code) running, xterm.js's `buffer.active` IS `buffer.normal` (the outer smcup strip means xterm never enters an alt buffer) and that buffer holds **exactly one screen — zero scrollback**. tmux flattens the coder's inner alt-screen and repaints it in place via cursor addressing, so no history accumulates in ANY browser buffer. The back-and-forth transcript lives *inside the coder* and is reached only by telling the coder to scroll. Confirmed by driving real `claude` through the pipeline and inspecting the buffer (40 rows, `baseY 0`).
 
-- When Claude is in TUI mode (alt-buffer active), View shows the **main buffer scrollback** — i.e., past output from when Claude was between TUI invocations. This is the "read history" use case.
-- The user's TUI is visible in **Live mode**, not View. Switching to View while Claude is mid-response shows static history, not the current TUI frame. That's intended.
-- View is per-session — switching to another tab via `Next / Last` re-renders View against that tab's buffer. There is no cross-session aggregated view.
-- Soft-wrapped rows (`line.isWrapped`) are rejoined into one logical line so the reader reflows to the viewport width, not the host PTY width.
-- Two refresh guards: `refreshViewIfActive` skips the innerHTML rebuild while a text selection is active in the view pane (a rebuild collapses the selection) and flushes on `selectionchange`; the `⟳` button calls `renderViewNow` to force a rebuild regardless.
+Consequences that shape the UI:
 
-If you find yourself wanting to read `.active` (the alt buffer) here, the right move is to add a separate "live snapshot" mode — don't conflate it with the scrollback-reading View mode.
+- **Live is the one primary surface, and it is touch-scrollable** (`scroll.js` + the `installTouchScroll` wiring in `index.html`). A one-finger vertical drag is intercepted capture-phase and routed: if the inner app has mouse tracking on (a TUI coder) it is forwarded as SGR wheel events to the pty (the coder scrolls its own transcript — this is exactly what a desktop mouse-wheel does); if not (a plain shell) it scrolls xterm's real scrollback locally. A per-session `mouse` flag (fed by `scanMouseState` on every WS chunk) picks the branch. `tmux.conf`'s `mouse off` is load-bearing for the forward path (lets the coder's mouse tracking pass through).
+- **The former "View mode" is retired** as a co-equal mode with a mobile default. It could never show the history it implied (there is none in the buffer). What survives is the opt-in **Select overlay** (`toggleSelect`, body `data-mode="select"`): `view.js` renders the active session's `term.buffer.normal` (the current screen) as wrapped, selectable HTML so a user can grab text that a mouse-tracking TUI otherwise steals from touch selection in Live. It is per-session and reflects the current screen, not a transcript.
+- `renderTerminalHtml` / `renderTerminalText` read `.normal` (not `.active`) and reconstruct real spaces from cells (the #12 fix — do NOT reintroduce serialize/ansi_up). Soft-wrapped rows are rejoined so the overlay reflows to the viewport, not the host PTY width.
+- Two refresh guards: `refreshViewIfActive` skips the innerHTML rebuild while a text selection is active in the overlay (a rebuild collapses the selection) and flushes on `selectionchange`; the `⟳` button calls `renderViewNow` to force a rebuild regardless.
+
+Guard tests: `test/unit/scroll.test.js` (mouse-state scan + wheel math), `test/e2e/touch-scroll.spec.js` (drag → wheel forwarded to pty for a mouse-tracking session via `mouse-app.sh`; drag → local xterm scroll + zero wheel bytes for a plain shell). The forward path can't be exercised by the `cat` fixture (no mouse tracking) — same test-gap shape as alt-screen.
 
 ## Deploy
 
@@ -92,5 +94,5 @@ dgvpn gh repo view ...                                            # public egres
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.
-- View renders from the parsed xterm buffer, NOT from a re-serialized ANSI stream. `serialize()` encodes gaps/tabs/never-written cells as cursor-move CSI (`\x1b[NC`, `\x1b[NG`), and any ANSI->HTML converter that only handles SGR (e.g. `ansi_up`) drops those and loses the spaces. This is why `@xterm/addon-serialize` and `ansi_up` were removed. Don't add them back for View.
+- View renders from the parsed xterm buffer, NOT from a re-serialized ANSI stream. `serialize()` encodes gaps/tabs/never-written cells as cursor-move CSI (`\x1b[NC`, `\x1b[NG`), and any ANSI->HTML converter that only handles SGR (e.g. `ansi_up`) drops those and loses the spaces. This is why `@xterm/addon-serialize` and `ansi_up` were removed. Don't add them back for the Select overlay.
 - xterm.js's `copyOnSelect: true` silently no-ops on HTTP (clipboard API requires a secure context). We do explicit `term.onSelectionChange` + `clipboardWrite` (with `execCommand` fallback) instead.

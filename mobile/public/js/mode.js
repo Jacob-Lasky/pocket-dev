@@ -1,27 +1,34 @@
-// pocket-dev mode toggle
-// Picks default ('live' for fine pointer/desktop, 'view' for coarse/mobile)
-// and applies a mode to the DOM. Live pane stays mounted but visibility-hidden
-// in view mode so xterm.js retains its sizing and the WebSocket pipe keeps
-// streaming into the buffer.
+// pocket-dev surface toggle.
+//
+// Live is the ONE primary terminal surface on every device now (it is
+// touch-scrollable on mobile — see scroll.js). The former "View" mode is
+// retired as a co-equal mode: there is no browser-side scrollback for a TUI
+// coder to read (the buffer holds only the current frame — measured), so a
+// separate always-on reading pane could never show the back-and-forth history
+// it implied. What survives is an opt-in "Select" overlay: a selectable,
+// copyable render of the CURRENT screen, for grabbing text that a
+// mouse-tracking TUI otherwise steals from touch selection in Live.
+//
+// Default is always 'live'. We deliberately no longer switch mobile to the
+// overlay on a coarse pointer.
 
-export function detectDefaultMode({ matchMedia = window.matchMedia.bind(window) } = {}) {
-  return matchMedia('(pointer: coarse)').matches ? 'view' : 'live';
+export function detectDefaultMode() {
+  return 'live';
 }
 
-export function applyMode(mode, { body, livePane, viewPane, liveBtn, viewBtn }) {
+export function applyMode(mode, { body, livePane, viewPane, selectBtn }) {
   body.dataset.mode = mode;
-  if (mode === 'live') {
-    livePane.style.display = '';
-    livePane.style.visibility = '';
-    viewPane.style.display = 'none';
-    liveBtn.classList.add('active');
-    viewBtn.classList.remove('active');
-  } else {
-    // view mode: keep live pane mounted but hidden
+  if (mode === 'select') {
+    // Keep the live pane mounted but offscreen so xterm.js stays sized and the
+    // WebSocket keeps streaming into the buffer underneath the overlay.
     livePane.style.display = '';
     livePane.style.visibility = 'hidden';
     viewPane.style.display = '';
-    liveBtn.classList.remove('active');
-    viewBtn.classList.add('active');
+    selectBtn && selectBtn.classList.add('active');
+  } else {
+    livePane.style.display = '';
+    livePane.style.visibility = '';
+    viewPane.style.display = 'none';
+    selectBtn && selectBtn.classList.remove('active');
   }
 }

@@ -46,6 +46,15 @@
       inset: 0;
       visibility: hidden;
       pointer-events: none;
+      /* Opt out of the browser's own touch gestures on the live terminal. The
+         container never scrolls natively (body overflow is hidden), so a
+         vertical drag has no useful default — but on Firefox Android Gecko
+         will otherwise claim the gesture for pull-to-refresh/overscroll and
+         fire touchcancel before our capture-phase scroll handler (scroll.js
+         wiring) can forward it. `none` hands every 1-finger drag to us; our
+         own JS pinch handler still drives 2-finger font zoom. NOT set on
+         #view-pane, which needs native scrolling for the Select overlay. */
+      touch-action: none;
     }
     .terminal-pane.active {
       visibility: visible;
@@ -169,7 +178,7 @@
     #collapse-btn:active  { color: #e6edf3; }
     #collapse-btn.collapsed { transform: rotate(180deg); }
 
-    /* ── View Pane (wrapped reader, scoped to ACTIVE session) ────────────── */
+    /* ── Select overlay (wrapped, selectable render of the current screen) ── */
     #view-pane {
       position: absolute;
       inset: 0;
@@ -182,7 +191,7 @@
       z-index: 5;
     }
 
-    body[data-mode="view"] #view-pane { display: block; }
+    body[data-mode="select"] #view-pane { display: block; }
 
     #view-content {
       margin: 0;
@@ -240,9 +249,8 @@
           <button class="action-btn" onclick="sendKey('escape')" title="Escape">Esc</button>
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
-          <button id="mode-live" class="action-btn mode-btn" onclick="setMode('live')" title="Live terminal">Live</button>
-          <button id="mode-view" class="action-btn mode-btn" onclick="setMode('view')" title="Wrapped reading view">View</button>
-          <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy terminal output">📋</button>
+          <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy the current screen">📋</button>
+          <button id="mode-select" class="action-btn mode-btn" onclick="toggleSelect()" title="Select / copy text from the current screen">Select</button>
           <button id="tmux-btn" class="action-btn tmux-btn" onclick="showTmuxRow()" title="Session switcher">tmux</button>
         </div>
         <!-- Session-switch row (hidden by default) -->
@@ -281,12 +289,17 @@
     import { ViewRenderer, buildPalette, renderTerminalHtml, renderTerminalText, cleanCopyText } from '/js/view.js';
     import { detectDefaultMode, applyMode } from '/js/mode.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
+    import { scanMouseState, wheelSequence, wheelStepsFromDelta } from '/js/scroll.js';
 
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize  = parseInt(localStorage.getItem('pd-font-size')) || 14;
     const savedCollapsed = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
 
     const TEST_MODE = window.location.search.includes('test=1');
+
+    // Shared decoder for binary WS frames (server sends strings, so this is the
+    // rare path) — hoisted so we don't allocate one per message.
+    const wsDecoder = new TextDecoder();
 
     const stackEl     = document.getElementById('terminal-stack');
     const connDot     = document.getElementById('conn-dot');
@@ -403,9 +416,71 @@
         });
         this.term.onScroll(() => { if (activeId === this.id) updateScrollBtn(); });
 
+        // Does the focused inner app want mouse events? A full-screen TUI coder
+        // (Claude) enables mouse tracking and keeps its OWN scrollback, so a
+        // drag must be forwarded to it as wheel events; a plain shell has real
+        // xterm scrollback, so a drag scrolls that locally. scanMouseState
+        // (fed every output chunk) tells the touch handler which case we're in.
+        this.mouse = { track: false, sgr: false };
+        this.installTouchScroll();
+
         this.ws       = null;
         this.wsStatus = 'connecting';
         this.connect();
+      }
+
+      // Send raw bytes straight to the pty (same channel keystrokes use).
+      sendRaw(seq) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(seq);
+      }
+
+      // Translate a one-finger vertical drag into scrolling. The listeners are
+      // capture-phase on the pane so they run BEFORE xterm.js's own touch
+      // handling; when we commit to a scroll we stopPropagation so xterm never
+      // forwards the touch to the coder as stray mouse clicks. Two-finger
+      // gestures pass through untouched (pinch-zoom lives on #terminal-container).
+      installTouchScroll() {
+        let dragging = false, committed = false, lastY = 0, startY = 0, acc = 0;
+        const stepPx = () => Math.max(14, currentFontSize * 1.2); // ~one text row
+        const active = () => activeId === this.id && document.body.dataset.mode !== 'select';
+
+        const onStart = e => {
+          if (!active() || e.touches.length !== 1) { dragging = false; return; }
+          dragging = true; committed = false;
+          startY = lastY = e.touches[0].clientY; acc = 0;
+        };
+        const onMove = e => {
+          if (!dragging) return;
+          if (e.touches.length !== 1) { dragging = false; return; } // yield to pinch
+          const y = e.touches[0].clientY;
+          // Require a small deliberate movement before hijacking, so a tap still
+          // reaches xterm (focus / cursor) instead of being eaten as a scroll.
+          if (!committed && Math.abs(y - startY) < 8) { lastY = y; return; }
+          committed = true;
+          acc += y - lastY;
+          lastY = y;
+          const { steps, dir, rest } = wheelStepsFromDelta(acc, stepPx());
+          acc = rest;
+          if (steps > 0) {
+            if (this.mouse.track) {
+              const col = Math.max(1, Math.ceil(this.term.cols / 2));
+              const row = Math.max(1, Math.ceil(this.term.rows / 2));
+              const seq = wheelSequence(dir, { col, row, sgr: this.mouse.sgr });
+              for (let i = 0; i < steps; i++) this.sendRaw(seq);
+            } else {
+              this.term.scrollLines(dir === 'up' ? -steps : steps);
+            }
+          }
+          // Once committed, this gesture is ours: stop xterm from forwarding it.
+          e.preventDefault();
+          e.stopPropagation();
+        };
+        const onEnd = () => { dragging = false; committed = false; };
+
+        this.pane.addEventListener('touchstart', onStart, { capture: true, passive: true });
+        this.pane.addEventListener('touchmove',  onMove,  { capture: true, passive: false });
+        this.pane.addEventListener('touchend',   onEnd,   { capture: true, passive: true });
+        this.pane.addEventListener('touchcancel', onEnd,  { capture: true, passive: true });
       }
 
       connect() {
@@ -423,7 +498,11 @@
         };
 
         ws.onmessage = e => {
+          const str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
           this.term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+          // Track the inner app's mouse-tracking state so touch scroll knows
+          // whether to forward wheel events to the coder or scroll xterm locally.
+          this.mouse = scanMouseState(str, this.mouse);
           if (activeId === this.id) {
             scheduleViewRefresh();
             const buf = this.term.buffer.active;
@@ -570,8 +649,8 @@
       }
     }
 
-    // ── View mode + copy helpers (scoped to ACTIVE session) ─────────────────
-    // View renders the ACTIVE session's parsed buffer directly (see view.js for
+    // ── Select overlay + copy helpers (scoped to ACTIVE session) ────────────
+    // The overlay renders the ACTIVE session's parsed buffer directly (see view.js for
     // why we don't round-trip through serialize()+ansi_up — it drops spaces).
     const viewPalette  = buildPalette(termTheme());
     const viewRenderer = new ViewRenderer({
@@ -602,7 +681,7 @@
     }
 
     function refreshViewIfActive() {
-      if (document.body.dataset.mode !== 'view') return;
+      if (document.body.dataset.mode !== 'select') return;
       // Don't rebuild the DOM out from under an in-progress text selection — it
       // collapses the highlight. Defer and flush once the selection clears.
       if (viewHasSelection()) { pendingViewRefresh = true; return; }
@@ -623,22 +702,27 @@
     }
 
     const modeRefs = {
-      body:     document.body,
-      livePane: stackEl,
-      viewPane: viewPaneEl,
-      liveBtn:  document.getElementById('mode-live'),
-      viewBtn:  document.getElementById('mode-view'),
+      body:      document.body,
+      livePane:  stackEl,
+      viewPane:  viewPaneEl,
+      selectBtn: document.getElementById('mode-select'),
     };
 
     window.setMode = function(mode) {
       applyMode(mode, modeRefs);
-      if (mode === 'view') refreshViewIfActive();
+      if (mode === 'select') refreshViewIfActive();
       else { const s = sessions.get(activeId); s && s.fitAndResize(); }
     };
 
-    // Copy the VISIBLE View window — the rows currently on screen, not the whole
-    // scrollback. Each rendered line is a .vrow block; we keep the ones whose box
-    // intersects the view pane's viewport, then clean the text (real spaces, no
+    // The Select overlay is a toggle: tap to grab text from the current screen,
+    // tap again to return to the live terminal.
+    window.toggleSelect = function() {
+      setMode(document.body.dataset.mode === 'select' ? 'live' : 'select');
+    };
+
+    // Copy the VISIBLE rows of the Select overlay — the ones currently on
+    // screen. Each rendered line is a .vrow block; we keep the ones whose box
+    // intersects the pane's viewport, then clean the text (real spaces, no
     // escape codes, collapsed blanks). In Live mode there's no rendered reader,
     // so fall back to the live terminal's current screen.
     function visibleViewText() {
@@ -653,7 +737,7 @@
 
     window.copyAllOutput = async function() {
       let text = '';
-      if (document.body.dataset.mode === 'view') {
+      if (document.body.dataset.mode === 'select') {
         if (!viewHasSelection()) renderViewNow(); // make sure visible rows are current
         text = visibleViewText();
       } else {
@@ -861,14 +945,14 @@
 
     // ── Actions ────────────────────────────────────────────────────────────
     // The ⟳ button is the "my display is messed up — fix it" escape hatch.
-    // It repaints whichever pane you're looking at: in View it force-re-renders
+    // It repaints whichever pane you're looking at: in Select it force-re-renders
     // from the current buffer (ignoring the selection guard — an explicit tap
     // means "redraw now"); in Live it re-fits and forces a full xterm redraw to
     // clear a jumbled grid. It also asks the server/tmux to repaint.
     async function refreshTerminal() {
       if (!activeId) return;
       const s = sessions.get(activeId);
-      if (document.body.dataset.mode === 'view') {
+      if (document.body.dataset.mode === 'select') {
         renderViewNow();
       } else if (s) {
         s.fitAndResize();

@@ -1,8 +1,14 @@
-// pocket-dev View mode renderer
+// pocket-dev Select-overlay renderer (formerly "View mode").
 //
-// View mode is the "reading / select / copy" surface. It renders the ACTIVE
-// session's MAIN-buffer scrollback (never the alt buffer — that's the live TUI,
-// shown in Live mode) as wrapped, selectable HTML.
+// Renders the ACTIVE session's NORMAL buffer as wrapped, selectable HTML so a
+// user can grab text that a mouse-tracking TUI otherwise steals from touch
+// selection in Live. NOTE (measured): for a full-screen TUI coder (Claude) the
+// browser's normal buffer holds ONLY the current frame — our tmux.conf strips
+// the outer smcup, so tmux repaints the coder's inner alt-screen in place and
+// no scrollback accumulates here. So this overlay reflects the current screen,
+// not a back-and-forth transcript; the transcript lives inside the coder and is
+// reached by scrolling Live (see scroll.js). For a plain shell (no alt-screen)
+// the normal buffer does accumulate real scrollback, which this renders in full.
 //
 // WHY we walk the buffer directly instead of round-tripping through ANSI:
 // `@xterm/addon-serialize`'s `serialize()` reproduces gap/tab/never-written

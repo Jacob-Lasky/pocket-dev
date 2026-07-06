@@ -1,10 +1,9 @@
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
-test('toolbar shows Live / View / Copy buttons', async ({ pdServer, page }) => {
+test('toolbar shows Copy / Select buttons', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
-  await expect(page.locator('#mode-live')).toBeVisible();
-  await expect(page.locator('#mode-view')).toBeVisible();
   await expect(page.locator('#copy-btn')).toBeVisible();
+  await expect(page.locator('#mode-select')).toBeVisible();
 });
 
 test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pdServer, page }) => {
@@ -13,16 +12,16 @@ test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pd
   await sendAndWaitForEcho(page, 'hello');
 });
 
-test('toggling to View shows current buffer content', async ({ pdServer, page }) => {
+test('toggling to Select shows current buffer content', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'unique-marker-string');
 
-  await page.click('#mode-view');
+  await page.click('#mode-select');
   await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
 });
 
-test('View pane wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
+test('Select overlay wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
   const page = await ctx.newPage();
   await gotoTest(page, pdServer);
@@ -30,7 +29,7 @@ test('View pane wraps long lines on a 360px viewport', async ({ pdServer, browse
 
   const longLine = 'x'.repeat(200);
   await sendAndWaitForEcho(page, longLine);
-  await page.click('#mode-view');
+  await page.click('#mode-select');
 
   // Whitespace-stripped poll: a 200-char line wraps to ~5 rows in xterm.js
   // at this viewport width, so the visible text has line breaks splitting

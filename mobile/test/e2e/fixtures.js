@@ -104,6 +104,29 @@ export const test = base.extend({
     await killTmuxSessionsByPrefix(sessionName);
   },
 
+  // Like pdServer, but SHELL_CMD enables SGR mouse tracking (as Claude does)
+  // then idles. Exercises scroll.js's wheel-forwarding branch: touch-drag on a
+  // mouse-tracking session must send wheel events to the pty, not scroll xterm.
+  pdServerMouseApp: async ({}, use) => {
+    const port = await pickPort();
+    const sessionName = `pdmouse-${port}`;
+    const proc = await spawnReady({
+      scriptPath: path.resolve(__dirname, '../../server.js'),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        SHELL_CMD: `bash ${path.resolve(__dirname, 'mouse-app.sh')}`,
+        TMUX_SESSION: sessionName,
+      },
+      readySubstring: 'pocket-dev on',
+    });
+
+    await use({ port, baseURL: `http://localhost:${port}` });
+
+    await killProcAndWait(proc);
+    await killTmuxSessionsByPrefix(sessionName);
+  },
+
   // Static-serving only (no PTY, no WebSocket, no tmux). The page's WS connection
   // will fail and stay in the disconnected state — that's the contract for tests
   // that only need to verify rendering.
@@ -126,9 +149,9 @@ export const test = base.extend({
 // wait all stay in one place.
 export async function gotoTest(page, server) {
   // Default localStorage state has the toolbar collapsed (max-height: 0), which
-  // makes Live/View/Copy buttons unreachable for clicks (the parent #controls
-  // intercepts pointer events). Expand it before navigation so any test can
-  // click toolbar buttons without per-spec boilerplate.
+  // makes the Copy/Select/tmux buttons unreachable for clicks (the parent
+  // #controls intercepts pointer events). Expand it before navigation so any
+  // test can click toolbar buttons without per-spec boilerplate.
   await page.addInitScript(() => {
     localStorage.setItem('pd-toolbar-collapsed', 'false');
   });
