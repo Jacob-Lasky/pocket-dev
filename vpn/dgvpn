@@ -23,15 +23,9 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-dgvpn-up
-rc=$?
-if [ "$rc" -eq 3 ]; then
-  echo "dgvpn: tailnet login required (see URL above). Re-run after authenticating." >&2
-  exit 3
-elif [ "$rc" -ne 0 ]; then
-  echo "dgvpn: could not bring up the tailnet proxy (rc=$rc)." >&2
-  exit "$rc"
-fi
+# shellcheck source=/dev/null
+source /usr/local/bin/dgvpn-lib.sh
+dgvpn_require_up dgvpn
 
 PROXY="http://127.0.0.1:${PORT}"
 # Set both upper- and lower-case forms: curl honors lower-case, many libraries

@@ -124,17 +124,23 @@ RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
     chmod +x /mobile/start.sh && \
     chown -R claude:users /mobile
 
-# dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
-# as root into /usr/local/bin (on PATH for the claude user). The proxy runs as
-# the unprivileged claude user at runtime: userspace tsnet needs no TUN device
-# and no NET_ADMIN, so this works in the unprivileged container. State persists
-# under /home/claude/.dgvpn so the tailnet registration survives restarts. Kept
-# last (just before USER claude) so iterating on vpn/ does not bust the apt or
-# npm layers above.
+# dgvpn: the static tsnet proxy binary plus the wrapper commands (dgvpn,
+# dgvpn-up for HTTP; dgssh for ssh). Installed as root into /usr/local/bin (on
+# PATH for the claude user). The proxy runs as the unprivileged claude user at
+# runtime: userspace tsnet needs no TUN device and no NET_ADMIN, so this works
+# in the unprivileged container. State persists under /home/claude/.dgvpn so
+# the tailnet registration survives restarts. dgvpn-connect (the ssh
+# ProxyCommand CONNECT client) is a MODE of the same static binary selected by
+# argv0 — symlinked, not a second file — so the ssh path stays dependency-free
+# (no netcat, no python). Kept last (just before USER claude) so iterating on
+# vpn/ does not bust the apt or npm layers above.
 COPY --from=dgvpn-builder /dgvpn-proxy /usr/local/bin/dgvpn-proxy
-COPY vpn/dgvpn vpn/dgvpn-up /usr/local/bin/
-RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
-    chmod +x /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgvpn-proxy && \
+COPY vpn/dgvpn vpn/dgvpn-up vpn/dgssh vpn/dgvpn-lib.sh /usr/local/bin/
+# dgvpn-lib.sh is sourced by dgvpn and dgssh (shared tunnel bring-up), so it is
+# CRLF-stripped but NOT chmod +x — it is not an executable.
+RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgssh /usr/local/bin/dgvpn-lib.sh && \
+    chmod +x /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgssh /usr/local/bin/dgvpn-proxy && \
+    ln -sf dgvpn-proxy /usr/local/bin/dgvpn-connect && \
     mkdir -p /home/claude/.dgvpn && chown claude:users /home/claude/.dgvpn
 # Single source of truth for the proxy port at runtime. The Go binary and both
 # wrapper scripts read DGVPN_PROXY_PORT; their in-code defaults are fallbacks
