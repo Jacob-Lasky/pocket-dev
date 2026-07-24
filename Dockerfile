@@ -100,11 +100,14 @@ chmod 775 /workspace 2>/dev/null || true\n\
 exec "$@"' > /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
-# Add claude shortcut aliases
+# Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
+# to the newest model in its family at launch, by design (Jake wants these to
+# track latest automatically). DO NOT pin them back to claude-opus-X-Y / a dated
+# sonnet id — that freezes the shortcut to an aging model.
 RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
-    && echo 'exec claude --dangerously-skip-permissions --model "claude-opus-4-8[1m]" "$@"' >> /usr/local/bin/cdspo \
+    && echo 'exec claude --dangerously-skip-permissions --model "opus[1m]" "$@"' >> /usr/local/bin/cdspo \
     && echo '#!/bin/bash' > /usr/local/bin/cdsps \
-    && echo 'exec claude --dangerously-skip-permissions --model claude-sonnet-4-6 "$@"' >> /usr/local/bin/cdsps \
+    && echo 'exec claude --dangerously-skip-permissions --model sonnet "$@"' >> /usr/local/bin/cdsps \
     && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps
 
 # Create docker group and user with proper permissions
