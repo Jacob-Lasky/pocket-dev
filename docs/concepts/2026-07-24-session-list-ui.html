@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Interactive concept for issue #21: a chat-app style session list replacing the
+  tmux cycle. Open this file directly in a browser; it has no dependencies and
+  makes no network requests.
+
+  Tap a row. Opening a session marks it read, which demonstrates the one piece
+  of state the transcript cannot supply: "waiting on you" and "read" are the
+  same idle transcript state, and only the user having looked separates them.
+
+  Palette and type are lifted from mobile/public/index.html rather than
+  invented, so this reads as the existing app with one screen added.
+
+  This is a concept, not a spec. The open questions it deliberately does not
+  answer are listed on the page and in the issue.
+-->
+<title>pocket-dev session list concept</title>
+<style>
+  /* ── Page chrome tokens. Theme-aware: the notes around the device follow the
+       viewer. The device SCREEN does not, because pocket-dev is a terminal and
+       has no light mode; a light mockup would misrepresent the product. ── */
+  :root {
+    --page-bg:     #f4f6f8;
+    --page-panel:  #ffffff;
+    --page-ink:    #1b2027;
+    --page-muted:  #5b6672;
+    --page-line:   #dae0e6;
+    --page-accent: #1f6feb;
+
+    /* Device screen: lifted verbatim from mobile/public/index.html */
+    --scr-bg:     #0d1117;
+    --scr-panel:  #161b22;
+    --scr-btn:    #21262d;
+    --scr-line:   #30363d;
+    --scr-ink:    #e6edf3;
+    --scr-muted:  #8b949e;
+    --scr-dim:    #484f58;
+    --scr-blue:   #388bfd;
+    --scr-blue-2: #58a6ff;
+
+    /* Semantic status, from the same palette so the mock matches the app */
+    --st-working: #d29922;
+    --st-waiting: #3fb950;
+    --st-read:    #6e7681;
+
+    --mono: 'SF Mono', SFMono-Regular, Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page-bg:     #0a0c10;
+      --page-panel:  #12161c;
+      --page-ink:    #e6edf3;
+      --page-muted:  #8b949e;
+      --page-line:   #232830;
+      --page-accent: #58a6ff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page-bg: #0a0c10; --page-panel: #12161c; --page-ink: #e6edf3;
+    --page-muted: #8b949e; --page-line: #232830; --page-accent: #58a6ff;
+  }
+  :root[data-theme="light"] {
+    --page-bg: #f4f6f8; --page-panel: #ffffff; --page-ink: #1b2027;
+    --page-muted: #5b6672; --page-line: #dae0e6; --page-accent: #1f6feb;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--page-ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: clamp(24px, 5vw, 56px) clamp(16px, 4vw, 32px) 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  /* ── Header ── */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--page-muted);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(26px, 4.2vw, 38px);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  .lede {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--page-muted);
+    font-size: 16px;
+  }
+  .lede strong { color: var(--page-ink); font-weight: 600; }
+
+  /* ── Stage: device + notes ── */
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+  @media (min-width: 880px) {
+    .stage { grid-template-columns: 360px 1fr; gap: 56px; }
+  }
+
+  .device-col { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+
+  .device {
+    width: 360px;
+    max-width: 100%;
+    height: 720px;
+    background: var(--scr-bg);
+    border: 1px solid var(--scr-line);
+    border-radius: 26px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 18px 44px rgba(0,0,0,.22);
+    display: flex;
+    flex-direction: column;
+    color: var(--scr-ink);
+    font-size: 14px;
+  }
+
+  .device-caption {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--page-muted);
+    text-align: center;
+  }
+
+  /* ── Screens ── */
+  .screen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--scr-bg);
+    transition: transform .18s ease, opacity .18s ease;
+  }
+  .screen[hidden] { display: none; }
+  .screen.terminal { transform: translateX(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .screen { transition: none; }
+  }
+
+  /* ── App bar ── */
+  .appbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 14px 12px;
+    border-bottom: 1px solid var(--scr-line);
+    background: var(--scr-panel);
+  }
+  .appbar h2 {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    color: var(--scr-ink);
+  }
+  .appbar .count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--scr-muted);
+    margin-right: auto;
+  }
+
+  .btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--scr-btn);
+    color: var(--scr-ink);
+    border: 1px solid var(--scr-line);
+    border-radius: 6px;
+    padding: 7px 11px;
+    cursor: pointer;
+    transition: background .1s, border-color .1s, color .1s;
+  }
+  .btn:hover { border-color: var(--scr-blue); color: var(--scr-blue-2); }
+  .btn:focus-visible { outline: 2px solid var(--scr-blue-2); outline-offset: 2px; }
+  .btn.new { color: var(--scr-blue-2); border-color: #2b4c7e; }
+  .btn.kill { color: #ff7b72; border-color: #5a2b2b; }
+
+  /* ── Session list ── */
+  .list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title  meta"
+      "status status"
+      "prev   prev";
+    gap: 3px 12px;
+    width: 100%;
+    text-align: left;
+    padding: 14px 14px 15px;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--scr-line);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .row:hover   { background: #12171f; }
+  .row:active  { background: #151c26; }
+  .row:focus-visible { outline: 2px solid var(--scr-blue-2); outline-offset: -2px; }
+
+  .row .title {
+    grid-area: title;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--scr-muted);
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+  .row .title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Unread is carried by weight and brightness, the way a messaging app does
+     it, plus the dot below. No colored rail. */
+  .row[data-unread="true"] .title { color: var(--scr-ink); font-weight: 650; }
+
+  .row .meta {
+    grid-area: meta;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--scr-dim);
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .unread-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--st-waiting);
+    box-shadow: 0 0 6px rgba(63,185,80,.55);
+    flex: 0 0 auto;
+  }
+  .row[data-unread="false"] .unread-dot { visibility: hidden; }
+
+  .status {
+    grid-area: status;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 2px;
+  }
+  .status .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .status[data-state="working"] { color: var(--st-working); }
+  .status[data-state="working"] .dot {
+    background: var(--st-working);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .status[data-state="waiting"] { color: var(--st-waiting); }
+  .status[data-state="waiting"] .dot { background: var(--st-waiting); }
+  .status[data-state="read"]    { color: var(--st-read); }
+  .status[data-state="read"] .dot { background: var(--st-read); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .35; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status[data-state="working"] .dot { animation: none; }
+  }
+
+  .row .prev {
+    grid-area: prev;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--scr-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 3px;
+  }
+
+  .elapsed { font-variant-numeric: tabular-nums; }
+
+  /* ── Terminal screen ── */
+  .term-body {
+    flex: 1 1 auto;
+    padding: 12px 12px 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--scr-ink);
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  .term-body .muted { color: var(--scr-muted); }
+  .term-body .ok    { color: var(--st-waiting); }
+  .term-body .warn  { color: var(--st-working); }
+  .term-body .bullet { color: var(--scr-blue-2); }
+
+  .toolbar {
+    flex: 0 0 auto;
+    background: var(--scr-panel);
+    border-top: 1px solid var(--scr-line);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .toolbar .btn-row { display: flex; gap: 6px; }
+  .toolbar .btn-row .btn { flex: 1; height: 34px; padding: 0; }
+  .input-row { display: flex; gap: 8px; }
+  .fake-input {
+    flex: 1;
+    height: 38px;
+    background: var(--scr-bg);
+    border: 1px solid var(--scr-line);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 11px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--scr-dim);
+  }
+  .send {
+    height: 38px; width: 46px;
+    background: #238636; border: 1px solid #2ea043;
+    border-radius: 6px; color: #fff; cursor: pointer;
+    font-size: 15px;
+  }
+
+  /* ── Notes column ── */
+  .notes { display: flex; flex-direction: column; gap: 28px; }
+
+  .note h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--page-muted);
+    margin: 0 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--page-line);
+  }
+  .note p { margin: 0 0 12px; max-width: 60ch; }
+  .note p:last-child { margin-bottom: 0; }
+
+  .legend { display: flex; flex-direction: column; gap: 14px; }
+  .legend-item {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+  .legend-item .swatch {
+    width: 10px; height: 10px; border-radius: 50%;
+    margin-top: 7px;
+  }
+  .legend-item .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .legend-item .desc { color: var(--page-muted); font-size: 14px; }
+  .legend-item .src {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--page-muted);
+    opacity: .85;
+  }
+
+  .callout {
+    background: var(--page-panel);
+    border: 1px solid var(--page-line);
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+  .callout p { font-size: 14.5px; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: color-mix(in srgb, var(--page-accent) 10%, transparent);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .gone {
+    color: var(--page-muted);
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--page-muted) 60%, transparent);
+  }
+
+  footer {
+    border-top: 1px solid var(--page-line);
+    padding-top: 20px;
+    color: var(--page-muted);
+    font-size: 13px;
+  }
+  footer a { color: var(--page-accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">pocket-dev &middot; issue #21 &middot; concept</p>
+    <h1>Five sessions, one glance</h1>
+    <p class="lede">
+      Today, finding the session that needs you means <span class="gone">tmux &rarr; Next &rarr; read the screen &rarr; repeat</span>.
+      This replaces that with the thing your phone already does well for five conversations: a list.
+      <strong>Tap a row to try it</strong> &mdash; opening a session marks it read, which is the one piece of state
+      the transcript can't tell you.
+    </p>
+  </header>
+
+  <div class="stage">
+    <div class="device-col">
+      <div class="device">
+
+        <!-- ── Screen 1: the list ── -->
+        <section class="screen list-screen" id="screen-list" aria-label="Session list">
+          <div class="appbar">
+            <h2>pocket-dev</h2>
+            <span class="count" id="count">5 sessions &middot; 2 need you</span>
+            <button class="btn new" type="button" id="btn-new">+ New</button>
+          </div>
+          <ul class="list" id="list"></ul>
+        </section>
+
+        <!-- ── Screen 2: the opened session ── -->
+        <section class="screen terminal" id="screen-term" hidden aria-label="Session terminal">
+          <div class="appbar">
+            <button class="btn" type="button" id="btn-back">&lsaquo; Sessions</button>
+            <span class="count" id="term-title"></span>
+            <button class="btn kill" type="button">Kill</button>
+          </div>
+          <div class="term-body" id="term-body"></div>
+          <div class="toolbar">
+            <div class="btn-row">
+              <button class="btn" type="button">Esc</button>
+              <button class="btn" type="button">Tab</button>
+              <button class="btn" type="button">&crarr;</button>
+              <button class="btn" type="button">Copy</button>
+              <button class="btn" type="button">Select</button>
+            </div>
+            <div class="input-row">
+              <div class="fake-input">Type a message&hellip;</div>
+              <button class="send" type="button" aria-label="Send">&rarr;</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+      <p class="device-caption">360 &times; 720 &middot; the real mobile target</p>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <h3>The three states</h3>
+        <div class="legend">
+          <div class="legend-item">
+            <span class="swatch" style="background:#d29922"></span>
+            <div>
+              <span class="label" style="color:#d29922">Working</span>
+              <div class="desc">Claude is mid-turn, a tool call in flight.</div>
+              <div class="src">transcript &rarr; <code>busy</code></div>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="swatch" style="background:#3fb950"></span>
+            <div>
+              <span class="label" style="color:#3fb950">Waiting on you</span>
+              <div class="desc">It finished, and you haven't looked yet.</div>
+              <div class="src">transcript &rarr; <code>idle</code> + unread</div>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="swatch" style="background:#6e7681"></span>
+            <div>
+              <span class="label" style="color:#6e7681">Read</span>
+              <div class="desc">It finished and you've seen it. Quiet.</div>
+              <div class="src">transcript &rarr; <code>idle</code> + read</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note callout">
+        <h3>Where the state comes from</h3>
+        <p>
+          Two of the three are already built. <code>classifyTranscript</code> from PR #18 reads the transcript tail
+          and returns <code>busy</code> or <code>idle</code>, which is the working-versus-finished split.
+        </p>
+        <p>
+          The catch: <strong>&ldquo;waiting on you&rdquo; and &ldquo;read&rdquo; are the same transcript state.</strong>
+          Nothing in the JSONL knows whether you've looked. That axis is client-side bookkeeping, last-viewed
+          against last-output, layered on top of the two states the server can see.
+        </p>
+      </div>
+
+      <div class="note">
+        <h3>Choices made here</h3>
+        <p>
+          <strong>Rows, not cards.</strong> Full-bleed with hairline rules, like the app's existing toolbar.
+          Cards would add chrome without adding information.
+        </p>
+        <p>
+          <strong>Unread reads as weight, not colour.</strong> A brighter, heavier title plus one dot on the right.
+          The status pill already carries colour; doubling up would make five rows shout at once.
+        </p>
+        <p>
+          <strong>Kill moved inside the session.</strong> Destructive actions don't belong on a list you scan
+          one-handed. It lives next to the thing it destroys.
+        </p>
+        <p>
+          <strong>The title is the conversation's own.</strong> Every row is Claude's <code>aiTitle</code>, the same
+          name the resume picker shows, with the last prompt beneath it (issue #20).
+        </p>
+      </div>
+
+      <div class="note">
+        <h3>Still open</h3>
+        <p>
+          Does the list replace the tab strip or sit beside it? Where does read/unread persist when a phone and a
+          desktop disagree? Does &ldquo;unread&rdquo; mean any output, or only a finished turn? Those are the
+          questions in #21 that this mockup deliberately doesn't answer.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Concept for <a href="https://github.com/Jacob-Lasky/pocket-dev/issues/21">Jacob-Lasky/pocket-dev#21</a>.
+    Palette and type lifted from <code>mobile/public/index.html</code>, so this is the existing app with one
+    screen added, not a redesign.
+  </footer>
+</div>
+
+<script>
+  const SESSIONS = [
+    {
+      id: 'main-1',
+      title: 'Restore sessions across container restarts',
+      prev: 'continue please',
+      state: 'working',
+      unread: false,
+      since: 47,
+      body: [
+        ['muted', '> continue please'],
+        ['', ''],
+        ['bullet', '● Picking back up where the restart cut me off. The roster'],
+        ['', '  restores before listen(), so the browser reconnects into the'],
+        ['', '  same ids on its own.'],
+        ['', ''],
+        ['muted', '  Ran 1 shell command'],
+        ['', ''],
+        ['bullet', '● Tests are green: 187 vitest, 45 playwright. Writing the'],
+        ['', '  manual-verification entry now.'],
+        ['', ''],
+        ['warn', '✻ Crunching… (esc to interrupt)']
+      ]
+    },
+    {
+      id: 'main-2',
+      title: 'Dispatcharr ranked matchups LLM upgrade',
+      prev: 'what would the llm step actually buy us here?',
+      state: 'waiting',
+      unread: true,
+      since: 262,
+      body: [
+        ['muted', '> what would the llm step actually buy us here?'],
+        ['', ''],
+        ['bullet', '● Honestly, not much for the ranking itself. Monte Carlo already'],
+        ['', '  gives you the win probabilities, and an LLM would just be'],
+        ['', '  restating them with less precision.'],
+        ['', ''],
+        ['', '  Where it would earn its place is the blurb: turning'],
+        ['', '  "0.62 / 0.38, both ranked" into a sentence worth reading in'],
+        ['', '  the channel name.'],
+        ['', ''],
+        ['ok', '  Want me to scope it to just the blurb?']
+      ]
+    },
+    {
+      id: 'main-3',
+      title: 'Create pricing calculator skill and repository',
+      prev: 'ship it',
+      state: 'read',
+      unread: false,
+      since: 3720,
+      body: [
+        ['muted', '> ship it'],
+        ['', ''],
+        ['bullet', '● Deployed. The calculator is live on fly.dev and the skill is'],
+        ['', '  registered.'],
+        ['', ''],
+        ['ok', '  Live verification: hit the deployed URL, ran a 500-hour'],
+        ['', '  self-hosted estimate, numbers match the spreadsheet.']
+      ]
+    },
+    {
+      id: 'main-4',
+      title: 'Restructure skills with wrapper hierarchy pattern',
+      prev: 'does the wrapper add anything over just calling the skill directly?',
+      state: 'waiting',
+      unread: true,
+      since: 1340,
+      body: [
+        ['muted', '> does the wrapper add anything over just calling the skill directly?'],
+        ['', ''],
+        ['bullet', '● It adds one thing: the wrapper decides WHICH skill, so the'],
+        ['', '  caller does not have to know the taxonomy.'],
+        ['', ''],
+        ['', '  If you always know which one you want, the wrapper is pure'],
+        ['', '  indirection and I would drop it.'],
+        ['', ''],
+        ['ok', '  Which is it for you in practice?']
+      ]
+    },
+    {
+      id: 'main-5',
+      title: 'MeatballCraft item-pile crash loop',
+      prev: 'that fixed it, thanks',
+      state: 'read',
+      unread: false,
+      since: 11400,
+      body: [
+        ['muted', '> that fixed it, thanks'],
+        ['', ''],
+        ['bullet', '● Good. For next time: the tell is the item-pile entity count'],
+        ['', '  climbing in the log right before the hang.'],
+        ['', ''],
+        ['', '  Stop, start, then kill @e[type=item]. Restart alone does not'],
+        ['', '  clear it.']
+      ]
+    }
+  ];
+
+  const STATE_LABEL = { working: 'Working', waiting: 'Waiting on you', read: 'Read' };
+
+  const listEl  = document.getElementById('list');
+  const countEl = document.getElementById('count');
+  const listScreen = document.getElementById('screen-list');
+  const termScreen = document.getElementById('screen-term');
+  const termTitle  = document.getElementById('term-title');
+  const termBody   = document.getElementById('term-body');
+
+  function ago(seconds) {
+    if (seconds < 60)    return seconds + 's';
+    if (seconds < 3600)  return Math.floor(seconds / 60) + 'm';
+    return Math.floor(seconds / 3600) + 'h';
+  }
+
+  function render() {
+    listEl.replaceChildren();
+    for (const s of SESSIONS) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'row';
+      row.dataset.unread = String(s.unread);
+      row.setAttribute('aria-label',
+        s.title + '. ' + STATE_LABEL[s.state] + '. ' + (s.unread ? 'Unread.' : 'Read.'));
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      const titleText = document.createElement('span');
+      titleText.textContent = s.title;
+      title.appendChild(titleText);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const time = document.createElement('span');
+      time.className = 'elapsed';
+      time.dataset.since = String(s.since);
+      time.textContent = ago(s.since);
+      const dot = document.createElement('span');
+      dot.className = 'unread-dot';
+      meta.append(time, dot);
+
+      const status = document.createElement('div');
+      status.className = 'status';
+      status.dataset.state = s.state;
+      const sdot = document.createElement('span');
+      sdot.className = 'dot';
+      const slabel = document.createElement('span');
+      slabel.textContent = STATE_LABEL[s.state];
+      status.append(sdot, slabel);
+
+      const prev = document.createElement('div');
+      prev.className = 'prev';
+      prev.textContent = s.prev;
+
+      row.append(title, meta, status, prev);
+      row.addEventListener('click', () => open(s.id));
+      listEl.appendChild(row);
+    }
+
+    const needy = SESSIONS.filter(s => s.unread || s.state === 'working').length;
+    countEl.textContent = SESSIONS.length + ' sessions'
+      + (needy ? ' · ' + needy + ' need you' : ' · all quiet');
+  }
+
+  function open(id) {
+    const s = SESSIONS.find(x => x.id === id);
+    if (!s) return;
+
+    // Opening a session is what marks it read. A finished session you have
+    // looked at is not the same as one still holding a question for you, and
+    // this is the only place that difference is ever established.
+    if (s.unread) {
+      s.unread = false;
+      if (s.state === 'waiting') s.state = 'read';
+    }
+
+    termTitle.textContent = s.title;
+    termBody.replaceChildren();
+    for (const [cls, text] of s.body) {
+      const line = document.createElement('div');
+      if (cls) line.className = cls;
+      line.textContent = text || ' ';
+      termBody.appendChild(line);
+    }
+
+    listScreen.hidden = true;
+    termScreen.hidden = false;
+    document.getElementById('btn-back').focus();
+    render();
+  }
+
+  document.getElementById('btn-back').addEventListener('click', () => {
+    termScreen.hidden = true;
+    listScreen.hidden = false;
+  });
+
+  document.getElementById('btn-new').addEventListener('click', () => {
+    SESSIONS.push({
+      id: 'main-' + (SESSIONS.length + 1),
+      title: 'New session',
+      prev: 'no messages yet',
+      state: 'read',
+      unread: false,
+      since: 0,
+      body: [['muted', '┃ Welcome to Claude Code'], ['', ''], ['muted', '> ']]
+    });
+    render();
+    listEl.lastElementChild.scrollIntoView({ block: 'nearest' });
+  });
+
+  // The working session's clock ticks, so "Working" reads as live rather than
+  // as a label somebody forgot to clear.
+  setInterval(() => {
+    for (const s of SESSIONS) s.since += 1;
+    for (const el of listEl.querySelectorAll('.elapsed')) {
+      el.textContent = ago(Number(el.dataset.since) + 1);
+      el.dataset.since = String(Number(el.dataset.since) + 1);
+    }
+  }, 1000);
+
+  render();
+</script>
+</body>
+</html>
