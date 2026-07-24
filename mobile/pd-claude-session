@@ -1,0 +1,92 @@
+#!/bin/bash
+# pd-claude-session — run Claude in pocket-dev's restart loop bound to a STABLE
+# conversation id, so that a container restart resumes the conversation the user
+# was having instead of dropping them into a blank one.
+#
+#   usage: pd-claude-session <claude-cmd> [args...]
+#   env:   PD_SID_FILE      file where this tab's Claude uuid is recorded. Set
+#                           per tmux session by server.js (`new-session -e`).
+#                           Optional: with no state dir we run without resume.
+#          PD_RESUME_PROMPT if set, handed to Claude as its first message when
+#                           (and only when) we actually resume. server.js sets
+#                           it only for a session it saw was mid-turn.
+#          PD_CLAUDE_PROJECTS_DIR
+#                           where Claude keeps transcripts. Passed in by
+#                           server.js so both sides agree; falls back to the
+#                           default location when run by hand.
+#
+# Contract with server.js — all three points are load-bearing:
+#
+#   1. WE own PD_SID_FILE. This script writes the uuid; the server only reads it
+#      (to ask whether the dead session was mid-turn) and deletes it when the
+#      tab is killed. Do not have the server write it — the uuid can change on
+#      any loop iteration here, and the server is not watching.
+#
+#   2. The FIRST loop iteration resumes; later ones never do. That distinction
+#      is the entire design. Iteration 1 happens because pocket-dev (re)spawned
+#      this tab, which is the crash/restart case the user wants continued.
+#      Iteration 2+ happens because Claude EXITED — the user typed /exit or hit
+#      Ctrl-D — and there the expected behaviour is a clean slate, not the same
+#      conversation reopening forever with no way out of it. DO NOT "simplify"
+#      this to resuming unconditionally.
+#
+#   3. A resume is attempted only when the transcript for the recorded uuid is
+#      actually on disk. `claude --resume` on an unknown id just errors, and the
+#      loop would spin on it once a second forever. If it errors anyway, the
+#      loop self-heals: the next iteration is no longer the first, so it starts
+#      a clean session instead of retrying the resume.
+#
+# The resume prompt is passed on the COMMAND LINE, never typed into the
+# terminal. Measured against the real thing: a resuming Claude paints, pauses
+# while it initialises, then repaints, and text typed into that gap is swallowed
+# with no error. As an argument it is Claude's own first message, so it cannot
+# be lost, and it survives the workspace-trust gate.
+set -u
+
+sid_file="${PD_SID_FILE:-}"
+resume_prompt="${PD_RESUME_PROMPT:-}"
+projects_dir="${PD_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+
+transcript_exists() {
+  # Claude derives the project directory name from the cwd by replacing every
+  # non-alphanumeric character (/home/claude -> -home-claude). That is an
+  # internal detail we deliberately do NOT reimplement: search for the file
+  # instead, so a changed cwd or a tweak to that rule cannot silently turn every
+  # restart into a blank conversation.
+  [ -n "${1:-}" ] || return 1
+  [ -d "$projects_dir" ] || return 1
+  [ -n "$(find "$projects_dir" -maxdepth 2 -name "$1.jsonl" -print -quit 2>/dev/null)" ]
+}
+
+new_uuid() {
+  # util-linux's uuidgen is not in the image; /proc always is on Linux.
+  cat /proc/sys/kernel/random/uuid
+}
+
+first=1
+while true; do
+  sid=""
+  if [ -n "$sid_file" ] && [ -r "$sid_file" ]; then
+    sid="$(cat "$sid_file" 2>/dev/null | tr -d '[:space:]')"
+  fi
+
+  if [ "$first" = 1 ] && transcript_exists "$sid"; then
+    if [ -n "$resume_prompt" ]; then
+      "$@" --resume "$sid" "$resume_prompt"
+    else
+      "$@" --resume "$sid"
+    fi
+  else
+    sid="$(new_uuid)"
+    if [ -n "$sid_file" ]; then
+      mkdir -p "$(dirname "$sid_file")" 2>/dev/null || true
+      printf '%s\n' "$sid" > "$sid_file" 2>/dev/null || true
+    fi
+    "$@" --session-id "$sid"
+  fi
+
+  first=0
+  echo
+  echo restarting...
+  sleep 1
+done

@@ -20,11 +20,23 @@ services:
       - ./workspace:/workspace
       - ./config:/home/claude/.claude
 
-      # Docker socket — read-only for safety in local dev.
-      # Permits `docker ps` / `docker logs` / `docker inspect` from inside the
-      # container, but NOT `docker restart` / `stop` / `run` (those require rw).
-      # The UnRAID template (pocket-dev.xml) ships the same mode; flip to rw if
-      # you specifically need to manage other containers from this one.
+      # Open sessions + each tab's Claude conversation id. Without this the
+      # roster lives in the writable layer, so `docker compose up --build`
+      # (a recreate) loses your tabs; with it they come back and resume.
+      - ./state:/home/claude/.pocket-dev
+
+      # Auth and self-installed tooling that must outlive a recreate. NOTE the
+      # gh mount is .config/gh specifically, and tools go to /opt/pd: do NOT
+      # mount /home/claude/.local, which would mask the claude and uv binaries
+      # baked into the image.
+      - ./gh:/home/claude/.config/gh
+      - ./tools:/opt/pd
+
+      # Docker socket. WARNING: :ro does NOT make the Docker API read-only. It
+      # marks the socket file read-only and nothing else — the daemon still
+      # honours run / stop / rm over it, so this mount is effectively host root
+      # for anything in the container. Drop it, or front it with a filtered
+      # docker-socket-proxy, if that is not what you want.
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
     ports:

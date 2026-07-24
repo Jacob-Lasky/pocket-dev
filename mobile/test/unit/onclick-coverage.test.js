@@ -53,3 +53,21 @@ describe('HTML inline onclick handlers', () => {
     expect(missing, `Functions referenced in HTML onclick but not exposed on window: ${missing.join(', ')}`).toEqual([]);
   });
 });
+
+describe('WebSocket reconnect', () => {
+  it('resets the terminal on every WS open', () => {
+    // The server replays its whole buffer on EVERY attach. Without the reset a
+    // reconnect stacks a second copy of the scrollback on top of the first, and
+    // a post-restart reattach paints a fresh Claude frame over the stale one.
+    // There is no seam to unit-test this through, so guard the source (same
+    // approach as tmuxConf.test.js).
+    const onopen = indexHtml.slice(indexHtml.indexOf('ws.onopen'), indexHtml.indexOf('ws.onmessage'));
+    expect(onopen).toContain('this.term.reset()');
+  });
+
+  it('resyncs instead of giving up when the server does not know a session', () => {
+    const onclose = indexHtml.slice(indexHtml.indexOf('ws.onclose'), indexHtml.indexOf('ws.onerror'));
+    expect(onclose).toContain('4404');
+    expect(onclose).toContain('scheduleResync()');
+  });
+});

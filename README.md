@@ -37,7 +37,25 @@ docker compose up -d --build
 | `/mnt/user/appdata/claude-code/workspace` | `/workspace` | Claude's working directory; persists files between container recreates |
 | `/mnt/user/appdata/claude-code/config` | `/home/claude/.claude` | Claude config + auth state |
 | `/mnt/user/appdata/claude-code/claude.json` | `/home/claude/.claude.json` | MCP server configs + Claude settings (file-level mount) |
-| `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Inspect-only access to the host's docker daemon. Read `docker ps`, `docker logs`, `docker inspect` — **not** restart / stop / run (those need `:rw`) |
+| `/mnt/user/appdata/claude-code/pocket-dev` | `/home/claude/.pocket-dev` | Open sessions + each tab's Claude conversation id, so a restart or image update restores your tabs instead of dropping them |
+| `/mnt/user/appdata/claude-code/gh` | `/home/claude/.config/gh` | `gh auth login` token; without it the token dies with every image update |
+| `/mnt/user/appdata/claude-code/tools` | `/opt/pd` | Writable, on-`PATH` prefix for CLIs a session installs for itself. Use this instead of mounting `/home/claude/.local`, which would mask the `claude` and `uv` binaries baked into the image |
+| `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Access to the host's docker daemon. **`:ro` does not make the API read-only** — it only marks the socket file read-only, and the daemon still honours `run` / `stop` / `rm`. Treat this mount as host root, and drop it or front it with a filtered `docker-socket-proxy` if that is not what you want |
+
+## Sessions survive a restart
+
+Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
+
+Each tab is also bound to a stable Claude conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was mid-turn when the container went down, the resumed session is asked `continue please` and carries on; if Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
+
+| Env var | Default | What it does |
+|---|---|---|
+| `PD_STATE_DIR` | `/home/claude/.pocket-dev` | Where the roster and per-tab conversation ids live |
+| `PD_RESUME` | on | `0` disables conversation resume; the tab roster still restores |
+| `PD_RESUME_NUDGE` | `continue please` | What an interrupted session is asked when it comes back |
+| `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
+
+Resume applies only when pocket-dev owns the command line; setting `SHELL_CMD` turns it off, since an arbitrary command has no conversation to resume.
 
 ## Tests
 
@@ -57,8 +75,8 @@ WebKit is in the matrix because mobile Safari's CSS engine has historically inte
 - Base: `node:20-slim` (Debian Bookworm)
 - Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit`
 - View renderer: in-house buffer walk in `mobile/public/js/view.js` (reads xterm's parsed buffer → colour-preserving wrapped HTML; no ANSI round-trip)
-- Session persistence: `tmux`
-- Architectures: `linux/amd64` + `linux/arm64`
+- Session persistence: `tmux`, plus an on-disk roster + per-tab Claude conversation id under `PD_STATE_DIR` so sessions outlive the container
+- Architectures: `linux/amd64` (pocket-dev runs only on an amd64 host; building arm64 under QEMU roughly doubled CI time for a target nothing runs)
 - Container user: `claude` (uid 99, gid 100; matches UnRAID's `nobody:users`)
 
 ## License

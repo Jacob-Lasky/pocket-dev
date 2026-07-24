@@ -490,6 +490,14 @@
         this.setStatus('connecting');
 
         ws.onopen = () => {
+          // The server replays its whole buffer on EVERY attach, so the
+          // terminal has to start empty or a reconnect stacks a second copy of
+          // the scrollback on top of the first. Resetting here (onopen always
+          // runs before any onmessage) makes the pane a faithful function of
+          // the server's buffer, which is also what makes a post-restart
+          // reattach repaint cleanly instead of painting a fresh Claude frame
+          // over the pre-restart one.
+          this.term.reset();
           this.setStatus('connected');
           if (activeId === this.id) {
             this.fitAndResize();
@@ -513,10 +521,16 @@
         ws.onclose = (ev) => {
           this.setStatus('disconnected');
           if (activeId === this.id) releaseWakeLock();
-          // Server closes with 4404 when the session has been destroyed; don't reconnect.
-          if (ev.code === 4404) return;
-          // Otherwise it's a transient network hiccup — try again.
           if (!sessions.has(this.id)) return;
+          // 4404 means the server does not know this id. Reconnecting can never
+          // fix that, but the roster may simply have moved on without us (the
+          // container was recreated and lost its state, or another tab killed
+          // this session), so ask the server what it actually has instead of
+          // leaving a dead pane on screen forever.
+          if (ev.code === 4404) { scheduleResync(); return; }
+          // Otherwise it's a transient hiccup — a network blip, or the server
+          // being down for a restart. Keep retrying; when it comes back it will
+          // have restored these same ids and this reconnects straight into them.
           setTimeout(() => { if (sessions.has(this.id)) this.connect(); }, 2000);
         };
 
@@ -563,6 +577,10 @@
       const active = sessions.get(id);
       applyConnStatusToDot(active.wsStatus);
       updateSessionLabel();
+      // Single place that points window.term at the ACTIVE session's xterm, so
+      // e2e tests reaching into the buffer always get the pane on screen —
+      // including after a resync swaps the session set out from under them.
+      if (TEST_MODE) window.term = active.term;
       // Hidden panes don't render; the newly-visible one needs a fit.
       requestAnimationFrame(() => {
         active.fitAndResize();
@@ -582,10 +600,6 @@
       const s = new SessionState(id);
       sessions.set(id, s);
       order.push(id);
-      if (TEST_MODE) {
-        // Expose the active term on window.term for e2e tests that reach into xterm.js.
-        window.term = s.term;
-      }
       return s;
     }
 
@@ -619,8 +633,6 @@
       const { id } = await r.json();
       const s = addSession(id);
       setActive(id);
-      // Update window.term for e2e tests now that this is active.
-      if (TEST_MODE) window.term = s.term;
       return s;
     }
 
@@ -630,6 +642,55 @@
       } catch (e) { console.error('delete session', e); }
       removeSession(id);
     }
+
+    // ── Resync ──────────────────────────────────────────────────────────────
+    // Reconcile the panes on screen with the sessions the server actually has.
+    // This is the recovery path for an outage the tab slept through: the
+    // container restarts, the server restores its roster, and we adopt whatever
+    // it came back with — same ids (the normal case, so the existing panes just
+    // reconnect), different ids (state was lost in a recreate), or none at all.
+    let resyncTimer   = null;
+    let resyncRunning = false;
+
+    function scheduleResync() {
+      if (resyncTimer) return;
+      // Several sessions typically fail at once; collapse them into one pass.
+      resyncTimer = setTimeout(() => { resyncTimer = null; resyncSessions(); }, 250);
+    }
+
+    async function resyncSessions() {
+      if (resyncRunning) return;
+      resyncRunning = true;
+      try {
+        let list;
+        try {
+          list = await listSessions();
+        } catch (e) {
+          // Server still unreachable. The per-session reconnect timers keep
+          // trying, and each 4404 reschedules us, so there is nothing to do.
+          return;
+        }
+        const serverIds = new Set(list.map(s => s.id));
+        // Adopt first, drop second: removeSession picks a fallback to make
+        // active, and it should have the new panes to choose from.
+        for (const { id } of list) if (!sessions.has(id)) addSession(id);
+        for (const id of [...sessions.keys()]) if (!serverIds.has(id)) removeSession(id);
+        if (!sessions.size) {
+          try { await createSession(); } catch (e) { console.warn('resync createSession failed', e); }
+          return;
+        }
+        if (!activeId || !sessions.has(activeId)) setActive(order[0]);
+        updateSessionLabel();
+      } finally {
+        resyncRunning = false;
+      }
+    }
+
+    // Coming back to a backgrounded tab is exactly when a restart is most
+    // likely to have happened without us noticing.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleResync();
+    });
 
     // ── Bootstrap ───────────────────────────────────────────────────────────
     async function bootstrap() {
@@ -643,9 +704,10 @@
         try { await createSession(); }
         catch (e) { console.warn('createSession failed', e); }
       } else {
+        // Sessions already exist: either another browser is attached, or the
+        // server restored them after a restart. Adopt them all.
         for (const { id } of list) addSession(id);
         setActive(list[0].id);
-        if (TEST_MODE) window.term = sessions.get(list[0].id).term;
       }
     }
 
