@@ -26,6 +26,11 @@ const { SAFE_ID, UUID_RE } = require('./safeId');
 
 const ROSTER_VERSION = 1;
 
+// Marker file proving the previous process shut down on purpose. See
+// markCleanShutdown/consumeCleanShutdown below for why it decides whether a
+// restored session is allowed to carry on by itself.
+const CLEAN_MARKER = 'clean-shutdown';
+
 // A store that persists nothing: the default for createSessionsApi so unit
 // tests and any other embedder get zero filesystem side effects unless they
 // ask for them. startServer() is the one caller that wires up a real store.
@@ -37,6 +42,8 @@ const nullSessionStore = {
   clearSid: () => {},
   load:     () => [],
   save:     () => {},
+  markCleanShutdown:    () => {},
+  consumeCleanShutdown: () => false,
 };
 
 function createSessionStore({ dir, logger = console } = {}) {
@@ -141,7 +148,50 @@ function createSessionStore({ dir, logger = console } = {}) {
     }
   }
 
-  return { dir, file, sidPath, readSid, clearSid, load, save };
+  // Did the previous process exit on purpose?
+  //
+  // This gates whether a restored session is allowed to continue its work by
+  // itself, and the distinction is a safety one, not a nicety. A deliberate
+  // `docker restart` or image update is a fine reason to pick up where Claude
+  // left off. A container that DIED is not: the most likely reason it died is
+  // the work itself, an out-of-memory build being the classic, and telling
+  // Claude "continue please" there is telling it to do the thing that killed
+  // the box a second time.
+  //
+  // The mechanism is deliberately one-directional. We only ever write the
+  // marker from a signal handler on the way out, so the presence of the file
+  // means "we chose to stop"; its absence covers every way a process can die
+  // without getting a say (SIGKILL, an OOM kill, the host losing power). That
+  // makes unclean the DEFAULT — the conservative branch is the one you get when
+  // you know nothing, which is the only safe way round for this decision.
+  //
+  // Note what this does and does not tell you: it distinguishes clean from
+  // unclean deterministically. It does NOT identify why an unclean exit
+  // happened; nothing readable from inside the restarted container survives to
+  // say whether it was an OOM kill or a power cut.
+  function markCleanShutdown() {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, CLEAN_MARKER), new Date().toISOString());
+    } catch { /* a missed marker just means the next boot is cautious */ }
+  }
+
+  // Read the marker and immediately clear it, so it can only ever vouch for the
+  // shutdown that wrote it. Leaving it in place would let one clean stop excuse
+  // every crash that followed.
+  function consumeCleanShutdown() {
+    const marker = path.join(dir, CLEAN_MARKER);
+    let clean = false;
+    try {
+      clean = fs.existsSync(marker);
+    } catch {
+      return false;
+    }
+    try { fs.rmSync(marker, { force: true }); } catch { /* best effort */ }
+    return clean;
+  }
+
+  return { dir, file, sidPath, readSid, clearSid, load, save, markCleanShutdown, consumeCleanShutdown };
 }
 
 module.exports = { createSessionStore, nullSessionStore, ROSTER_VERSION };

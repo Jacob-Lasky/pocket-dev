@@ -139,14 +139,61 @@ describe('per-session Claude uuid handoff', () => {
   });
 });
 
+describe('clean-shutdown marker', () => {
+  it('reports unclean when there is no marker — the safe default', () => {
+    // Every way a process dies without a say (SIGKILL, OOM kill, power cut)
+    // lands here, so this branch must be the one you get by knowing nothing.
+    expect(createSessionStore({ dir }).consumeCleanShutdown()).toBe(false);
+  });
+
+  it('reports clean after a deliberate shutdown marked it', () => {
+    const store = createSessionStore({ dir });
+    store.markCleanShutdown();
+    expect(createSessionStore({ dir }).consumeCleanShutdown()).toBe(true);
+  });
+
+  it('vouches for exactly one shutdown', () => {
+    // Regression guard: if the marker survived being read, a single clean stop
+    // would excuse every crash after it and Claude would auto-continue work
+    // that may have killed the container.
+    const store = createSessionStore({ dir });
+    store.markCleanShutdown();
+    expect(store.consumeCleanShutdown()).toBe(true);
+    expect(store.consumeCleanShutdown()).toBe(false);
+  });
+
+  it('creates the state dir when marking', () => {
+    const nested = path.join(dir, 'not', 'there', 'yet');
+    createSessionStore({ dir: nested }).markCleanShutdown();
+    expect(createSessionStore({ dir: nested }).consumeCleanShutdown()).toBe(true);
+  });
+
+  it('stays unclean, rather than throwing, when the marker cannot be written', () => {
+    const store = createSessionStore({ dir, logger: quietLogger });
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('EROFS'); });
+    expect(() => store.markCleanShutdown()).not.toThrow();
+    spy.mockRestore();
+    expect(store.consumeCleanShutdown()).toBe(false);
+  });
+
+  it('does not confuse the roster with the marker', () => {
+    const store = createSessionStore({ dir });
+    store.save([{ id: 'main-1' }]);
+    expect(store.consumeCleanShutdown()).toBe(false);
+    expect(store.load()).toEqual([{ id: 'main-1' }]);
+  });
+});
+
 describe('nullSessionStore', () => {
   it('is inert, so an embedder gets no filesystem side effects by default', () => {
     expect(nullSessionStore.load()).toEqual([]);
     expect(nullSessionStore.sidPath('main-1')).toBeNull();
     expect(nullSessionStore.readSid('main-1')).toBeNull();
+    expect(nullSessionStore.consumeCleanShutdown()).toBe(false);
     expect(() => {
       nullSessionStore.save([{ id: 'main-1' }]);
       nullSessionStore.clearSid('main-1');
+      nullSessionStore.markCleanShutdown();
     }).not.toThrow();
   });
 });

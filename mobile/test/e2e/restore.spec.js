@@ -17,6 +17,8 @@
 // and test/server/sessionsRestore.test.js, since `cat` has no conversation.
 
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
 async function sessionIds(page) {
@@ -122,6 +124,34 @@ test('when only the server process restarts, sessions reattach with their scroll
   // not reset on WS open ends up showing the reattached screen stacked on top
   // of what it already had.
   expect(await markerCount(page)).toBe(before);
+});
+
+test('tabs come back after a hard kill, and the shutdown marker tells the two apart', async ({ pdServer, page }) => {
+  // The marker is what stops a crashed session being told "continue please",
+  // which would mean redoing whatever killed the container. Here it is checked
+  // against real signals rather than a stubbed store.
+  const marker = path.join(pdServer.stateDir, 'clean-shutdown');
+
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await newSession(page);
+  await waitForConnection(page);
+  const before = await sessionIds(page);
+  expect(before).toHaveLength(2);
+
+  // SIGKILL: the container dying. No handler runs, so no marker is left.
+  await pdServer.restart({ killTmux: true, signal: 'SIGKILL' });
+  expect(existsSync(marker)).toBe(false);
+  await expect.poll(() => sessionIds(page), { timeout: 20000 }).toEqual(before);
+  await waitForConnection(page);
+
+  // SIGTERM: a deliberate stop. The marker is written, then consumed by the
+  // next boot so it can only ever vouch for that one shutdown.
+  await pdServer.restart({ killTmux: true });
+  expect(existsSync(marker)).toBe(false);
+  await expect.poll(() => sessionIds(page), { timeout: 20000 }).toEqual(before);
+  await waitForConnection(page);
+  await sendAndWaitForEcho(page, 'alive-after-both-restarts-ECHO');
 });
 
 test('a killed session stays killed across a restart', async ({ pdServer, page }) => {

@@ -180,7 +180,7 @@ describe('resuming an interrupted conversation', () => {
   // typing into a resuming TUI loses a race that has no ready signal to wait
   // for (see the comment on RESUME_PROMPT in server.js). So what a restore has
   // to get right is the ENV it hands pd-claude-session.
-  function restoreWith(records) {
+  function restoreWith(records, { autoContinue = true } = {}) {
     const first = makeApi();
     const state = first.api.create();
     const store = createSessionStore({ dir, logger });
@@ -189,7 +189,7 @@ describe('resuming an interrupted conversation', () => {
     if (records) writeTranscript(UUID, records);
 
     const second = makeApi();
-    second.api.restore();
+    second.api.restore({ autoContinue });
     return spawned[spawned.length - 1];
   }
 
@@ -224,6 +224,42 @@ describe('resuming an interrupted conversation', () => {
     // conversation to resume, so a prompt on its own would open a blank one.
     const spawn = restoreWith(BUSY);
     expect(spawn.env.PD_SID_FILE).toMatch(/main-1\.uuid$/);
+  });
+
+  it('warns instead of continuing when the shutdown was NOT clean', () => {
+    // The container died rather than being restarted on purpose, and the
+    // likeliest cause of that is the work itself. Resuming is fine; telling it
+    // to carry on means repeating whatever killed the box.
+    const prompt = restoreWith(BUSY, { autoContinue: false }).env.PD_RESUME_PROMPT;
+    expect(prompt).toContain('unexpected shutdown');
+    expect(prompt).toMatch(/do NOT simply retry/i);
+    expect(prompt).not.toBe('continue please');
+  });
+
+  it('still resumes the conversation after an unclean shutdown', () => {
+    // Only the continuing is gated. Throwing away the context would be its own
+    // kind of damage.
+    const spawn = restoreWith(BUSY, { autoContinue: false });
+    expect(spawn.env.PD_SID_FILE).toMatch(/main-1\.uuid$/);
+  });
+
+  it('says nothing to an idle session however it went down', () => {
+    expect(restoreWith(IDLE, { autoContinue: false }).env).not.toHaveProperty('PD_RESUME_PROMPT');
+  });
+
+  it('defaults to the cautious branch when the caller says nothing', () => {
+    // restore() with no argument must not auto-continue: an unclean exit is the
+    // case where the caller has no marker to hand us.
+    const first = makeApi();
+    const state = first.api.create();
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, BUSY);
+
+    const second = makeApi();
+    second.api.restore();
+    expect(spawned[spawned.length - 1].env.PD_RESUME_PROMPT).not.toBe('continue please');
   });
 
   it('puts the prompt somewhere tmux will actually deliver it', () => {

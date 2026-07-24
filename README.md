@@ -46,13 +46,21 @@ docker compose up -d --build
 
 Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
 
-Each tab is also bound to a stable Claude conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was mid-turn when the container went down, the resumed session is asked `continue please` and carries on; if Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
+Each tab is also bound to a stable Claude conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
+
+If Claude was mid-task, what happens next depends on **how** the container went down:
+
+- **You restarted it** (`docker restart`, a stop, an image update): the session is asked `continue please` and picks the work back up.
+- **It died** (OOM kill, hard kill, power loss): the session is restored and the conversation resumed, but it is **not** told to continue. It is warned that the shutdown was unexpected and asked to check whether its own work caused it before retrying. A Claude session can take a host down by building something the wrong way, and auto-continuing there just does it again.
+
+The difference is a `clean-shutdown` marker written by the server's signal handler on the way out, so an exit that never got a say can never look deliberate.
 
 | Env var | Default | What it does |
 |---|---|---|
 | `PD_STATE_DIR` | `/home/claude/.pocket-dev` | Where the roster and per-tab conversation ids live |
 | `PD_RESUME` | on | `0` disables conversation resume; the tab roster still restores |
-| `PD_RESUME_NUDGE` | `continue please` | What an interrupted session is asked when it comes back |
+| `PD_RESUME_NUDGE` | `continue please` | What an interrupted session is asked after a deliberate restart. Empty string sends nothing |
+| `PD_CRASH_NUDGE` | a warning, see above | What it is told instead after an unexpected shutdown. Empty string sends nothing |
 | `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
 
 Resume applies only when pocket-dev owns the command line; setting `SHELL_CMD` turns it off, since an arbitrary command has no conversation to resume.

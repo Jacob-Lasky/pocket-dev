@@ -40,6 +40,7 @@ General:
 - [ ] The tab that was mid-work resumes its conversation and picks the work back up on its own, having been asked "continue please" exactly once (it arrives as Claude's first message, not as keystrokes — check the transcript shows one such user turn, not two).
 - [ ] The tab that was waiting on you resumes its conversation and just sits there. Nothing is typed into it.
 - [ ] No tab comes back sitting on "Quick safety check: is this a project you trust?" — pd-trust-workspace clears that at boot. If one does, restore still worked but every tab needs a keypress, so treat it as a regression.
+- [ ] Now kill it the hard way (`docker kill pocket-dev`, or trigger a real OOM) with a session mid-task. The tab and conversation still come back, but the session is WARNED about the unexpected shutdown instead of being told to continue. This is the one that matters: auto-continuing after an OOM tells Claude to rebuild whatever took the host down.
 - [ ] Type `/exit` in a restored tab. The loop restarts Claude with a NEW conversation, not the one you just left.
 - [ ] Kill a tab, restart the container: it stays killed, and its conversation is not resumed into a new tab.
 - [ ] `docker stop` + `docker rm` + `docker run` (a recreate) with the `Session State` volume mounted: tabs still come back. Without the mount they do not — expected, and the reason the volume exists.

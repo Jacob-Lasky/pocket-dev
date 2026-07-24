@@ -49,7 +49,21 @@ const RESUME_ENABLED = !process.env.SHELL_CMD && process.env.PD_RESUME !== '0';
 // swallowed with no error. There is no ready signal to wait for, so DO NOT
 // "fix" this by writing to the pty after a settle timeout. The command-line
 // prompt is queued by Claude itself and survives even the workspace-trust gate.
-const RESUME_PROMPT = process.env.PD_RESUME_NUDGE || 'continue please';
+const RESUME_PROMPT = process.env.PD_RESUME_NUDGE ?? 'continue please';
+
+// The same situation, except the container DIED rather than being restarted on
+// purpose. A session is still resumed, because losing the context helps nobody,
+// but it is emphatically NOT told to carry on: the likeliest cause of an
+// unexplained death is the work itself (an out-of-memory build being the
+// classic), and "continue please" there means doing the thing that killed the
+// box a second time. So it is warned instead, and asked to check before it
+// retries. Set PD_CRASH_NUDGE='' to restore in silence.
+const CRASH_PROMPT = process.env.PD_CRASH_NUDGE ?? (
+  'pocket-dev came back from an unexpected shutdown, so this session was cut off mid-task. '
+  + 'Do NOT simply retry what you were doing: it may be what brought the container down, '
+  + 'for example by running the host out of memory. Work out whether that is likely first, '
+  + 'and if it is, take a different approach rather than repeating it.'
+);
 
 function buildTmuxSpawnArgs(session, sessionCmd, { env = {} } = {}) {
   // `-e KEY=value` sets the tmux SESSION environment. It has to go this way
@@ -253,6 +267,11 @@ function createSessionsApi({
 
   // Bring back the sessions a previous process was hosting.
   //
+  // `autoContinue` says whether the last shutdown was deliberate. It gates only
+  // the prompt, never the restore: tabs and conversations come back either way,
+  // but work only restarts by itself after a shutdown somebody asked for. See
+  // sessionStore's markCleanShutdown for why unclean is the default.
+  //
   // Two failure cases, one code path: if the tmux session is still alive (node
   // restarted, container did not) the `new-session -A` in buildTmuxSpawnArgs
   // reattaches to it with its scrollback and running Claude intact; if the
@@ -260,7 +279,7 @@ function createSessionsApi({
   // pd-claude-session resuming the conversation from its recorded uuid. Either
   // way the tabs come back under the SAME ids, so a browser left open across
   // the outage reconnects into them instead of showing dead panes.
-  function restore() {
+  function restore({ autoContinue = false } = {}) {
     const restored = [];
     for (const entry of store.load()) {
       try {
@@ -275,12 +294,19 @@ function createSessionsApi({
         // we can positively see was mid-turn gets asked to carry on; one that
         // was waiting on the user comes back and goes on waiting, which is the
         // whole point of classifying instead of always continuing.
-        const resumePrompt = status === 'busy' ? RESUME_PROMPT : null;
-        create(entry.id, { resumePrompt });
+        const resumePrompt = status === 'busy'
+          ? (autoContinue ? RESUME_PROMPT : CRASH_PROMPT)
+          : null;
+        create(entry.id, { resumePrompt: resumePrompt || null });
         restored.push(entry.id);
 
-        if (status === 'busy')      logger.log(`session ${entry.id}: was mid-turn when it stopped, resuming with "${resumePrompt}"`);
-        else if (status === 'idle') logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
+        if (status !== 'busy') {
+          if (status === 'idle') logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
+        } else if (autoContinue) {
+          logger.log(`session ${entry.id}: was mid-turn, resuming with "${resumePrompt}"`);
+        } else {
+          logger.log(`session ${entry.id}: was mid-turn but the last shutdown was NOT clean, resuming without continuing the work`);
+        }
       } catch (err) {
         // One bad session must not stop the server from coming up.
         logger.warn(`failed to restore session ${entry.id}: ${err.message}`);
@@ -371,10 +397,24 @@ function startServer() {
   const store       = createSessionStore({ dir: STATE_DIR });
   const sessionsApi = createSessionsApi({ store });
 
+  // Ask, once, whether the previous process meant to stop, then arrange to
+  // leave that answer behind for the next one. Reading it clears it, so a
+  // subsequent crash cannot inherit this shutdown's good name.
+  const cleanExit = store.consumeCleanShutdown();
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      store.markCleanShutdown();
+      process.exit(0);
+    });
+  }
+  console.log(cleanExit
+    ? 'previous shutdown was clean; interrupted work may resume itself'
+    : 'no clean-shutdown marker; interrupted sessions will be restored but NOT continued');
+
   // Restore BEFORE listening. A browser left open across the outage retries its
   // WebSocket every couple of seconds; if it lands before the sessions exist it
   // gets a 4404 and has to resync, which is a visible flicker of dead tabs.
-  const restored = sessionsApi.restore();
+  const restored = sessionsApi.restore({ autoContinue: cleanExit });
   if (restored.length) console.log(`restored ${restored.length} session(s): ${restored.join(', ')}`);
 
   const app    = createApp({ sessionsApi });

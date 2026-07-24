@@ -39,8 +39,11 @@ async function spawnReady({ scriptPath, env, readySubstring, timeoutMs = 5000 })
   return proc;
 }
 
-async function killProcAndWait(proc) {
-  proc.kill('SIGTERM');
+// SIGTERM is the deliberate stop docker sends, and the server's handler writes
+// its clean-shutdown marker on the way out. SIGKILL models the container dying:
+// no handler runs, no marker, and the next boot must treat it as a crash.
+async function killProcAndWait(proc, signal = 'SIGTERM') {
+  proc.kill(signal);
   await new Promise(resolve => proc.on('exit', resolve));
 }
 
@@ -95,8 +98,8 @@ function ptyServerFixture({ prefix, shellCmd }) {
       baseURL: `http://localhost:${port}`,
       stateDir,
       sessionName,
-      async restart({ killTmux = false } = {}) {
-        await killProcAndWait(proc);
+      async restart({ killTmux = false, signal = 'SIGTERM' } = {}) {
+        await killProcAndWait(proc, signal);
         if (killTmux) await killTmuxSessionsByPrefix(sessionName);
         proc = await spawnReady({ scriptPath: SERVER_PATH, env, readySubstring: 'pocket-dev on' });
       },
