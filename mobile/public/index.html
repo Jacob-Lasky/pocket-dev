@@ -503,6 +503,19 @@
             this.fitAndResize();
             acquireWakeLock();
           }
+          // Pin to the bottom, and keep this AFTER the fit above. reset()
+          // empties the buffer but does not reliably clear xterm's "the user
+          // scrolled up, stop auto-following" state, and fitAddon.fit() then
+          // reflows lines between screen and scrollback without carrying the
+          // follow state across. Either one on its own leaves the pane parked
+          // above the bottom while the replay lands, so the visible window
+          // straddles the pre-restart paint and the replayed one and shows the
+          // same line twice. Measured in CI after a node-only restart: baseY 2,
+          // viewportY 0, with the bottom-anchored screen correct all along.
+          // Reliable on webkit, intermittent on chromium and firefox, which is
+          // why it read as flake. Pinning before the fit was tried first and
+          // was NOT enough, because the fit undid it.
+          this.term.scrollToBottom();
         };
 
         ws.onmessage = e => {

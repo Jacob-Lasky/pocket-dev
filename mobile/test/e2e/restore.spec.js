@@ -36,9 +36,39 @@ async function paneCount(page) {
   return page.evaluate(() => document.querySelectorAll('.terminal-pane').length);
 }
 
+// Count the marker on the terminal SCREEN, read bottom-anchored out of the
+// buffer rather than out of the rendered DOM.
+//
+// Counting rendered text was wrong twice over. The rendered text depends on
+// where the pane is scrolled, which is the very thing the restart bug broke; and
+// counting across the whole buffer depends on the ROW COUNT, because shrinking
+// a terminal reflows lines that no longer fit into scrollback and growing it
+// pulls them back. `fitAndResize()` runs on every reconnect, so the row count is
+// not stable across a restart and no whole-buffer count is comparable with one
+// taken before it. Measured in CI: whole-buffer went 2 -> 4 -> 6 while this
+// bottom-anchored screen count stayed 2 through a restart and two resizes on all
+// three browsers. DO NOT change this back to reading innerText.
 async function markerCount(page) {
-  const text = await visibleText(page);
-  return text.split('survives-node-restart-ECHO').length - 1;
+  return page.evaluate((m) => {
+    const t = window.term;
+    if (!t || !t.buffer) return -1;
+    const buf = t.buffer.normal;
+    let n = 0;
+    for (let i = buf.baseY; i < buf.baseY + t.rows; i++) {
+      const line = buf.getLine(i);
+      if (line && line.translateToString(true).includes(m)) n++;
+    }
+    return n;
+  }, 'survives-node-restart-ECHO');
+}
+
+// Is the pane following the bottom, or stuck showing older rows?
+async function scrollOffsetFromBottom(page) {
+  return page.evaluate(() => {
+    const t = window.term;
+    if (!t || !t.buffer) return -1;
+    return t.buffer.normal.baseY - t.buffer.normal.viewportY;
+  });
 }
 
 async function newSession(page) {
@@ -123,7 +153,16 @@ test('when only the server process restarts, sessions reattach with their scroll
   // The server replays its whole buffer on every attach, so a pane that does
   // not reset on WS open ends up showing the reattached screen stacked on top
   // of what it already had.
-  expect(await markerCount(page)).toBe(before);
+  await expect.poll(() => markerCount(page), { timeout: 10000 }).toBe(before);
+
+  // And it has to come back pinned to the BOTTOM. A pane left scrolled up after
+  // a reconnect shows a window straddling the pre-restart paint and the
+  // replayed one, which is what made this test fail in CI: the content was
+  // right, the scroll position was not.
+  // Polled, not sampled: the fit on reconnect sends a resize, and tmux's
+  // repaint comes back asynchronously, so the pane settles a beat after the
+  // socket opens.
+  await expect.poll(() => scrollOffsetFromBottom(page), { timeout: 10000 }).toBe(0);
 });
 
 test('tabs come back after a hard kill, and the shutdown marker tells the two apart', async ({ pdServer, page }) => {
