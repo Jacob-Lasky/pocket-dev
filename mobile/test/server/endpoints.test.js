@@ -54,6 +54,11 @@ function stubSessionsApi() {
     }),
     get:  vi.fn((id) => sessions.get(id)),
     list: vi.fn(() => [...sessions.values()].map(s => ({ id: s.id, cols: s.cols, rows: s.rows }))),
+    // GET /sessions serves describe(), not list(): the browser needs each
+    // session's title and state, and list() stays cheap for the roster write.
+    describe: vi.fn(() => [...sessions.values()].map(s => ({
+      id: s.id, cols: s.cols, rows: s.rows, title: null, lastPrompt: null, status: 'unknown',
+    }))),
     attachWs: vi.fn(),
     _internalSessions: sessions, // not used by routes; exposed for assertions
   };
@@ -66,6 +71,18 @@ describe('session-aware endpoints', () => {
     const res = await request(app).get('/sessions');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+
+  it('GET /sessions serves describe(), so rows carry a title and a state', async () => {
+    // Regression guard for the route contract: serving list() here would give
+    // the browser ids with no way to label or triage them.
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    await request(app).post('/sessions');
+    const res = await request(app).get('/sessions');
+    expect(res.status).toBe(200);
+    expect(sessionsApi.describe).toHaveBeenCalled();
+    expect(res.body[0]).toMatchObject({ title: null, lastPrompt: null, status: 'unknown' });
   });
 
   it('POST /sessions creates a session and returns its id', async () => {

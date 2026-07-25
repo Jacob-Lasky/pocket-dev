@@ -132,6 +132,77 @@ export const test = base.extend({
     shellCmd: `bash ${path.resolve(__dirname, 'mouse-app.sh')}`,
   }),
 
+  // Leaves SHELL_CMD UNSET, so pocket-dev owns the command line and the whole
+  // conversation machinery switches on: pd-claude-session runs, mints a uuid,
+  // and records it in the state dir. A stub `claude` earlier on PATH stands in
+  // for the real one and then execs cat, so the terminal still echoes.
+  //
+  // This is the only fixture that can reach titles, sid files, and resume. The
+  // cat fixture cannot: setting SHELL_CMD disables all of it by design.
+  pdServerClaudeStub: async ({}, use) => {
+    const port        = await pickPort();
+    const sessionName = `pdstub-${port}`;
+    const stateDir    = await fs.mkdtemp(path.join(os.tmpdir(), 'pd-e2e-stub-'));
+    const projectsDir = path.join(stateDir, 'projects');
+    const argvLog     = path.join(stateDir, 'claude-argv.log');
+    await fs.mkdir(projectsDir, { recursive: true });
+
+    const env = {
+      ...process.env,
+      PORT: String(port),
+      TMUX_SESSION: sessionName,
+      PD_STATE_DIR: stateDir,
+      PD_CLAUDE_PROJECTS_DIR: projectsDir,
+      PATH: `${path.resolve(__dirname, 'stub-bin')}:${process.env.PATH}`,
+    };
+    delete env.SHELL_CMD;
+
+    let proc = await spawnReady({ scriptPath: SERVER_PATH, env, readySubstring: 'pocket-dev on' });
+
+    await use({
+      port,
+      baseURL: `http://localhost:${port}`,
+      stateDir,
+      projectsDir,
+      sessionName,
+      // The launcher mints the uuid at runtime, so tests read it back rather
+      // than choosing it. It is written a moment AFTER the pty spawns, so this
+      // waits rather than assuming: a WebSocket that is already connected is
+      // not proof the launcher has reached its first line.
+      async uuidFor(id, { timeoutMs = 8000 } = {}) {
+        const file = path.join(stateDir, 'sids', `${id}.uuid`);
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          try {
+            const uuid = (await fs.readFile(file, 'utf8')).trim();
+            if (uuid) return uuid;
+          } catch { /* not written yet */ }
+          if (Date.now() > deadline) throw new Error(`no conversation id recorded for ${id} within ${timeoutMs}ms`);
+          await new Promise(r => setTimeout(r, 100));
+        }
+      },
+      async claudeArgv() {
+        try { return (await fs.readFile(argvLog, 'utf8')).trim().split('\n').filter(Boolean); }
+        catch { return []; }
+      },
+      // Write a transcript for a session's conversation, the way Claude would.
+      async writeTranscript(uuid, records) {
+        const dir = path.join(projectsDir, '-home-claude');
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, `${uuid}.jsonl`), records.map(r => JSON.stringify(r)).join('\n') + '\n');
+      },
+      async restart({ killTmux = false, signal = 'SIGTERM' } = {}) {
+        await killProcAndWait(proc, signal);
+        if (killTmux) await killTmuxSessionsByPrefix(sessionName);
+        proc = await spawnReady({ scriptPath: SERVER_PATH, env, readySubstring: 'pocket-dev on' });
+      },
+    });
+
+    await killProcAndWait(proc);
+    await killTmuxSessionsByPrefix(sessionName);
+    await fs.rm(stateDir, { recursive: true, force: true });
+  },
+
   // Static-serving only (no PTY, no WebSocket, no tmux). The page's WS connection
   // will fail and stay in the disconnected state — that's the contract for tests
   // that only need to verify rendering.
