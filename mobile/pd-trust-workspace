@@ -1,0 +1,48 @@
+#!/bin/bash
+# Pre-accept Claude Code's workspace-trust gate for the directory pocket-dev
+# launches its sessions in.
+#
+#   usage: pd-trust-workspace [dir]        (default: $HOME, which is the cwd
+#                                           server.js spawns every session with)
+#   env:   PD_TRUST_WORKSPACE=0            skip entirely
+#
+# WHY this exists. Without it, every new session — including every session
+# restored after a restart — opens on "Quick safety check: Is this a project you
+# trust?" and does nothing until a human presses Enter. Measured 2026-07-24 in
+# the running container: /home/claude sits at hasTrustDialogAccepted=false and
+# answering the prompt does not persist it, so the gate comes back every single
+# time. That turns automatic session restore into "restore, then go tap every
+# tab", which defeats the point of restoring at all.
+#
+# WHY it is not a security downgrade here. pocket-dev launches Claude with
+# --dangerously-skip-permissions in this exact directory by design: read, edit
+# and execute are already granted. The trust dialog guards against opening
+# someone else's code unawares, which is not the situation for the home
+# directory of a container built to run one agent. It grants nothing that the
+# command line has not already granted. Set PD_TRUST_WORKSPACE=0 to keep the
+# prompt anyway.
+set -u
+
+[ "${PD_TRUST_WORKSPACE:-1}" = "0" ] && exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+dir="${1:-$HOME}"
+config="$HOME/.claude.json"
+
+# Seed a minimal config when there is nothing there yet; Claude merges its own
+# keys into it on first run.
+[ -s "$config" ] || printf '{"projects":{}}' > "$config" 2>/dev/null || exit 0
+
+tmp="$(mktemp 2>/dev/null)" || exit 0
+trap 'rm -f "$tmp"' EXIT
+
+# A config we cannot parse is a config we must not rewrite: bail and leave the
+# user's file exactly as it was, prompt and all.
+jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$config" > "$tmp" 2>/dev/null || exit 0
+[ -s "$tmp" ] || exit 0
+
+# Copy the CONTENTS back, never `mv` the temp file over the target. DO NOT
+# "improve" this into an atomic rename: ~/.claude.json is a file-level bind
+# mount (see pocket-dev.xml), and renaming onto a mount point fails with EBUSY,
+# which would silently leave the trust flag unset forever.
+cat "$tmp" > "$config" 2>/dev/null || exit 0

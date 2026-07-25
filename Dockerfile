@@ -113,9 +113,9 @@ RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
 # Create docker group and user with proper permissions
 RUN groupadd -g 281 docker || true && \
     useradd -m -u 99 -g 100 -G 281 claude && \
-    mkdir -p /workspace /home/claude/.claude && \
-    chown -R claude:users /workspace /home/claude/.claude && \
-    chmod -R 775 /workspace /home/claude/.claude
+    mkdir -p /workspace /home/claude/.claude /home/claude/.pocket-dev && \
+    chown -R claude:users /workspace /home/claude/.claude /home/claude/.pocket-dev && \
+    chmod -R 775 /workspace /home/claude/.claude /home/claude/.pocket-dev
 
 # Install pocket-dev server (as root, before switching users)
 # npm install compiles node-pty natively here. This is an expensive layer, so it
@@ -123,15 +123,23 @@ RUN groupadd -g 281 docker || true && \
 # putting the frequently-changing dgvpn COPY after this keeps the node-pty
 # rebuild cached on vpn-only changes.
 COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh && npm install --production && \
-    chmod +x /mobile/start.sh && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && npm install --production && \
+    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-trust-workspace && \
     chown -R claude:users /mobile
+
+# Where the session roster and each tab's Claude conversation id live, so a
+# restart brings the user's sessions back instead of one blank one. Bind-mount
+# this (the `Session State` volume in pocket-dev.xml) to survive a container
+# RECREATE too — without a mount it lives in the writable layer, which an image
+# update throws away.
+ENV PD_STATE_DIR=/home/claude/.pocket-dev
 
 # dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
 # as root into /usr/local/bin (on PATH for the claude user). The proxy runs as
 # the unprivileged claude user at runtime: userspace tsnet needs no TUN device
-# and no NET_ADMIN, so this works in the unprivileged container. State persists
-# under /home/claude/.dgvpn so the tailnet registration survives restarts. Kept
+# and no NET_ADMIN, so this works in the unprivileged container. State lives
+# under /home/claude/.dgvpn, which survives a restart on its own but only
+# survives a RECREATE when the `dgvpn State` volume is actually mounted. Kept
 # last (just before USER claude) so iterating on vpn/ does not bust the apt or
 # npm layers above.
 COPY --from=dgvpn-builder /dgvpn-proxy /usr/local/bin/dgvpn-proxy
@@ -146,6 +154,14 @@ RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
 ENV DGVPN_PROXY_PORT=1055
 ENV DGVPN_DIR=/home/claude/.dgvpn
 
+# A writable, persistable prefix for tools a session installs for ITSELF
+# (flyctl, extra CLIs). It exists because the alternative people reach for is
+# bind-mounting /home/claude/.local — DO NOT do that: the image bakes `claude`,
+# `uv` and `uvx` into /home/claude/.local/bin at build time, and mounting a host
+# dir over it masks them and leaves a container with no Claude in it. /opt/pd is
+# empty in the image, so a mount there can never hide anything.
+RUN mkdir -p /opt/pd/bin && chown -R claude:users /opt/pd && chmod -R 775 /opt/pd
+
 # Switch to claude user before installing
 USER claude
 
@@ -154,7 +170,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Ensure claude is in user's PATH and HOME is set correctly
-ENV PATH="/home/claude/.local/bin:${PATH}"
+ENV PATH="/opt/pd/bin:/home/claude/.fly/bin:/home/claude/.local/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV HOME="/home/claude"

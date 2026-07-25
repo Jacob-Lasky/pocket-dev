@@ -1,10 +1,14 @@
 import { test as base, expect } from '@playwright/test';
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 
 const execFile = promisify(execFileCb);
+
+const SERVER_PATH = path.resolve(__dirname, '../../server.js');
 
 async function pickPort() {
   return new Promise((resolve, reject) => {
@@ -35,8 +39,11 @@ async function spawnReady({ scriptPath, env, readySubstring, timeoutMs = 5000 })
   return proc;
 }
 
-async function killProcAndWait(proc) {
-  proc.kill('SIGTERM');
+// SIGTERM is the deliberate stop docker sends, and the server's handler writes
+// its clean-shutdown marker on the way out. SIGKILL models the container dying:
+// no handler runs, no marker, and the next boot must treat it as a crash.
+async function killProcAndWait(proc, signal = 'SIGTERM') {
+  proc.kill(signal);
   await new Promise(resolve => proc.on('exit', resolve));
 }
 
@@ -58,74 +65,72 @@ async function killTmuxSessionsByPrefix(prefix) {
   }
 }
 
+// Build a fixture that runs the real server (PTY + WebSocket + tmux) with the
+// given SHELL_CMD.
+//
+// Each one gets its own PD_STATE_DIR. That isolation is load-bearing, not
+// tidiness: the server now RESTORES its session roster at boot, so a shared
+// state dir would have every test booting into whatever sessions the previous
+// test left behind — and would scribble on the developer's real ~/.pocket-dev
+// while doing it.
+//
+// The returned server exposes `restart()`, which stands the server process back
+// up on the same port and state dir. With killTmux it models a container
+// restart (tmux gone, sessions respawn from the roster); without it, only the
+// node process died and `new-session -A` reattaches to the live tmux sessions.
+function ptyServerFixture({ prefix, shellCmd }) {
+  return async ({}, use) => {
+    const port        = await pickPort();
+    const sessionName = `${prefix}-${port}`;
+    const stateDir    = await fs.mkdtemp(path.join(os.tmpdir(), 'pd-e2e-state-'));
+    const env = {
+      ...process.env,
+      PORT: String(port),
+      SHELL_CMD: shellCmd,
+      TMUX_SESSION: sessionName,
+      PD_STATE_DIR: stateDir,
+    };
+
+    let proc = await spawnReady({ scriptPath: SERVER_PATH, env, readySubstring: 'pocket-dev on' });
+
+    await use({
+      port,
+      baseURL: `http://localhost:${port}`,
+      stateDir,
+      sessionName,
+      async restart({ killTmux = false, signal = 'SIGTERM' } = {}) {
+        await killProcAndWait(proc, signal);
+        if (killTmux) await killTmuxSessionsByPrefix(sessionName);
+        proc = await spawnReady({ scriptPath: SERVER_PATH, env, readySubstring: 'pocket-dev on' });
+      },
+    });
+
+    await killProcAndWait(proc);
+    await killTmuxSessionsByPrefix(sessionName);
+    await fs.rm(stateDir, { recursive: true, force: true });
+  };
+}
+
 export const test = base.extend({
-  // Full server with PTY + WebSocket. Uses `cat` as a deterministic SHELL_CMD so
-  // typing `hello\n` in #cmd-input echoes `hello\n` back into the buffer.
-  pdServer: async ({}, use) => {
-    const port = await pickPort();
-    const sessionName = `pdtest-${port}`;
-    const proc = await spawnReady({
-      scriptPath: path.resolve(__dirname, '../../server.js'),
-      env: {
-        ...process.env,
-        PORT: String(port),
-        SHELL_CMD: 'cat',
-        TMUX_SESSION: sessionName,
-      },
-      readySubstring: 'pocket-dev on',
-    });
+  // Uses `cat` as a deterministic SHELL_CMD so typing `hello\n` in #cmd-input
+  // echoes `hello\n` back into the buffer.
+  pdServer: ptyServerFixture({ prefix: 'pdtest', shellCmd: 'cat' }),
 
-    await use({ port, baseURL: `http://localhost:${port}` });
+  // SHELL_CMD replays a captured real Claude TUI frame (alt-screen,
+  // CHA-positioned words) instead of `cat`. Exercises the View renderer against
+  // the exact content the old serialize()+ansi_up path mangled.
+  pdServerClaudeFrame: ptyServerFixture({
+    prefix: 'pdframe',
+    shellCmd: `bash ${path.resolve(__dirname, 'replay-claude-frame.sh')}`,
+  }),
 
-    await killProcAndWait(proc);
-    await killTmuxSessionsByPrefix(sessionName);
-  },
-
-  // Like pdServer, but SHELL_CMD replays a captured real Claude TUI frame
-  // (alt-screen, CHA-positioned words) instead of `cat`. Exercises the View
-  // renderer against the exact content the old serialize()+ansi_up path mangled.
-  pdServerClaudeFrame: async ({}, use) => {
-    const port = await pickPort();
-    const sessionName = `pdframe-${port}`;
-    const proc = await spawnReady({
-      scriptPath: path.resolve(__dirname, '../../server.js'),
-      env: {
-        ...process.env,
-        PORT: String(port),
-        SHELL_CMD: `bash ${path.resolve(__dirname, 'replay-claude-frame.sh')}`,
-        TMUX_SESSION: sessionName,
-      },
-      readySubstring: 'pocket-dev on',
-    });
-
-    await use({ port, baseURL: `http://localhost:${port}` });
-
-    await killProcAndWait(proc);
-    await killTmuxSessionsByPrefix(sessionName);
-  },
-
-  // Like pdServer, but SHELL_CMD enables SGR mouse tracking (as Claude does)
-  // then idles. Exercises scroll.js's wheel-forwarding branch: touch-drag on a
-  // mouse-tracking session must send wheel events to the pty, not scroll xterm.
-  pdServerMouseApp: async ({}, use) => {
-    const port = await pickPort();
-    const sessionName = `pdmouse-${port}`;
-    const proc = await spawnReady({
-      scriptPath: path.resolve(__dirname, '../../server.js'),
-      env: {
-        ...process.env,
-        PORT: String(port),
-        SHELL_CMD: `bash ${path.resolve(__dirname, 'mouse-app.sh')}`,
-        TMUX_SESSION: sessionName,
-      },
-      readySubstring: 'pocket-dev on',
-    });
-
-    await use({ port, baseURL: `http://localhost:${port}` });
-
-    await killProcAndWait(proc);
-    await killTmuxSessionsByPrefix(sessionName);
-  },
+  // SHELL_CMD enables SGR mouse tracking (as Claude does) then idles. Exercises
+  // scroll.js's wheel-forwarding branch: touch-drag on a mouse-tracking session
+  // must send wheel events to the pty, not scroll xterm.
+  pdServerMouseApp: ptyServerFixture({
+    prefix: 'pdmouse',
+    shellCmd: `bash ${path.resolve(__dirname, 'mouse-app.sh')}`,
+  }),
 
   // Static-serving only (no PTY, no WebSocket, no tmux). The page's WS connection
   // will fail and stay in the disconnected state — that's the contract for tests
