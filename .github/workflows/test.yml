@@ -16,7 +16,7 @@ jobs:
           version: 11.3.0
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -33,7 +33,7 @@ jobs:
           version: 11.3.0
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: sudo apt-get update && sudo apt-get install -y tmux

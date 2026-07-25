@@ -4,7 +4,7 @@
 # tailscaled: userspace tailscaled cannot resolve .consul split-DNS for outbound
 # connections (tailscale#16906, tailscale#4677), which is the entire point here.
 # The Go side in vpn/ resolves names via the tsnet LocalAPI instead. Built static
-# (CGO_ENABLED=0) so it drops into the node:20-slim final image with no runtime
+# (CGO_ENABLED=0) so it drops into the node:24-bookworm-slim final image with no runtime
 # deps. Pin matches vpn/go.mod's `go 1.26`.
 FROM golang:1.26-bookworm AS dgvpn-builder
 WORKDIR /build/vpn
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /dgvpn-proxy -ldflags='-s -w' .
 
-FROM node:20-slim
+FROM node:24-bookworm-slim
 
 # Install system dependencies
 # build-essential + python3 are required to compile node-pty (native addon).
@@ -123,9 +123,19 @@ RUN groupadd -g 281 docker || true && \
 # putting the frequently-changing dgvpn COPY after this keeps the node-pty
 # rebuild cached on vpn-only changes.
 #
-# pnpm is installed with npm rather than corepack: corepack is gone from Node 26,
-# so `corepack enable` is not a portable way to get pnpm any more. The version is
-# pinned to match `packageManager` in mobile/package.json.
+# Node 24, not 20: pnpm 11 refuses to run on anything below Node 22.13, and
+# Node 20 went end-of-life in April 2026. Keep this at a current LTS.
+#
+# The tag is bookworm-slim, NOT plain 24-slim. Plain would move the base to
+# Debian trixie in the same change, and trixie renamed several of the Playwright
+# runtime libs installed above to their t64 variants (libasound2, libatk1.0-0,
+# libcups2, libatspi2.0-0). That is the exact breakage the apt block warns about,
+# so the distro bump belongs in its own change with the deps list rechecked.
+#
+# pnpm is installed with `npm install -g` rather than corepack. corepack would
+# read `packageManager` for us, but it was removed from Node in 26, so pinning
+# the version explicitly here is the approach that survives the next base bump.
+# Keep this version in step with `packageManager` in mobile/package.json.
 #
 # --prod drops devDependencies (vitest, playwright) from the runtime image, and
 # --frozen-lockfile makes the build fail loudly if pnpm-lock.yaml is out of step
