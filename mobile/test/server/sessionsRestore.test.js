@@ -317,3 +317,76 @@ describe('with a custom SHELL_CMD', () => {
     expect(cmd).toContain('while true;');
   });
 });
+
+describe('describe(): what the browser is told about each session', () => {
+  const title  = (t) => ({ type: 'ai-title', aiTitle: t, sessionId: UUID });
+  const prompt = (p) => ({ type: 'last-prompt', lastPrompt: p, sessionId: UUID });
+
+  function withConversation(records) {
+    const { api, store } = makeApi();
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    if (records) writeTranscript(UUID, records);
+    return { api, store, id: state.id };
+  }
+
+  it('carries the conversation title, preview and status', () => {
+    const { api } = withConversation([title('Restore sessions across restarts'), prompt('continue please'), ...BUSY]);
+    expect(api.describe()).toEqual([{
+      id: 'main-1', cols: 120, rows: 40,
+      title: 'Restore sessions across restarts',
+      lastPrompt: 'continue please',
+      status: 'busy',
+    }]);
+  });
+
+  it('reports nulls for a session whose conversation has not been written yet', () => {
+    // A tab created a second ago. The client falls back rather than being
+    // handed an invented name.
+    const { api } = withConversation(null);
+    expect(api.describe()[0]).toMatchObject({ title: null, lastPrompt: null, status: 'unknown' });
+  });
+
+  it('reports nulls for a session with no conversation id at all', () => {
+    const { api } = makeApi();
+    api.create();
+    expect(api.describe()[0]).toMatchObject({ title: null, lastPrompt: null, status: 'unknown' });
+  });
+
+  it('keeps list() cheap and free of transcript reads', () => {
+    // list() is what gets written to the roster on every create and destroy.
+    // Pulling metadata in there would turn each persist into a pile of file IO.
+    const { api } = withConversation([title('Something'), prompt('hi'), ...IDLE]);
+    expect(api.list()).toEqual([{ id: 'main-1', cols: 120, rows: 40 }]);
+  });
+
+  it('re-reads only when the transcript actually changed', () => {
+    const { api } = withConversation([title('Before'), prompt('one'), ...IDLE]);
+    expect(api.describe()[0].title).toBe('Before');
+
+    const spy = vi.spyOn(fs, 'openSync');
+    api.describe();
+    api.describe();
+    expect(spy).not.toHaveBeenCalled();   // served from the mtime cache
+    spy.mockRestore();
+  });
+
+  it('picks up a new title once the transcript moves on', () => {
+    const { api } = withConversation([title('Before'), prompt('one'), ...IDLE]);
+    expect(api.describe()[0].title).toBe('Before');
+
+    // Same path, more content: mtime and size both move, so the cache misses.
+    writeTranscript(UUID, [title('After'), prompt('two'), ...BUSY, { type: 'ai-title', aiTitle: 'After', pad: 'x'.repeat(64) }]);
+    const after = api.describe()[0];
+    expect(after.title).toBe('After');
+    expect(after.status).toBe('busy');
+  });
+
+  it('survives a transcript that is deleted under it', () => {
+    const { api } = withConversation([title('Doomed'), prompt('one'), ...IDLE]);
+    expect(api.describe()[0].title).toBe('Doomed');
+    fs.rmSync(path.join(projectsDir, '-home-claude', `${UUID}.jsonl`));
+    expect(api.describe()[0]).toMatchObject({ title: null, status: 'unknown' });
+  });
+});

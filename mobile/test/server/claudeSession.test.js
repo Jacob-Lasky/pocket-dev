@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { findTranscript, classifyTranscript, statusOf } from '../../claudeSession.js';
+import { findTranscript, classifyTranscript, inspectTranscript, statusOf, inspect } from '../../claudeSession.js';
 
 // Record shapes below are copied from real Claude Code transcripts (structure
 // only). They are the contract this classifier reads; if Claude changes them,
@@ -147,5 +147,91 @@ describe('statusOf', () => {
 
   it('is unknown when the conversation was never written', () => {
     expect(statusOf(UUID, { projectsDir })).toBe('unknown');
+  });
+});
+
+// Claude appends a fresh ai-title and last-prompt on roughly every turn (98 of
+// each in one real 11 MB transcript), so these are append-only streams where
+// the LAST record is the current value, not write-once fields.
+const title = (t) => ({ type: 'ai-title', aiTitle: t, sessionId: UUID });
+const prompt = (p) => ({ type: 'last-prompt', lastPrompt: p, leafUuid: 'x', sessionId: UUID });
+
+describe('inspectTranscript', () => {
+  it('pulls the title and preview out alongside the status, in one pass', () => {
+    const file = writeTranscript(UUID, [userPrompt, title('Restructure skills'), prompt('do the thing'), assistantEndTurn]);
+    expect(inspectTranscript(file)).toEqual({
+      status: 'idle',
+      title: 'Restructure skills',
+      lastPrompt: 'do the thing',
+    });
+  });
+
+  it('takes the LAST of each, because they are rewritten every turn', () => {
+    const file = writeTranscript(UUID, [
+      title('First guess at a name'), prompt('opening message'),
+      userPrompt, assistantToolUse,
+      title('What it actually turned into'), prompt('the newest message'),
+    ]);
+    const got = inspectTranscript(file);
+    expect(got.title).toBe('What it actually turned into');
+    expect(got.lastPrompt).toBe('the newest message');
+  });
+
+  it('returns nulls rather than guessing when a conversation has no title yet', () => {
+    // A session created seconds ago is the normal case here, not an error.
+    expect(inspectTranscript(writeTranscript(UUID, [userPrompt]))).toEqual({
+      status: 'busy', title: null, lastPrompt: null,
+    });
+  });
+
+  it('folds a multi-line prompt into one line so a list row cannot break', () => {
+    const file = writeTranscript(UUID, [prompt('first line\n\nsecond line\n   third'), assistantEndTurn]);
+    expect(inspectTranscript(file).lastPrompt).toBe('first line second line third');
+  });
+
+  it('caps runaway strings', () => {
+    const file = writeTranscript(UUID, [title('T'.repeat(500)), prompt('P'.repeat(900)), assistantEndTurn]);
+    const got = inspectTranscript(file);
+    expect(got.title.length).toBeLessThanOrEqual(200);
+    expect(got.lastPrompt.length).toBeLessThanOrEqual(240);
+    expect(got.title.endsWith('…')).toBe(true);
+  });
+
+  it('ignores an empty or non-string title', () => {
+    for (const bad of ['', '   ', 42, null, { nope: true }]) {
+      const file = writeTranscript(UUID, [{ type: 'ai-title', aiTitle: bad }, assistantEndTurn]);
+      expect(inspectTranscript(file).title).toBeNull();
+    }
+  });
+
+  it('finds metadata that sits tens of kilobytes back from the end', () => {
+    // Measured on real transcripts: ai-title lands up to ~32 KB from EOF in a
+    // 14 MB file, so the tail window has to be generous enough to catch it.
+    const filler = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'z'.repeat(4096) }] } };
+    const file = writeTranscript(UUID, [title('Buried but current'), ...Array(12).fill(filler), assistantEndTurn]);
+    expect(inspectTranscript(file).title).toBe('Buried but current');
+  });
+
+  it('does not mistake a title for a conversation turn', () => {
+    // ai-title records carry no message, so they must not affect the status.
+    const file = writeTranscript(UUID, [assistantToolUse, title('Mid-flight'), prompt('go')]);
+    expect(inspectTranscript(file).status).toBe('busy');
+  });
+});
+
+describe('inspect', () => {
+  it('resolves a uuid to its title and status', () => {
+    writeTranscript(UUID, [title('Named conversation'), prompt('hello'), assistantEndTurn]);
+    expect(inspect(UUID, { projectsDir })).toEqual({
+      status: 'idle', title: 'Named conversation', lastPrompt: 'hello',
+    });
+  });
+
+  it('is all nulls for a conversation with no transcript', () => {
+    expect(inspect(UUID, { projectsDir })).toEqual({ status: 'unknown', title: null, lastPrompt: null });
+  });
+
+  it('is all nulls for a uuid that is not a uuid', () => {
+    expect(inspect('../../etc/passwd', { projectsDir })).toEqual({ status: 'unknown', title: null, lastPrompt: null });
   });
 });

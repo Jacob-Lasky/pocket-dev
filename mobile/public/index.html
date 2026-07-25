@@ -211,8 +211,12 @@
 
     /* Session counter label inside the tmux row */
     .session-label {
-      flex: 0 0 auto;
+      flex: 1 1 auto;
+      min-width: 0;
       align-self: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 0 6px;
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
       font-size: 12px;
@@ -424,6 +428,12 @@
         this.mouse = { track: false, sgr: false };
         this.installTouchScroll();
 
+        // Conversation metadata from GET /sessions. Null until Claude has
+        // written a transcript, which is the normal state for a new tab.
+        this.title      = null;
+        this.lastPrompt = null;
+        this.claudeStatus = 'unknown';
+
         this.ws       = null;
         this.wsStatus = 'connecting';
         this.connect();
@@ -590,6 +600,7 @@
       const active = sessions.get(id);
       applyConnStatusToDot(active.wsStatus);
       updateSessionLabel();
+      updateDocumentTitle();
       // Single place that points window.term at the ACTIVE session's xterm, so
       // e2e tests reaching into the buffer always get the pane on screen —
       // including after a resync swaps the session set out from under them.
@@ -604,9 +615,42 @@
 
     function updateSessionLabel() {
       const idx = order.indexOf(activeId);
-      sessionLbl.textContent = activeId
-        ? `${idx + 1}/${order.length}`
-        : '–';
+      if (!activeId) {
+        sessionLbl.textContent = '–';
+        sessionLbl.removeAttribute('title');
+        return;
+      }
+      const counter = `${idx + 1}/${order.length}`;
+      const name = sessions.get(activeId)?.title;
+      sessionLbl.textContent = name ? `${counter} · ${name}` : counter;
+      // The row truncates hard on a phone, so keep the full name reachable.
+      if (name) sessionLbl.title = name; else sessionLbl.removeAttribute('title');
+    }
+
+    // The browser tab is the one place a name is visible without opening
+    // anything, which matters most on desktop where several tabs are open.
+    function updateDocumentTitle() {
+      const name = activeId && sessions.get(activeId)?.title;
+      document.title = name ? `${name} · pocket-dev` : 'pocket-dev';
+    }
+
+    // Fold GET /sessions metadata onto the sessions we already have. Purely
+    // additive: adopting and dropping sessions is resyncSessions' job.
+    function applySessionMeta(list) {
+      for (const entry of list) {
+        const s = sessions.get(entry.id);
+        if (!s) continue;
+        s.title        = entry.title ?? null;
+        s.lastPrompt   = entry.lastPrompt ?? null;
+        s.claudeStatus = entry.status ?? 'unknown';
+      }
+      updateSessionLabel();
+      updateDocumentTitle();
+    }
+
+    async function refreshSessionMeta() {
+      try { applySessionMeta(await listSessions()); }
+      catch (e) { /* offline or unwired; labels just stay as they are */ }
     }
 
     function addSession(id) {
@@ -693,7 +737,7 @@
           return;
         }
         if (!activeId || !sessions.has(activeId)) setActive(order[0]);
-        updateSessionLabel();
+        applySessionMeta(list);
       } finally {
         resyncRunning = false;
       }
@@ -721,6 +765,7 @@
         // server restored them after a restart. Adopt them all.
         for (const { id } of list) addSession(id);
         setActive(list[0].id);
+        applySessionMeta(list);
       }
     }
 
@@ -981,6 +1026,9 @@
       document.getElementById('btn-row-normal').style.display = 'none';
       document.getElementById('btn-row-tmux').style.display = 'flex';
       updateSessionLabel();
+      // A conversation renames itself as it goes, so fetch on open rather than
+      // trusting whatever was current at page load.
+      refreshSessionMeta();
     }
 
     function hideTmuxRow() {
