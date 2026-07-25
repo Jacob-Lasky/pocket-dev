@@ -16,7 +16,7 @@
 // three engines. Screenshot generation does not belong on the critical path.
 
 import path from 'node:path';
-import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho, newSession } from './fixtures.js';
 
 const OUT = path.resolve(__dirname, '../../test-artifacts');
 
@@ -31,8 +31,7 @@ test('artifact: tabs and terminal survive a container restart', async ({ pdServe
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'BEFORE-RESTART: this session was alive');
 
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=+New');
+  await newSession(page);
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'SECOND TAB: also alive');
   await expect.poll(async () => (await page.evaluate(async () => (await (await fetch('/sessions')).json()).length))).toBe(2);
@@ -51,8 +50,8 @@ test('artifact: tabs and terminal survive a container restart', async ({ pdServe
 
   await page.screenshot({ path: path.join(OUT, 'restore-2-after.png'), fullPage: false });
 
-  // Prove the toolbar still reports both sessions rather than a single fresh one.
-  await page.click('#tmux-btn');
-  await expect(page.locator('#session-label')).toHaveText('2/2');
+  // Prove the UI still reports both sessions rather than a single fresh one.
+  await page.click('#sessions-btn');
+  await expect(page.locator('.sl-row')).toHaveCount(2);
   await page.screenshot({ path: path.join(OUT, 'restore-3-tabs.png'), fullPage: false });
 });

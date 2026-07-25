@@ -19,7 +19,10 @@
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import {
+  test, expect, gotoTest, waitForConnection, sendAndWaitForEcho,
+  newSession, killActiveSession,
+} from './fixtures.js';
 
 async function sessionIds(page) {
   return page.evaluate(async () => {
@@ -69,11 +72,6 @@ async function scrollOffsetFromBottom(page) {
     if (!t || !t.buffer) return -1;
     return t.buffer.normal.baseY - t.buffer.normal.viewportY;
   });
-}
-
-async function newSession(page) {
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=+New');
 }
 
 test('a container restart brings every session back under its original id', async ({ pdServer, page }) => {
@@ -200,8 +198,7 @@ test('a killed session stays killed across a restart', async ({ pdServer, page }
   await waitForConnection(page);
   await expect.poll(() => sessionIds(page)).toHaveLength(2);
 
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=Kill');
+  await killActiveSession(page);
   await expect.poll(() => sessionIds(page)).toHaveLength(1);
   const survivor = await sessionIds(page);
 

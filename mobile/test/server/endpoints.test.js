@@ -57,8 +57,10 @@ function stubSessionsApi() {
     // GET /sessions serves describe(), not list(): the browser needs each
     // session's title and state, and list() stays cheap for the roster write.
     describe: vi.fn(() => [...sessions.values()].map(s => ({
-      id: s.id, cols: s.cols, rows: s.rows, title: null, lastPrompt: null, status: 'unknown',
+      id: s.id, cols: s.cols, rows: s.rows, title: null, lastPrompt: null,
+      status: 'unknown', unread: false, lastOutputAt: 0,
     }))),
+    markViewed: vi.fn((id) => sessions.has(id)),
     attachWs: vi.fn(),
     _internalSessions: sessions, // not used by routes; exposed for assertions
   };
@@ -82,7 +84,9 @@ describe('session-aware endpoints', () => {
     const res = await request(app).get('/sessions');
     expect(res.status).toBe(200);
     expect(sessionsApi.describe).toHaveBeenCalled();
-    expect(res.body[0]).toMatchObject({ title: null, lastPrompt: null, status: 'unknown' });
+    expect(res.body[0]).toMatchObject({
+      title: null, lastPrompt: null, status: 'unknown', unread: false,
+    });
   });
 
   it('POST /sessions creates a session and returns its id', async () => {
@@ -171,6 +175,25 @@ describe('session-aware endpoints', () => {
     expect(res.status).toBe(400);
   });
 
+  it('POST /viewed records that a session was read', async () => {
+    // Read/unread is server-side so it holds across devices: reading on the
+    // phone has to clear it on the desktop too.
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const { body: created } = await request(app).post('/sessions');
+    const res = await request(app).post('/viewed').send({ session: created.id });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(sessionsApi.markViewed).toHaveBeenCalledWith(created.id);
+  });
+
+  it('POST /viewed requires a valid session (400 if missing, 404 if unknown)', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    expect((await request(app).post('/viewed').send({})).status).toBe(400);
+    expect((await request(app).post('/viewed').send({ session: 'nope-such' })).status).toBe(404);
+  });
+
   it('POST /refresh requires a valid session (400 if missing, 404 if unknown)', async () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });
@@ -186,7 +209,7 @@ describe('session-aware endpoints', () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });
     const evil = "x';rm -rf /;'";
-    for (const path of ['/send', '/key', '/refresh']) {
+    for (const path of ['/send', '/key', '/refresh', '/viewed']) {
       const body = path === '/send' ? { session: evil, text: 'x' }
                  : path === '/key'  ? { session: evil, key: 'enter' }
                  :                    { session: evil };

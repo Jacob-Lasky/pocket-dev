@@ -273,6 +273,79 @@ describe('resuming an interrupted conversation', () => {
   });
 });
 
+describe('read/unread, server-side so devices agree', () => {
+  it('a session that has produced output nobody has opened is unread', () => {
+    const { api } = makeApi();
+    api.create();
+    spawned[0].proc.emit('claude says something');
+    expect(api.describe()[0].unread).toBe(true);
+  });
+
+  it('marking it viewed clears it', () => {
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.emit('output');
+    expect(api.markViewed(state.id)).toBe(true);
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('output after the last view makes it unread again', () => {
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.emit('first');
+    api.markViewed(state.id);
+    spawned[0].proc.emit('and then more');
+    expect(api.describe()[0].unread).toBe(true);
+  });
+
+  it('a session that has said nothing is not unread', () => {
+    const { api } = makeApi();
+    api.create();
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('markViewed on an unknown session is a no-op, not a throw', () => {
+    const { api } = makeApi();
+    expect(api.markViewed('main-99')).toBe(false);
+  });
+
+  it('starts a restart with nothing unread', () => {
+    // Both counters restart with the process. The pty history is gone anyway,
+    // so resurfacing sessions you already dealt with would be pure noise.
+    const first = makeApi();
+    const state = first.api.create();
+    spawned[0].proc.emit('output');
+    first.api.markViewed(state.id);
+
+    const second = makeApi();
+    second.api.restore();
+    expect(second.api.describe()[0].unread).toBe(false);
+  });
+
+  it('counts output rather than timing it', () => {
+    // Regression guard for a real defect: comparing wall-clock timestamps
+    // swallowed output that landed in the same millisecond as the view, and no
+    // choice of > or >= fixes that because the timestamps cannot tell "just
+    // before you looked" from "just after".
+    const { api } = makeApi();
+    const state = api.create();
+    api.markViewed(state.id);
+    spawned[0].proc.emit('same millisecond as the view');
+    expect(api.describe()[0].unread).toBe(true);
+  });
+
+  it('surfaces output that arrived after the restart', () => {
+    const first = makeApi();
+    const state = first.api.create();
+    first.api.markViewed(state.id);
+
+    const second = makeApi();
+    second.api.restore();
+    spawned[spawned.length - 1].proc.emit('something new');
+    expect(second.api.describe()[0].unread).toBe(true);
+  });
+});
+
 describe('the command tmux is told to run', () => {
   it('quotes the launcher path, so a checkout dir with spaces still starts', () => {
     const cmd = buildSessionCommand();
@@ -338,6 +411,8 @@ describe('describe(): what the browser is told about each session', () => {
       title: 'Restore sessions across restarts',
       lastPrompt: 'continue please',
       status: 'busy',
+      unread: false,
+      lastOutputAt: 0,
     }]);
   });
 

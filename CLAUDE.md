@@ -114,6 +114,24 @@ Two dead ends are recorded in the code as DO-NOTs, both of which were tried:
 
 **Test coverage** splits along the same seams: `test/e2e/restore.spec.js` drives real restarts through the browser (roster half only, since the fixture is `cat`); `test/server/sessionsRestore.test.js` injects a fake pty to cover restore, id sequencing, and every branch of the resume decision; `test/server/sessionLauncher.test.js` runs the launcher against a stub `claude` on PATH; `test/server/claudeSession.test.js` pins the transcript shapes the classifier reads; `test/server/trustWorkspace.test.js` runs the trust script for real; and `test/e2e/titles.spec.js` runs on the `pdServerClaudeStub` fixture, which leaves `SHELL_CMD` unset and shadows `claude` on PATH with `test/e2e/stub-bin/claude` so the launcher, the sid-file handoff, and titles all execute for real in a browser test. That stub derives its log path from `PD_SID_FILE` rather than its own env var, because tmux only forwards what `update-environment` names and a pty-set variable arrives only when that test happened to start the tmux server: it passed alone and failed under parallel workers. None of that substitutes for a live pass: the resume path is exactly the kind of thing that is green in CI and broken against a real Claude, which is how the typed-nudge design got caught.
 
+## The session list — three states from two sources
+
+`#session-list` is a full-screen overlay (NOT a swap of `#terminal-stack`'s contents: the panes underneath must keep their layout, see the `.terminal-pane` comment). It is opened by the `Sessions` button, and each row is a session with its conversation title, a preview line, and one of three states.
+
+**Two of the three states come from the transcript; the third cannot.** `classifyTranscript` returns `busy` or `idle`, which is working-versus-finished. But **"waiting on you" and "read" are the SAME `idle` transcript state** — nothing on disk knows whether a human has looked. DO NOT go hunting for a third state in the JSONL; there isn't one.
+
+That axis is tracked by the server, so every device agrees (read it on the phone, it is read on the desktop). It **counts output rather than timing it**: `state.outputSeq` against `state.viewedSeq`, with `POST /viewed` catching the latter up to the former. Wall-clock timestamps were the first implementation and were wrong — output landing in the same millisecond as a view compares equal and gets swallowed, and no choice of `>` or `>=` fixes it, because timestamps genuinely cannot separate "printed just before you looked" from "just after". Both counters restart with the process, so after a restart nothing is unread until a session says something new; the pty history is gone anyway, and resurfacing sessions you already dealt with would be noise. `lastOutputAt` survives only as a display value for the row's relative time.
+
+Two rules the UI depends on: **the active session is never unread** (you are looking at it, so its output is read as it arrives), and while you sit in a session a throttled `POST /viewed` keeps the server's record in step so another device does not still think it wants you.
+
+`busy` always wins over the read/unread axis, and everything unrecognised folds into it, so the list still works for a session with no transcript yet or a custom `SHELL_CMD` that is not Claude at all.
+
+**A page reload cannot mark anything unread**, because the server counts only real pty output and the buffer replay it sends on attach is not that. `test/e2e/session-list.spec.js` has the regression guard.
+
+The `Sessions` button carries a dot when a session OTHER than the active one wants attention, which is the reason the metadata poll keeps running (slowly) while you are inside a session rather than only while the list is open.
+
+The list REPLACED the cycle row: `#btn-row-tmux` and its Next/Last buttons are gone, `Kill` moved into the session's own toolbar next to the thing it destroys, and `#session-label` became a permanent strip above the toolbar (outside `#btn-group`, so collapsing the toolbar cannot hide it — on a phone there is no browser tab title, so it is the only persistent answer to "which session am I in"). Cycling survives only as the Ctrl-B prefix keys, which need no UI.
+
 ## Deploy
 
 - CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags).

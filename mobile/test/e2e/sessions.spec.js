@@ -7,14 +7,14 @@
 // history mixed together. This spec sends a unique marker into each session
 // and verifies the visible terminal only contains that session's marker.
 
-import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import {
+  test, expect, gotoTest, waitForConnection, sendAndWaitForEcho,
+  newSession, switchToRow, killActiveSession,
+} from './fixtures.js';
 
-async function clickTmuxButton(page, btnText) {
-  // The "tmux" button reveals the session-switch row, which contains +New /
-  // Next / Last / Kill. The row hides itself after the action; reopen each time.
-  await page.click('#tmux-btn');
-  await page.click(`#btn-row-tmux >> text=${btnText}`);
-}
+// Switching sessions is the session list's job now: the cycle row it replaced
+// is gone. The guarantee under test is unchanged (each session keeps its own
+// scrollback); only the way you get between them moved.
 
 async function visibleText(page) {
   return page.evaluate(() => document.querySelector('#terminal-container').innerText.replace(/\s+/g, ''));
@@ -35,8 +35,8 @@ test('+New / Next / Last switches between independent per-session scrollback', a
   // Session 1: type marker A
   await sendAndWaitForEcho(page, 'marker-alpha-XYZ');
 
-  // Create session 2 via +New
-  await clickTmuxButton(page, '+New');
+  // Create session 2
+  await newSession(page);
   await waitForConnection(page);
   await expect.poll(() => sessionCount(page)).toBe(2);
 
@@ -49,14 +49,14 @@ test('+New / Next / Last switches between independent per-session scrollback', a
   expect(txt).toContain('marker-beta-QED');
   expect(txt).not.toContain('marker-alpha-XYZ');
 
-  // Last: back to session 1 — should show A, not B
-  await clickTmuxButton(page, 'Last');
+  // Back to session 1 — should show A, not B
+  await switchToRow(page, 0);
   await expect.poll(() => visibleText(page), { timeout: 3000 }).toContain('marker-alpha-XYZ');
   txt = await visibleText(page);
   expect(txt).not.toContain('marker-beta-QED');
 
-  // Next: forward cycle to session 2 — should show B, not A
-  await clickTmuxButton(page, 'Next');
+  // Forward to session 2 — should show B, not A
+  await switchToRow(page, 1);
   await expect.poll(() => visibleText(page), { timeout: 3000 }).toContain('marker-beta-QED');
   txt = await visibleText(page);
   expect(txt).not.toContain('marker-alpha-XYZ');
@@ -66,16 +66,16 @@ test('Kill removes current session and switches to next (never zero sessions)', 
   await gotoTest(page, pdServer);
   await waitForConnection(page);
 
-  await clickTmuxButton(page, '+New');
+  await newSession(page);
   await waitForConnection(page);
   await expect.poll(() => sessionCount(page)).toBe(2);
 
-  await clickTmuxButton(page, 'Kill');
+  await killActiveSession(page);
   // One session killed → exactly one remains
   await expect.poll(() => sessionCount(page)).toBe(1);
 
   // Killing the last session should respawn so we never have zero
-  await clickTmuxButton(page, 'Kill');
+  await killActiveSession(page);
   await expect.poll(() => sessionCount(page), { timeout: 5000 }).toBe(1);
   // And the dot should reconnect on the replacement session
   await waitForConnection(page);
