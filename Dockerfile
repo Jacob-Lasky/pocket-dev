@@ -132,10 +132,11 @@ RUN groupadd -g 281 docker || true && \
 # libcups2, libatspi2.0-0). That is the exact breakage the apt block warns about,
 # so the distro bump belongs in its own change with the deps list rechecked.
 #
-# pnpm is installed with `npm install -g` rather than corepack. corepack would
-# read `packageManager` for us, but it was removed from Node in 26, so pinning
-# the version explicitly here is the approach that survives the next base bump.
-# Keep this version in step with `packageManager` in mobile/package.json.
+# pnpm comes from corepack, which Node bundles up to 24, NOT from `npm install -g`.
+# corepack reads the `packageManager` pin in mobile/package.json, so the version
+# lives in exactly one place and cannot drift between here, CI, and the lockfile.
+# This is a second reason to hold the base at an LTS: Node 25 dropped bundled
+# corepack, and moving past 24 means reintroducing an `npm i -g pnpm` bootstrap.
 #
 # --prod drops devDependencies (vitest, playwright) from the runtime image, and
 # --frozen-lockfile makes the build fail loudly if pnpm-lock.yaml is out of step
@@ -145,7 +146,7 @@ RUN groupadd -g 281 docker || true && \
 # assets with express.static(__dirname + '/node_modules/@xterm/xterm'), and that
 # resolves through the symlink into the .pnpm store normally. Verified by running
 # the e2e suite against a pnpm install, which loads those assets over /xterm.
-RUN npm install -g pnpm@11.3.0
+RUN corepack enable pnpm
 COPY mobile/ /mobile/
 RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && \
     pnpm install --prod --frozen-lockfile && \
