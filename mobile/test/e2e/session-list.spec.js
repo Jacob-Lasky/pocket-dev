@@ -9,14 +9,17 @@
 // Runs on pdServerClaudeStub, which leaves SHELL_CMD unset so real conversation
 // ids and titles exist. The cat fixture cannot reach any of that.
 
-import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
+import {
+  test, expect, gotoTest, waitForConnection,
+  openSessionList, newSession, switchToRow, sessionRows,
+} from './fixtures.js';
 
 const titleRecord  = (t) => ({ type: 'ai-title', aiTitle: t });
 const promptRecord = (p) => ({ type: 'last-prompt', lastPrompt: p });
 const finishedTurn = { type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } };
 const workingTurn  = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } };
 
-const openList  = (page) => page.click('#sessions-btn');
+const openList = openSessionList;
 const rowCount  = (page) => page.locator('.sl-row').count();
 const listShown = (page) => page.evaluate(() => document.body.dataset.view === 'list');
 
@@ -36,11 +39,6 @@ async function sendTo(page, id, text) {
       body: JSON.stringify({ session: id, text }),
     });
   }, { id, text });
-}
-
-async function newSession(page) {
-  await openList(page);
-  await page.click('#sl-bar >> text=+ New');
 }
 
 test('the list shows one row per session, titled by its conversation', async ({ pdServerClaudeStub, page }) => {
@@ -131,8 +129,15 @@ test('the Sessions button flags another session wanting attention', async ({ pdS
   await newSession(page);
   await waitForConnection(page);
 
-  // Nothing pending: both sessions have been looked at.
-  await expect(page.locator('#sessions-btn')).not.toHaveClass(/has-unread/);
+  // Establish the baseline rather than assuming it. Session 1 keeps painting
+  // for a moment after session 2 takes over, so it is legitimately unread until
+  // it settles: sit in it until the SERVER agrees it is read, then leave.
+  await switchToRow(page, 0);
+  await expect
+    .poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-1`)?.unread, { timeout: 20000 })
+    .toBe(false);
+  await switchToRow(page, 1);
+  await expect(page.locator('#sessions-btn')).not.toHaveClass(/has-unread/, { timeout: 10000 });
 
   // Session 1 produces output while session 2 is on screen. Learning that
   // without leaving this session is the whole point of the badge.
