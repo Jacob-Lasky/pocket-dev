@@ -4,7 +4,7 @@
 # tailscaled: userspace tailscaled cannot resolve .consul split-DNS for outbound
 # connections (tailscale#16906, tailscale#4677), which is the entire point here.
 # The Go side in vpn/ resolves names via the tsnet LocalAPI instead. Built static
-# (CGO_ENABLED=0) so it drops into the node:20-slim final image with no runtime
+# (CGO_ENABLED=0) so it drops into the node:24-bookworm-slim final image with no runtime
 # deps. Pin matches vpn/go.mod's `go 1.26`.
 FROM golang:1.26-bookworm AS dgvpn-builder
 WORKDIR /build/vpn
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /dgvpn-proxy -ldflags='-s -w' .
 
-FROM node:20-slim
+FROM node:24-bookworm-slim
 
 # Install system dependencies
 # build-essential + python3 are required to compile node-pty (native addon).
@@ -118,12 +118,38 @@ RUN groupadd -g 281 docker || true && \
     chmod -R 775 /workspace /home/claude/.claude /home/claude/.pocket-dev
 
 # Install pocket-dev server (as root, before switching users)
-# npm install compiles node-pty natively here. This is an expensive layer, so it
+# pnpm install compiles node-pty natively here. This is an expensive layer, so it
 # comes BEFORE the dgvpn block: dgvpn changes far more often than mobile/, and
 # putting the frequently-changing dgvpn COPY after this keeps the node-pty
 # rebuild cached on vpn-only changes.
+#
+# Node 24, not 20: pnpm 11 refuses to run on anything below Node 22.13, and
+# Node 20 went end-of-life in April 2026. Keep this at a current LTS.
+#
+# The tag is bookworm-slim, NOT plain 24-slim. Plain would move the base to
+# Debian trixie in the same change, and trixie renamed several of the Playwright
+# runtime libs installed above to their t64 variants (libasound2, libatk1.0-0,
+# libcups2, libatspi2.0-0). That is the exact breakage the apt block warns about,
+# so the distro bump belongs in its own change with the deps list rechecked.
+#
+# pnpm comes from corepack, which Node bundles up to 24, NOT from `npm install -g`.
+# corepack reads the `packageManager` pin in mobile/package.json, so the version
+# lives in exactly one place and cannot drift between here, CI, and the lockfile.
+# This is a second reason to hold the base at an LTS: Node 25 dropped bundled
+# corepack, and moving past 24 means reintroducing an `npm i -g pnpm` bootstrap.
+#
+# --prod drops devDependencies (vitest, playwright) from the runtime image, and
+# --frozen-lockfile makes the build fail loudly if pnpm-lock.yaml is out of step
+# with package.json instead of silently resolving something else.
+#
+# pnpm's default symlinked node_modules is kept: server.js serves xterm's browser
+# assets with express.static(__dirname + '/node_modules/@xterm/xterm'), and that
+# resolves through the symlink into the .pnpm store normally. Verified by running
+# the e2e suite against a pnpm install, which loads those assets over /xterm.
+RUN corepack enable pnpm
 COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && npm install --production && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && \
+    pnpm install --prod --frozen-lockfile && \
     chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-trust-workspace && \
     chown -R claude:users /mobile
 

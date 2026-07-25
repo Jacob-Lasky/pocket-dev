@@ -3,6 +3,11 @@ on:
   push:
     branches: [main]
   pull_request:
+env:
+  # One place per artifact: this covers both CI jobs. The image has its own copy
+  # in the Dockerfile's FROM, which a workflow cannot read. Keep the two in step
+  # and bump them in the same change; they are the same decision (newest LTS).
+  NODE_VERSION: '24'
 jobs:
   unit-and-server:
     runs-on: ubuntu-latest
@@ -11,13 +16,18 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # No version here on purpose: read the `packageManager` pin so CI, the
+          # image, and the lockfile cannot drift apart.
+          package_json_file: mobile/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: mobile/package-lock.json
-      - run: npm ci
-      - run: npm test
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: mobile/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
   e2e:
     runs-on: ubuntu-latest
     defaults:
@@ -25,13 +35,18 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # No version here on purpose: read the `packageManager` pin so CI, the
+          # image, and the lockfile cannot drift apart.
+          package_json_file: mobile/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: mobile/package-lock.json
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: mobile/pnpm-lock.yaml
       - run: sudo apt-get update && sudo apt-get install -y tmux
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - id: pw-version
         working-directory: mobile
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> $GITHUB_OUTPUT
@@ -41,10 +56,10 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.v }}
       - if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps firefox chromium webkit
+        run: pnpm exec playwright install --with-deps firefox chromium webkit
       - if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps firefox chromium webkit
-      - run: npm run test:e2e
+        run: pnpm exec playwright install-deps firefox chromium webkit
+      - run: pnpm test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

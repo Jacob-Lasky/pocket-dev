@@ -1,0 +1,22 @@
+# pnpm settings live here, NOT in package.json: pnpm 11 stopped reading the
+# "pnpm" field and only warns that the keys were ignored (https://pnpm.io/settings).
+#
+# node-pty ships prebuilds for darwin and win32 only, no linux-x64, so on this
+# image it MUST compile at install time. pnpm blocks dependency build scripts by
+# default, so without the entry below every server suite dies with
+# "Cannot find module ./prebuilds/linux-x64//pty.node".
+#
+# DO NOT rename this to `onlyBuiltDependencies`. That is pnpm 10's spelling and
+# pnpm 11.17.0 ignores it SILENTLY. Measured, not assumed — node-pty installed
+# into three throwaway projects, each with its own store:
+#
+#   allowBuilds only            -> build/Release/pty.node BUILT
+#   onlyBuiltDependencies only  -> ERR_PNPM_IGNORED_BUILDS, pty.node MISSING
+#   neither (control)           -> ERR_PNPM_IGNORED_BUILDS, pty.node MISSING
+#
+# The old key is worth exactly as much as no config at all, and it fails at
+# install time rather than at the point of use. Both keys were present when this
+# migration was first written, with this comment attached to the dead one.
+allowBuilds:
+  esbuild: true
+  node-pty: true
