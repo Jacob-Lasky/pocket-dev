@@ -447,6 +447,19 @@
         return b.viewportY >= b.baseY;
       }
 
+      // The ONLY hook that sees a user-driven scroll, so the scroll-to-bottom
+      // button depends on it. term.onScroll does not fire for one: xterm's
+      // Viewport requests scrollLines with suppressScrollEvent set, and
+      // BufferService.scrollLines skips the event when it is, to avoid looping
+      // back into the viewport the scroll came from. Before this, the button
+      // appeared only once fresh OUTPUT arrived (which scrolls the buffer, and
+      // does fire onScroll), so scrolling up on a quiet terminal left no way
+      // back down but scrolling by hand. Keep this called on every viewport
+      // scroll; test/e2e/follow-guard.spec.js asserts the button appears.
+      syncScrollBtn() {
+        if (activeId === this.id) updateScrollBtn();
+      }
+
       // Undo scroll positions the browser imposed, keep the ones a user chose.
       //
       // xterm cannot tell those apart. Viewport._handleScroll turns any
@@ -503,11 +516,13 @@
           // anyone made. Restore the one the pane had.
           if ((shrank || noRange) && this.follow && !this.isAtBottom()) {
             this.term.scrollToBottom();
+            this.syncScrollBtn();
             return;
           }
           // Otherwise wherever the pane ends up IS the intent, in both
           // directions: scrolling back to the bottom re-arms following.
           this.follow = this.isAtBottom();
+          this.syncScrollBtn();
         }, { passive: true });
       }
 

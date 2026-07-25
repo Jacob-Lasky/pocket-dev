@@ -108,6 +108,33 @@ test('a real wheel scroll up still wins, and new output does not yank the pane b
   await expect.poll(() => offsetFromBottom(page), { timeout: 5000 }).toBeGreaterThanOrEqual(parkedAt);
 });
 
+test('scrolling up reveals the scroll-to-bottom button, and it re-arms following', async ({ pdServer, page }) => {
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await fillScrollback(page);
+  await expect(page.locator('#scroll-bottom')).toBeHidden();
+
+  await wheelOverPane(page, -400);
+  await expect.poll(() => offsetFromBottom(page), { timeout: 5000 }).toBeGreaterThan(0);
+
+  // Asserted explicitly because it used to be false. term.onScroll does not
+  // fire for a viewport-sourced scroll (xterm suppresses it), and that was the
+  // app's only trigger for updateScrollBtn, so the button stayed hidden until
+  // fresh output happened to arrive. Scrolling up on a quiet terminal left no
+  // way back down but scrolling by hand.
+  await expect(page.locator('#scroll-bottom')).toBeVisible();
+
+  await page.click('#scroll-bottom');
+  await expect.poll(() => offsetFromBottom(page), { timeout: 5000 }).toBe(0);
+
+  // The button moving the viewport is not enough on its own. If it did not also
+  // clear the "user scrolled away" state, the pane would sit at the bottom
+  // while still refusing to follow, and the next line of output would strand it
+  // again.
+  await page.evaluate(() => window.term.write('after-button\r\n'));
+  await expect.poll(() => offsetFromBottom(page), { timeout: 5000 }).toBe(0);
+});
+
 test('scrolling back down re-arms following', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
