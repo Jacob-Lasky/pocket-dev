@@ -8,7 +8,7 @@
 // and writes into test-artifacts/.
 
 import path from 'node:path';
-import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho, newSession } from './fixtures.js';
 
 const OUT = path.resolve(__dirname, '../../test-artifacts');
 
@@ -20,8 +20,7 @@ test('artifact: tabs and terminal survive a container restart', async ({ pdServe
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'BEFORE-RESTART: this session was alive');
 
-  await page.click('#sessions-btn');
-  await page.click('#sl-bar >> text=+ New');
+  await newSession(page);
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'SECOND TAB: also alive');
   await expect.poll(async () => (await page.evaluate(async () => (await (await fetch('/sessions')).json()).length))).toBe(2);

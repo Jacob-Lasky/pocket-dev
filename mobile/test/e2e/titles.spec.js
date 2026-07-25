@@ -7,7 +7,10 @@
 // RESUME_ENABLED in server.js). The stub shadows `claude` on PATH instead, so
 // the launcher, the sid-file handoff, and GET /sessions all run for real.
 
-import { test, expect, gotoTest, waitForConnection } from './fixtures.js';
+import {
+  test, expect, gotoTest, waitForConnection,
+  openSessionList, newSession, switchToRow, sessionRows,
+} from './fixtures.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -16,16 +19,12 @@ const promptRecord = (p) => ({ type: 'last-prompt', lastPrompt: p });
 const finishedTurn = { type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } };
 const workingTurn  = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } };
 
-async function sessionRows(page) {
-  return page.evaluate(async () => (await (await fetch('/sessions')).json()));
-}
-
-async function openSwitcher(page) {
-  // The counter and label live in the switcher row, now reached through the
-  // session list. The list shows the same titles per row; this asserts the
-  // older surface still carries them.
-  await page.click('#sessions-btn');
-  await page.click('#sl-bar >> text=Switcher');
+// The label is a permanent strip above the toolbar now, so there is nothing to
+// open: it is on screen whether or not the toolbar is expanded. Titles drift as
+// a conversation goes on, so give the poll a moment to pick a new one up.
+async function refreshMeta(page) {
+  await openSessionList(page);   // opening the list refetches
+  await page.keyboard.press('Escape');
 }
 
 test('a session is launched bound to a conversation id', async ({ pdServerClaudeStub, page }) => {
@@ -60,9 +59,9 @@ test('the switcher and the browser tab show the conversation title', async ({ pd
     finishedTurn,
   ]);
 
-  // Opening the switcher refetches, because a conversation renames itself as
-  // it goes and the page-load value goes stale.
-  await openSwitcher(page);
+  // A conversation renames itself as it goes, so refetch rather than trusting
+  // whatever was current at page load.
+  await refreshMeta(page);
 
   await expect
     .poll(() => page.textContent('#session-label'), { timeout: 8000 })
@@ -94,7 +93,7 @@ test('GET /sessions carries title, preview and status per session', async ({ pdS
 test('a session with no transcript falls back to the counter, not a blank label', async ({ pdServerClaudeStub, page }) => {
   await gotoTest(page, pdServerClaudeStub);
   await waitForConnection(page);
-  await openSwitcher(page);
+  await refreshMeta(page);
   expect((await page.textContent('#session-label')).trim()).toBe('1/1');
   expect(await page.title()).toBe('pocket-dev');
 });
@@ -103,8 +102,7 @@ test('each tab gets its own conversation, and the label follows the active one',
   await gotoTest(page, pdServerClaudeStub);
   await waitForConnection(page);
 
-  await page.click('#sessions-btn');
-  await page.click('#sl-bar >> text=+ New');
+  await newSession(page);
   await waitForConnection(page);
   await expect.poll(async () => (await sessionRows(page)).length).toBe(2);
 
@@ -117,10 +115,9 @@ test('each tab gets its own conversation, and the label follows the active one',
   await pdServerClaudeStub.writeTranscript(uuid2, [titleRecord('Second conversation'), workingTurn]);
 
   // Session 2 is active after +New.
-  await openSwitcher(page);
+  await refreshMeta(page);
   await expect.poll(() => page.textContent('#session-label'), { timeout: 8000 }).toContain('Second conversation');
 
-  await page.click('#btn-row-tmux >> text=Last');
-  await openSwitcher(page);
+  await switchToRow(page, 0);
   await expect.poll(() => page.textContent('#session-label'), { timeout: 8000 }).toContain('First conversation');
 });

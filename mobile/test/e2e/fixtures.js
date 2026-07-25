@@ -242,6 +242,35 @@ export async function waitForConnection(page, timeout = 5000) {
   );
 }
 
+// ── Driving the session list ────────────────────────────────────────────────
+// The list is how you move between sessions now, so most specs need these.
+// They live here rather than being copied per spec: when the UI moves again,
+// there is one place to change.
+
+export async function openSessionList(page) {
+  await page.click('#sessions-btn');
+}
+
+export async function newSession(page) {
+  await openSessionList(page);
+  await page.click('#sl-bar >> text=+ New');
+}
+
+export async function switchToRow(page, index) {
+  await openSessionList(page);
+  await page.locator('.sl-row').nth(index).click();
+}
+
+// Kill lives in the session itself, next to the thing it destroys, rather than
+// on a list you scan one-handed.
+export async function killActiveSession(page) {
+  await page.click('#btn-row-normal ~ .btn-row >> text=Kill');
+}
+
+export async function sessionRows(page) {
+  return page.evaluate(async () => (await (await fetch('/sessions')).json()));
+}
+
 // Type a marker into the input bar, click Send, and wait for the marker to
 // actually arrive back in xterm.js's terminal DOM (proves the full PTY
 // roundtrip: POST /send → tmux → bash → cat → echo → ws → term.write).

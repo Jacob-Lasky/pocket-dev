@@ -363,19 +363,30 @@
       box-shadow: 0 0 5px #3fb95088;
     }
 
-    /* Session counter label inside the tmux row */
+    /* Which session am I in. Sits above the button group and outside it, so
+       collapsing the toolbar cannot hide it: on a phone there is no browser tab
+       title, and with the cycle row gone this is the only persistent answer.
+       Tapping it opens the list. */
     .session-label {
-      flex: 1 1 auto;
-      min-width: 0;
-      align-self: center;
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: 0;
+      border-bottom: 1px solid #21262d;
+      padding: 2px 4px 6px;
+      margin: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      padding: 0 6px;
       font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
       font-size: 12px;
       color: #8b949e;
+      cursor: pointer;
+      touch-action: manipulation;
     }
+    .session-label:active { color: #e6edf3; }
+    .session-label:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
 
     /* Desktop layout */
     @media (min-width: 768px) {
@@ -401,6 +412,7 @@
       <div id="terminal-stack"></div>
     </div>
     <div id="controls">
+      <button id="session-label" class="session-label" onclick="openSessionList()" title="Open the session list">–</button>
       <div id="btn-group">
         <!-- Normal row -->
         <div id="btn-row-normal" class="btn-row">
@@ -411,24 +423,13 @@
           <button id="mode-select" class="action-btn mode-btn" onclick="toggleSelect()" title="Select / copy text from the current screen">Select</button>
           <button id="sessions-btn" class="action-btn tmux-btn" onclick="openSessionList()" title="All sessions">Sessions</button>
         </div>
-        <!-- Session-switch row: the counter and label live here, still revealed
-             by the list's "Switcher" control. Cycling is kept because the Ctrl-B
-             prefix keys drive it, and because whether the list REPLACES this row
-             outright is still an open question on #21. -->
-        <div id="btn-row-tmux" class="btn-row" style="display:none">
-          <span id="session-label" class="session-label">–</span>
-          <button class="action-btn tmux-btn" onclick="tmuxNew()"  title="New session">+New</button>
-          <button class="action-btn tmux-btn" onclick="tmuxNext()" title="Next session">Next</button>
-          <button class="action-btn tmux-btn" onclick="tmuxLast()" title="Previously-active session">Last</button>
-          <button class="action-btn tmux-kill" onclick="tmuxKill()" title="Kill current session">Kill</button>
-          <button class="action-btn" onclick="hideTmuxRow()" title="Back to normal buttons">✕</button>
-        </div>
         <div class="btn-row">
           <button class="action-btn" onclick="sendKey('left')"  title="Left">←</button>
           <button class="action-btn" onclick="sendKey('right')" title="Right">→</button>
           <button class="action-btn" onclick="sendKey('up')"    title="Up">↑</button>
           <button class="action-btn" onclick="sendKey('down')"  title="Down">↓</button>
           <button class="action-btn" onclick="refreshTerminal()" title="Refresh terminal display">⟳</button>
+          <button class="action-btn tmux-kill" onclick="tmuxKill()" title="Kill this session">Kill</button>
         </div>
       </div>
       <div id="input-row">
@@ -445,7 +446,6 @@
   <div id="session-list">
     <div id="sl-bar">
       <span id="sl-count">–</span>
-      <button class="action-btn" onclick="showSwitcher()" title="Cycle / kill controls">Switcher</button>
       <button class="action-btn tmux-btn" onclick="newSessionFromList()" title="Start a new session">+ New</button>
     </div>
     <ul id="sl-rows"></ul>
@@ -601,9 +601,9 @@
         this.title      = null;
         this.lastPrompt = null;
         this.claudeStatus = 'unknown';
-        // When this session last produced output, for the read/unread axis.
+        // Server-authoritative, refreshed by every GET /sessions.
+        this.unread = false;
         this.lastOutputAt = 0;
-        this.replayUntil  = 0;
 
         this.ws       = null;
         this.wsStatus = 'connecting';
@@ -679,10 +679,6 @@
           // reattach repaint cleanly instead of painting a fresh Claude frame
           // over the pre-restart one.
           this.term.reset();
-          // The server replays its whole buffer as a single send the moment we
-          // attach. That is old output, not news: counting it would turn every
-          // page reload into "all five sessions need you".
-          this.replayUntil = Date.now() + 250;
           this.setStatus('connected');
           if (activeId === this.id) {
             this.fitAndResize();
@@ -706,12 +702,18 @@
         ws.onmessage = e => {
           const str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
           this.term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
-          if (Date.now() > this.replayUntil) {
-            this.lastOutputAt = Date.now();
-            // Output you are actually looking at is read as it arrives.
-            if (activeId === this.id && document.body.dataset.view !== 'list') markViewed(this.id);
+          // The server owns unread and only counts real pty output, so a page
+          // reload replaying the buffer cannot mark anything unread. This is
+          // just an optimistic nudge so the badge does not wait for a poll.
+          if (activeId !== this.id) {
+            this.unread = true;
             updateSessionsBadge();
             if (document.body.dataset.view === 'list') renderSessionList();
+          } else {
+            // Keep the SERVER's record in step while you sit here reading, so
+            // another device does not still think this session wants you.
+            // Throttled: output arrives in a stream, /viewed does not need to.
+            markViewedThrottled(this.id);
           }
           // Track the inner app's mouse-tracking state so touch scroll knows
           // whether to forward wheel events to the coder or scroll xterm locally.
@@ -829,6 +831,8 @@
         s.title        = entry.title ?? null;
         s.lastPrompt   = entry.lastPrompt ?? null;
         s.claudeStatus = entry.status ?? 'unknown';
+        s.unread       = entry.unread === true;
+        s.lastOutputAt = entry.lastOutputAt || 0;
       }
       updateSessionLabel();
       updateDocumentTitle();
@@ -893,31 +897,39 @@
     // conversation is mid-turn or finished; "waiting on you" and "read" are the
     // SAME finished state and differ only by whether you have looked since its
     // last output. That axis cannot come from the transcript, so it is tracked
-    // here: lastOutputAt against lastViewedAt, persisted so a reload does not
-    // light every session up as unread.
-    const VIEWED_KEY = 'pd-last-viewed';
+    // by the server: it compares each session's last real output against the
+    // last time someone opened it, so the answer is the same on every device.
     const slRows  = document.getElementById('sl-rows');
     const slCount = document.getElementById('sl-count');
     const sessionsBtn = document.getElementById('sessions-btn');
 
-    let lastViewed = {};
-    try { lastViewed = JSON.parse(localStorage.getItem(VIEWED_KEY)) || {}; } catch { lastViewed = {}; }
-
-    function persistViewed() {
-      // Drop ids the server no longer has, so a killed session's timestamp
-      // cannot mark a future session of the same id as already read.
-      for (const id of Object.keys(lastViewed)) if (!sessions.has(id)) delete lastViewed[id];
-      try { localStorage.setItem(VIEWED_KEY, JSON.stringify(lastViewed)); } catch {}
-    }
-
+    // Read/unread lives on the SERVER, not in localStorage: "have I read this?"
+    // is a fact about the user, not the device, so a session read on the phone
+    // must not still look unread on the desktop. The local flag is only an
+    // optimistic overlay that the next poll confirms.
     function markViewed(id) {
       if (!id) return;
-      lastViewed[id] = Date.now();
-      persistViewed();
+      const s = sessions.get(id);
+      if (s) s.unread = false;
+      viewedSentAt.set(id, Date.now());
+      post('/viewed', { session: id });
+    }
+
+    // Output arrives as a stream; the "I am still reading this" ping does not
+    // need to.
+    const VIEWED_THROTTLE_MS = 2000;
+    const viewedSentAt = new Map();
+    function markViewedThrottled(id) {
+      if (Date.now() - (viewedSentAt.get(id) || 0) < VIEWED_THROTTLE_MS) return;
+      markViewed(id);
     }
 
     function isUnread(s) {
-      return s.lastOutputAt > (lastViewed[s.id] || 0);
+      // The session on screen is never unread. You are looking at it, so its
+      // output is read as it arrives; without this a busy active session would
+      // keep re-flagging itself the moment it printed anything.
+      if (s.id === activeId) return false;
+      return s.unread === true;
     }
 
     // busy always wins: it is the one state the transcript knows for certain.
@@ -1036,13 +1048,6 @@
     window.newSessionFromList = async function() {
       await createSession();
       closeSessionList();
-    };
-
-    // The cycle row still exists; whether the list replaces it outright is an
-    // open question on #21, so both remain reachable rather than deciding it here.
-    window.showSwitcher = function() {
-      closeSessionList();
-      showTmuxRow();
     };
 
     // ── Resync ──────────────────────────────────────────────────────────────
@@ -1371,22 +1376,7 @@
     });
 
     // ── Session-switch row (was: tmux row) ─────────────────────────────────
-    function showTmuxRow() {
-      document.getElementById('btn-row-normal').style.display = 'none';
-      document.getElementById('btn-row-tmux').style.display = 'flex';
-      updateSessionLabel();
-      // A conversation renames itself as it goes, so fetch on open rather than
-      // trusting whatever was current at page load.
-      refreshSessionMeta();
-    }
-
-    function hideTmuxRow() {
-      document.getElementById('btn-row-tmux').style.display = 'none';
-      document.getElementById('btn-row-normal').style.display = 'flex';
-    }
-
     async function tmuxNew() {
-      hideTmuxRow();
       await createSession();
     }
 
@@ -1397,16 +1387,13 @@
       setActive(next);
     }
 
-    function tmuxNext() { hideTmuxRow(); cycleActive(+1); }
-
     function tmuxLast() {
-      hideTmuxRow();
       if (previousId && sessions.has(previousId)) setActive(previousId);
       else cycleActive(+1);
     }
 
     async function tmuxKill() {
-      hideTmuxRow();
+      closeSessionList();
       const id = activeId;
       if (!id) return;
       // Never have zero sessions — create a replacement first if this is the last.
@@ -1470,7 +1457,7 @@
     // (the `<script type="module">` change scoped these to the module otherwise).
     Object.assign(window, {
       sendText, sendKey, scrollToBottom, toggleCollapse, refreshTerminal,
-      showTmuxRow, hideTmuxRow, tmuxNew, tmuxNext, tmuxLast, tmuxKill,
+      tmuxNew, tmuxLast, tmuxKill,
     });
   </script>
 </body>

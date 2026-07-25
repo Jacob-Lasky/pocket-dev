@@ -166,6 +166,13 @@ function createApp({ sessionsApi } = {}) {
       res.json({ ok: true });
     });
 
+    // Opening a session is what marks it read: it is the entire difference
+    // between "waiting on you" and "read", and the transcript cannot tell them
+    // apart. Kept server-side so it holds across every device.
+    app.post('/viewed', requireSession, (req, res) => {
+      res.json({ ok: sessionsApi.markViewed(req.session.id) });
+    });
+
     app.post('/refresh', requireSession, (req, res) => {
       // tmux refresh-client targets clients, not sessions. List clients of
       // this session, then refresh each. SAFE_ID guard in requireSession
@@ -245,9 +252,28 @@ function createSessionsApi({
       clients: new Set(),
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
+      // The read/unread axis, server-side so every device agrees.
+      //
+      // It counts output rather than timing it. Wall-clock comparison looked
+      // fine and was wrong: output landing in the SAME millisecond as a view
+      // compares equal and gets swallowed, and no ordering of > or >= fixes
+      // that, because the timestamps genuinely cannot distinguish "printed just
+      // before you looked" from "just after". A monotonic counter can, exactly,
+      // and owes nothing to clock resolution or a clock that steps.
+      //
+      // Both counters restart at zero with the process, so after a restart
+      // nothing is unread until the session actually says something new. That
+      // is deliberate: the pty history is gone anyway, and resurfacing five
+      // sessions you already dealt with would be noise.
+      outputSeq: 0,
+      viewedSeq: 0,
+      // Display only: how long ago the session last said anything.
+      lastOutputAt: 0,
     };
 
     ptyProc.onData(data => {
+      state.outputSeq += 1;
+      state.lastOutputAt = Date.now();
       appendToReplay(state, data);
       for (const ws of state.clients) {
         if (ws.readyState === 1) ws.send(data);
@@ -344,6 +370,15 @@ function createSessionsApi({
     return sessions.get(id);
   }
 
+  // Someone looked at this session. Recorded here rather than in the browser so
+  // reading a session on the phone also clears it on the desktop.
+  function markViewed(id) {
+    const state = sessions.get(id);
+    if (!state) return false;
+    state.viewedSeq = state.outputSeq;
+    return true;
+  }
+
   function list() {
     return [...sessions.values()].map(s => ({ id: s.id, cols: s.cols, rows: s.rows }));
   }
@@ -394,6 +429,8 @@ function createSessionsApi({
         title: meta.title,
         lastPrompt: meta.lastPrompt,
         status: meta.status,
+        unread: s.outputSeq > s.viewedSeq,
+        lastOutputAt: s.lastOutputAt,
       };
     });
   }
@@ -430,7 +467,7 @@ function createSessionsApi({
     ws.on('close', () => state.clients.delete(ws));
   }
 
-  return { create, restore, destroy, get, list, describe, attachWs };
+  return { create, restore, destroy, get, list, describe, markViewed, attachWs };
 }
 
 module.exports = {

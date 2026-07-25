@@ -6,6 +6,7 @@ const { SAFE_ID, UUID_RE } = require('./safeId');
 // restart brings the user's tabs back instead of dropping them to one blank
 // session.
 //
+//
 // WHY a file, when tmux already tracks sessions: tmux is not a source of truth
 // here. Its server is a child of this container's PID namespace and dies with
 // it, so after a restart there is nothing left to enumerate. The roster is
@@ -13,6 +14,11 @@ const { SAFE_ID, UUID_RE } = require('./safeId');
 // re-creates each id, and because it spawns with `new-session -A` that same
 // call REATTACHES when the tmux session did survive (node restarted, container
 // did not) and creates it fresh when it did not. One code path, both cases.
+//
+// Read/unread is deliberately NOT in here. It lives on the server (so every
+// device agrees) but only in memory, as a counter of output against a counter
+// of views: both restart with the process, and after a restart the pty history
+// is gone anyway, so nothing is unread until a session says something new.
 //
 // Alongside the roster we keep one tiny `<id>.uuid` file per session, written
 // by pd-claude-session and only ever read (and deleted) here. That is the

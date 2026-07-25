@@ -109,15 +109,19 @@ Resume is off whenever `SHELL_CMD` is set (the e2e fixture runs `cat`, which has
 
 `#session-list` is a full-screen overlay (NOT a swap of `#terminal-stack`'s contents: the panes underneath must keep their layout, see the `.terminal-pane` comment). It is opened by the `Sessions` button, and each row is a session with its conversation title, a preview line, and one of three states.
 
-**Two of the three states come from the server; the third cannot.** `classifyTranscript` returns `busy` or `idle`, which is working-versus-finished. But **"waiting on you" and "read" are the SAME `idle` transcript state** — nothing on disk knows whether a human has looked. That axis lives in the browser: `lastOutputAt` (set on WS output) against `lastViewed[id]` (set when a session becomes active), persisted in `localStorage`. DO NOT re-model this as three server-side states; there is no third state to read.
+**Two of the three states come from the transcript; the third cannot.** `classifyTranscript` returns `busy` or `idle`, which is working-versus-finished. But **"waiting on you" and "read" are the SAME `idle` transcript state** — nothing on disk knows whether a human has looked. DO NOT go hunting for a third state in the JSONL; there isn't one.
+
+That axis is tracked by the server, so every device agrees (read it on the phone, it is read on the desktop). It **counts output rather than timing it**: `state.outputSeq` against `state.viewedSeq`, with `POST /viewed` catching the latter up to the former. Wall-clock timestamps were the first implementation and were wrong — output landing in the same millisecond as a view compares equal and gets swallowed, and no choice of `>` or `>=` fixes it, because timestamps genuinely cannot separate "printed just before you looked" from "just after". Both counters restart with the process, so after a restart nothing is unread until a session says something new; the pty history is gone anyway, and resurfacing sessions you already dealt with would be noise. `lastOutputAt` survives only as a display value for the row's relative time.
+
+Two rules the UI depends on: **the active session is never unread** (you are looking at it, so its output is read as it arrives), and while you sit in a session a throttled `POST /viewed` keeps the server's record in step so another device does not still think it wants you.
 
 `busy` always wins over the read/unread axis, and everything unrecognised folds into it, so the list still works for a session with no transcript yet or a custom `SHELL_CMD` that is not Claude at all.
 
-**The replay window is load-bearing.** The server replays its entire buffer as one send on every attach. Counting that as new output would make every page reload announce that all five sessions need you, so output arriving within 250 ms of `onopen` does not touch `lastOutputAt`. `test/e2e/session-list.spec.js` has the regression guard.
+**A page reload cannot mark anything unread**, because the server counts only real pty output and the buffer replay it sends on attach is not that. `test/e2e/session-list.spec.js` has the regression guard.
 
 The `Sessions` button carries a dot when a session OTHER than the active one wants attention, which is the reason the metadata poll keeps running (slowly) while you are inside a session rather than only while the list is open.
 
-Whether the list should REPLACE the cycle row (`#btn-row-tmux`) is deliberately still open on #21, so both survive: the row is reached from the list's `Switcher` control.
+The list REPLACED the cycle row: `#btn-row-tmux` and its Next/Last buttons are gone, `Kill` moved into the session's own toolbar next to the thing it destroys, and `#session-label` became a permanent strip above the toolbar (outside `#btn-group`, so collapsing the toolbar cannot hide it — on a phone there is no browser tab title, so it is the only persistent answer to "which session am I in"). Cycling survives only as the Ctrl-B prefix keys, which need no UI.
 
 ## Deploy
 

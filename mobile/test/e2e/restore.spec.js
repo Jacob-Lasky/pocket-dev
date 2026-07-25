@@ -19,7 +19,10 @@
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import {
+  test, expect, gotoTest, waitForConnection, sendAndWaitForEcho,
+  newSession, killActiveSession,
+} from './fixtures.js';
 
 async function sessionIds(page) {
   return page.evaluate(async () => {
@@ -69,17 +72,6 @@ async function scrollOffsetFromBottom(page) {
     if (!t || !t.buffer) return -1;
     return t.buffer.normal.baseY - t.buffer.normal.viewportY;
   });
-}
-
-async function newSession(page) {
-  await page.click('#sessions-btn');
-  await page.click('#sl-bar >> text=+ New');
-}
-
-async function killActiveSession(page) {
-  await page.click('#sessions-btn');
-  await page.click('#sl-bar >> text=Switcher');
-  await page.click('#btn-row-tmux >> text=Kill');
 }
 
 test('a container restart brings every session back under its original id', async ({ pdServer, page }) => {
