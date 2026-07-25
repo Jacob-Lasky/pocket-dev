@@ -1,0 +1,27 @@
+#!/bin/bash
+# A stand-in for the real `claude`, so the e2e suite can exercise the paths that
+# only exist when pocket-dev owns the command line: pd-claude-session minting a
+# conversation id, the sid-file handoff, and titles reaching GET /sessions.
+#
+# The `cat` fixture cannot reach any of that, because setting SHELL_CMD turns
+# conversation resume off entirely (see RESUME_ENABLED in server.js). This stub
+# leaves SHELL_CMD unset and shadows `claude` on PATH instead.
+#
+# It records its argv for assertions, then becomes `cat` so the terminal still
+# echoes and the existing sendAndWaitForEcho helper keeps working.
+#
+# The log path is DERIVED from PD_SID_FILE rather than read from an environment
+# variable of its own, and that is load-bearing. tmux's server outlives any one
+# client and forwards only the variables named in `update-environment`, so a var
+# set on the pty arrives here ONLY when this test happened to be what started
+# the tmux server. An earlier version used its own var and passed when run
+# alone, then failed under parallel workers that shared a server. PD_SID_FILE is
+# delivered explicitly by `new-session -e` (see buildTmuxSpawnArgs), so it is
+# always present. DO NOT swap this back for a plain env var.
+log=""
+if [ -n "${PD_SID_FILE:-}" ]; then
+  log="$(dirname "$(dirname "$PD_SID_FILE")")/claude-argv.log"
+fi
+[ -n "$log" ] && printf '%s\n' "$*" >> "$log"
+
+exec cat

@@ -91,7 +91,10 @@ function textOf(message) {
 // stop_reason 'end_turn'. An interrupted stream leaves stop_reason null, a tool
 // call leaves 'tool_use', and both mean work was still in flight.
 function classifyTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
-  const lines = readTailLines(file, tailBytes);
+  return classifyRecords(readTailLines(file, tailBytes));
+}
+
+function classifyRecords(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
     let record;
     try {
@@ -117,6 +120,59 @@ function classifyTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
   return 'unknown';
 }
 
+// Longest title / preview we will hand to a caller. These strings come off disk
+// and end up in JSON and in the DOM, so they get a hard ceiling rather than a
+// trusting pass-through. A preview is one line by construction: newlines are
+// folded to spaces so a pasted multi-line prompt cannot break a list row.
+const MAX_TITLE  = 200;
+const MAX_PREVIEW = 240;
+
+function cleanOneLine(value, max) {
+  if (typeof value !== 'string') return null;
+  const flat = value.replace(/\s+/g, ' ').trim();
+  if (!flat) return null;
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+// Everything worth knowing about a conversation, from ONE read of the tail.
+//
+//   status      'busy' | 'idle' | 'unknown', as classifyTranscript
+//   title       Claude's own `aiTitle`, the name its resume picker shows
+//   lastPrompt  the user's most recent message, for a preview line
+//
+// Claude appends a fresh `ai-title` and `last-prompt` record on roughly every
+// turn (98 of each in a single 11 MB transcript, measured 2026-07-24), so the
+// LAST occurrence is the current one and we walk backwards to it. Measured
+// across six real transcripts, both records sit within 32 KB of EOF even in a
+// 14 MB file, comfortably inside the tail window: reading the whole file to
+// find them is never necessary and would be ruinous.
+//
+// Reading all three in one pass is the point of this function. The session list
+// asks for status and title together, repeatedly, and two passes would mean two
+// reads of a half-megabyte tail per session per poll.
+function inspectTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
+  const lines = readTailLines(file, tailBytes);
+  let title = null;
+  let lastPrompt = null;
+
+  for (let i = lines.length - 1; i >= 0 && (title === null || lastPrompt === null); i--) {
+    // Cheap reject before parsing: these two record types are rare next to the
+    // message records they are interleaved with.
+    if (!lines[i].includes('"ai-title"') && !lines[i].includes('"last-prompt"')) continue;
+    let record;
+    try {
+      record = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (!record) continue;
+    if (title === null && record.type === 'ai-title') title = cleanOneLine(record.aiTitle, MAX_TITLE);
+    if (lastPrompt === null && record.type === 'last-prompt') lastPrompt = cleanOneLine(record.lastPrompt, MAX_PREVIEW);
+  }
+
+  return { status: classifyRecords(lines), title, lastPrompt };
+}
+
 // Convenience wrapper: uuid -> 'busy' | 'idle' | 'unknown'.
 function statusOf(uuid, { projectsDir }) {
   const file = findTranscript(uuid, { projectsDir });
@@ -124,4 +180,12 @@ function statusOf(uuid, { projectsDir }) {
   return classifyTranscript(file);
 }
 
-module.exports = { findTranscript, classifyTranscript, statusOf };
+// uuid -> { status, title, lastPrompt }. A conversation with no transcript on
+// disk is not an error: a session created seconds ago has not written one yet.
+function inspect(uuid, { projectsDir, tailBytes = TAIL_BYTES } = {}) {
+  const file = findTranscript(uuid, { projectsDir });
+  if (!file) return { status: 'unknown', title: null, lastPrompt: null };
+  return inspectTranscript(file, { tailBytes });
+}
+
+module.exports = { findTranscript, classifyTranscript, inspectTranscript, statusOf, inspect };

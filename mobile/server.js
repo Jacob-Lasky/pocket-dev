@@ -1,4 +1,5 @@
 const express  = require('express');
+const fs       = require('fs');
 const http     = require('http');
 const os       = require('os');
 const path     = require('path');
@@ -122,7 +123,10 @@ function createApp({ sessionsApi } = {}) {
     }
 
     app.get('/sessions', (req, res) => {
-      res.json(sessionsApi.list());
+      // describe(), not list(): the browser wants each session's title and
+      // state, not just its id. list() stays cheap because it is also what
+      // gets written to the roster on every create and destroy.
+      res.json(sessionsApi.describe());
     });
 
     app.post('/sessions', (req, res) => {
@@ -344,6 +348,56 @@ function createSessionsApi({
     return [...sessions.values()].map(s => ({ id: s.id, cols: s.cols, rows: s.rows }));
   }
 
+  // Transcript metadata, memoised against the file's mtime and size.
+  //
+  // Without this, every GET /sessions would re-read a tail window per session,
+  // and the session list polls. A transcript only ever grows, so mtime plus
+  // size is a sound cache key: any new turn moves both. Re-resolving the path
+  // is also skipped while it still points at a real file, since findTranscript
+  // scans the project directories.
+  const metaCache = new Map();
+
+  function metaFor(uuid) {
+    if (!uuid) return { status: 'unknown', title: null, lastPrompt: null };
+
+    const cached = metaCache.get(uuid);
+    let file = cached && cached.file;
+    let stat = null;
+    if (file) {
+      try { stat = fs.statSync(file); } catch { file = null; }
+    }
+    if (!file) {
+      file = claudeSession.findTranscript(uuid, { projectsDir });
+      if (!file) return { status: 'unknown', title: null, lastPrompt: null };
+      try { stat = fs.statSync(file); } catch { return { status: 'unknown', title: null, lastPrompt: null }; }
+    }
+
+    if (cached && cached.file === file && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.value;
+    }
+    const value = claudeSession.inspectTranscript(file);
+    metaCache.set(uuid, { file, mtimeMs: stat.mtimeMs, size: stat.size, value });
+    return value;
+  }
+
+  // What the browser gets: the roster plus what each session actually IS.
+  // `title` is null for a session whose conversation has not been written yet
+  // (a tab created seconds ago) and for any session pocket-dev does not own the
+  // command line for; the client falls back rather than inventing a name.
+  function describe() {
+    return [...sessions.values()].map(s => {
+      const meta = RESUME_ENABLED ? metaFor(store.readSid(s.id)) : { status: 'unknown', title: null, lastPrompt: null };
+      return {
+        id: s.id,
+        cols: s.cols,
+        rows: s.rows,
+        title: meta.title,
+        lastPrompt: meta.lastPrompt,
+        status: meta.status,
+      };
+    });
+  }
+
   function attachWs(ws, sessionId) {
     const state = sessions.get(sessionId);
     if (!state) {
@@ -376,7 +430,7 @@ function createSessionsApi({
     ws.on('close', () => state.clients.delete(ws));
   }
 
-  return { create, restore, destroy, get, list, attachWs };
+  return { create, restore, destroy, get, list, describe, attachWs };
 }
 
 module.exports = {
