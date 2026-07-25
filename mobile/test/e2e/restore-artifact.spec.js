@@ -3,16 +3,27 @@
 // and screenshots of the same page before and after so the recovery can be
 // eyeballed rather than inferred from a passing assertion.
 //
-// Skipped by default — it exists to be run on demand with
-//   npx playwright test restore-artifact --project=chromium
-// and writes into test-artifacts/.
+// On demand only, which is what the gate below actually enforces now:
+//   PD_ARTIFACTS=1 npx playwright test restore-artifact --project=chromium
+// It writes into test-artifacts/.
+//
+// It used to say "skipped by default" while only skipping non-chromium, so it
+// ran in every CI job. That cost a red run on 2026-07-25: the second tab's
+// pane came back empty from sendAndWaitForEcho and blocked the merge queue.
+// Nothing was lost by gating it, because it guards nothing — restore.spec.js's
+// "a container restart brings every session back under its original id" makes
+// the same two-tabs-survive-a-restart assertion, behaviourally, and runs on all
+// three engines. Screenshot generation does not belong on the critical path.
 
 import path from 'node:path';
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
 const OUT = path.resolve(__dirname, '../../test-artifacts');
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'artifact run is chromium-only');
+test.skip(
+  ({ browserName }) => browserName !== 'chromium' || !process.env.PD_ARTIFACTS,
+  'artifact run is chromium-only and on demand (set PD_ARTIFACTS=1)',
+);
 
 test('artifact: tabs and terminal survive a container restart', async ({ pdServer, page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
