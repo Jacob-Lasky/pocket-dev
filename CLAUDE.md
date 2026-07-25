@@ -114,6 +114,20 @@ Two dead ends are recorded in the code as DO-NOTs, both of which were tried:
 
 **Test coverage** splits along the same seams: `test/e2e/restore.spec.js` drives real restarts through the browser (roster half only, since the fixture is `cat`); `test/server/sessionsRestore.test.js` injects a fake pty to cover restore, id sequencing, and every branch of the resume decision; `test/server/sessionLauncher.test.js` runs the launcher against a stub `claude` on PATH; `test/server/claudeSession.test.js` pins the transcript shapes the classifier reads; `test/server/trustWorkspace.test.js` runs the trust script for real; and `test/e2e/titles.spec.js` runs on the `pdServerClaudeStub` fixture, which leaves `SHELL_CMD` unset and shadows `claude` on PATH with `test/e2e/stub-bin/claude` so the launcher, the sid-file handoff, and titles all execute for real in a browser test. That stub derives its log path from `PD_SID_FILE` rather than its own env var, because tmux only forwards what `update-environment` names and a pty-set variable arrives only when that test happened to start the tmux server: it passed alone and failed under parallel workers. None of that substitutes for a live pass: the resume path is exactly the kind of thing that is green in CI and broken against a real Claude, which is how the typed-nudge design got caught.
 
+## The session list — three states from two sources
+
+`#session-list` is a full-screen overlay (NOT a swap of `#terminal-stack`'s contents: the panes underneath must keep their layout, see the `.terminal-pane` comment). It is opened by the `Sessions` button, and each row is a session with its conversation title, a preview line, and one of three states.
+
+**Two of the three states come from the server; the third cannot.** `classifyTranscript` returns `busy` or `idle`, which is working-versus-finished. But **"waiting on you" and "read" are the SAME `idle` transcript state** — nothing on disk knows whether a human has looked. That axis lives in the browser: `lastOutputAt` (set on WS output) against `lastViewed[id]` (set when a session becomes active), persisted in `localStorage`. DO NOT re-model this as three server-side states; there is no third state to read.
+
+`busy` always wins over the read/unread axis, and everything unrecognised folds into it, so the list still works for a session with no transcript yet or a custom `SHELL_CMD` that is not Claude at all.
+
+**The replay window is load-bearing.** The server replays its entire buffer as one send on every attach. Counting that as new output would make every page reload announce that all five sessions need you, so output arriving within 250 ms of `onopen` does not touch `lastOutputAt`. `test/e2e/session-list.spec.js` has the regression guard.
+
+The `Sessions` button carries a dot when a session OTHER than the active one wants attention, which is the reason the metadata poll keeps running (slowly) while you are inside a session rather than only while the list is open.
+
+Whether the list should REPLACE the cycle row (`#btn-row-tmux`) is deliberately still open on #21, so both survive: the row is reached from the list's `Switcher` control.
+
 ## Deploy
 
 - CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags).

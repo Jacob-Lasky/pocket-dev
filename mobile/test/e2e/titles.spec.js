@@ -21,7 +21,11 @@ async function sessionRows(page) {
 }
 
 async function openSwitcher(page) {
-  await page.click('#tmux-btn');
+  // The counter and label live in the switcher row, now reached through the
+  // session list. The list shows the same titles per row; this asserts the
+  // older surface still carries them.
+  await page.click('#sessions-btn');
+  await page.click('#sl-bar >> text=Switcher');
 }
 
 test('a session is launched bound to a conversation id', async ({ pdServerClaudeStub, page }) => {
@@ -99,8 +103,8 @@ test('each tab gets its own conversation, and the label follows the active one',
   await gotoTest(page, pdServerClaudeStub);
   await waitForConnection(page);
 
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=+New');
+  await page.click('#sessions-btn');
+  await page.click('#sl-bar >> text=+ New');
   await waitForConnection(page);
   await expect.poll(async () => (await sessionRows(page)).length).toBe(2);
 

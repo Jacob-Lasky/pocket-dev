@@ -209,6 +209,160 @@
     /* Mode toggle styling */
     .mode-btn.active { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
 
+    /* ── Session list ─────────────────────────────────────────────────────
+       A full-screen overlay rather than a swap of #terminal-stack's contents.
+       The panes underneath MUST stay laid out (see the .terminal-pane comment):
+       hiding them with display:none collapses xterm's cell measurement. An
+       overlay leaves them exactly as they were. */
+    #session-list {
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      display: none;
+      flex-direction: column;
+      background: #0d1117;
+    }
+    body[data-view="list"] #session-list { display: flex; }
+
+    #sl-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+    /* The bar is the tightest space in the UI: at 390px a name, a count and two
+       controls do not fit, and the count is the only one carrying information.
+       So the app name is dropped here and the buttons are sized to content
+       rather than inheriting .action-btn's flex: 1. */
+    #sl-bar .action-btn {
+      flex: 0 0 auto;
+      height: 34px;
+      font-size: 12px;
+      padding: 0 12px;
+    }
+    #sl-count {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-family: 'SF Mono', Consolas, Menlo, monospace;
+      font-size: 11px;
+      color: #8b949e;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #sl-rows {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 0; padding: 0;
+      list-style: none;
+    }
+
+    .sl-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-areas: "title meta" "status status" "prev prev";
+      gap: 3px 12px;
+      width: 100%;
+      text-align: left;
+      padding: 14px;
+      background: none;
+      border: 0;
+      border-bottom: 1px solid #30363d;
+      color: inherit;
+      font-family: inherit;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .sl-row:active      { background: #151c26; }
+    .sl-row:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+
+    .sl-title {
+      grid-area: title;
+      font-size: 14.5px;
+      font-weight: 500;
+      color: #8b949e;
+      letter-spacing: -0.01em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Unread is carried by weight and brightness plus the dot, not by a second
+       colour: the status label already owns colour, and five coloured rows all
+       shouting is exactly what makes a list unscannable. */
+    .sl-row[data-unread="true"] .sl-title { color: #e6edf3; font-weight: 650; }
+
+    .sl-meta {
+      grid-area: meta;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'SF Mono', Consolas, Menlo, monospace;
+      font-size: 11px;
+      color: #484f58;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .sl-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #3fb950;
+      box-shadow: 0 0 6px #3fb95088;
+      flex: 0 0 auto;
+    }
+    .sl-row[data-unread="false"] .sl-dot { visibility: hidden; }
+
+    .sl-status {
+      grid-area: status;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 2px;
+      font-family: 'SF Mono', Consolas, Menlo, monospace;
+      font-size: 10.5px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .sl-status .d { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+    .sl-status[data-state="working"]      { color: #d29922; }
+    .sl-status[data-state="working"] .d   { background: #d29922; animation: sl-pulse 1.4s ease-in-out infinite; }
+    .sl-status[data-state="waiting"]      { color: #3fb950; }
+    .sl-status[data-state="waiting"] .d   { background: #3fb950; }
+    .sl-status[data-state="read"]         { color: #6e7681; }
+    .sl-status[data-state="read"] .d      { background: #6e7681; }
+
+    @keyframes sl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) {
+      .sl-status[data-state="working"] .d { animation: none; }
+    }
+
+    .sl-prev {
+      grid-area: prev;
+      margin-top: 3px;
+      font-family: 'SF Mono', Consolas, Menlo, monospace;
+      font-size: 11.5px;
+      color: #484f58;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* A dot on the Sessions button when another session wants attention: the
+       whole point is learning that without leaving the one you are in. */
+    #sessions-btn { position: relative; }
+    #sessions-btn.has-unread::after {
+      content: '';
+      position: absolute;
+      top: 4px; right: 5px;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #3fb950;
+      box-shadow: 0 0 5px #3fb95088;
+    }
+
     /* Session counter label inside the tmux row */
     .session-label {
       flex: 1 1 auto;
@@ -255,9 +409,12 @@
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
           <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy the current screen">📋</button>
           <button id="mode-select" class="action-btn mode-btn" onclick="toggleSelect()" title="Select / copy text from the current screen">Select</button>
-          <button id="tmux-btn" class="action-btn tmux-btn" onclick="showTmuxRow()" title="Session switcher">tmux</button>
+          <button id="sessions-btn" class="action-btn tmux-btn" onclick="openSessionList()" title="All sessions">Sessions</button>
         </div>
-        <!-- Session-switch row (hidden by default) -->
+        <!-- Session-switch row: the counter and label live here, still revealed
+             by the list's "Switcher" control. Cycling is kept because the Ctrl-B
+             prefix keys drive it, and because whether the list REPLACES this row
+             outright is still an open question on #21. -->
         <div id="btn-row-tmux" class="btn-row" style="display:none">
           <span id="session-label" class="session-label">–</span>
           <button class="action-btn tmux-btn" onclick="tmuxNew()"  title="New session">+New</button>
@@ -281,6 +438,17 @@
         <button id="collapse-btn" class="collapsed" onclick="toggleCollapse()" title="Toggle toolbar">⌄</button>
       </div>
     </div>
+  </div>
+
+  <!-- Session list: the primary way to move between sessions. Overlays the app
+       so the terminal panes underneath keep their layout. -->
+  <div id="session-list">
+    <div id="sl-bar">
+      <span id="sl-count">–</span>
+      <button class="action-btn" onclick="showSwitcher()" title="Cycle / kill controls">Switcher</button>
+      <button class="action-btn tmux-btn" onclick="newSessionFromList()" title="Start a new session">+ New</button>
+    </div>
+    <ul id="sl-rows"></ul>
   </div>
 
   <!-- Scroll-to-bottom button -->
@@ -436,6 +604,9 @@
         this.title      = null;
         this.lastPrompt = null;
         this.claudeStatus = 'unknown';
+        // When this session last produced output, for the read/unread axis.
+        this.lastOutputAt = 0;
+        this.replayUntil  = 0;
 
         this.ws       = null;
         this.wsStatus = 'connecting';
@@ -595,6 +766,10 @@
           // reattach repaint cleanly instead of painting a fresh Claude frame
           // over the pre-restart one.
           this.term.reset();
+          // The server replays its whole buffer as a single send the moment we
+          // attach. That is old output, not news: counting it would turn every
+          // page reload into "all five sessions need you".
+          this.replayUntil = Date.now() + 250;
           this.setStatus('connected');
           if (activeId === this.id) {
             this.fitAndResize();
@@ -619,6 +794,13 @@
         ws.onmessage = e => {
           const str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
           this.term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+          if (Date.now() > this.replayUntil) {
+            this.lastOutputAt = Date.now();
+            // Output you are actually looking at is read as it arrives.
+            if (activeId === this.id && document.body.dataset.view !== 'list') markViewed(this.id);
+            updateSessionsBadge();
+            if (document.body.dataset.view === 'list') renderSessionList();
+          }
           // Track the inner app's mouse-tracking state so touch scroll knows
           // whether to forward wheel events to the coder or scroll xterm locally.
           this.mouse = scanMouseState(str, this.mouse);
@@ -688,6 +870,10 @@
       applyConnStatusToDot(active.wsStatus);
       updateSessionLabel();
       updateDocumentTitle();
+      // Making a session active is what marks it read: that is the entire
+      // difference between "waiting on you" and "read".
+      if (document.body.dataset.view !== 'list') markViewed(id);
+      updateSessionsBadge();
       // Single place that points window.term at the ACTIVE session's xterm, so
       // e2e tests reaching into the buffer always get the pane on screen —
       // including after a resync swaps the session set out from under them.
@@ -733,6 +919,8 @@
       }
       updateSessionLabel();
       updateDocumentTitle();
+      updateSessionsBadge();
+      if (document.body.dataset.view === 'list') renderSessionList();
     }
 
     async function refreshSessionMeta() {
@@ -787,6 +975,163 @@
       removeSession(id);
     }
 
+    // ── Session list ────────────────────────────────────────────────────────
+    // Three states, from two sources. The server can only tell us whether a
+    // conversation is mid-turn or finished; "waiting on you" and "read" are the
+    // SAME finished state and differ only by whether you have looked since its
+    // last output. That axis cannot come from the transcript, so it is tracked
+    // here: lastOutputAt against lastViewedAt, persisted so a reload does not
+    // light every session up as unread.
+    const VIEWED_KEY = 'pd-last-viewed';
+    const slRows  = document.getElementById('sl-rows');
+    const slCount = document.getElementById('sl-count');
+    const sessionsBtn = document.getElementById('sessions-btn');
+
+    let lastViewed = {};
+    try { lastViewed = JSON.parse(localStorage.getItem(VIEWED_KEY)) || {}; } catch { lastViewed = {}; }
+
+    function persistViewed() {
+      // Drop ids the server no longer has, so a killed session's timestamp
+      // cannot mark a future session of the same id as already read.
+      for (const id of Object.keys(lastViewed)) if (!sessions.has(id)) delete lastViewed[id];
+      try { localStorage.setItem(VIEWED_KEY, JSON.stringify(lastViewed)); } catch {}
+    }
+
+    function markViewed(id) {
+      if (!id) return;
+      lastViewed[id] = Date.now();
+      persistViewed();
+    }
+
+    function isUnread(s) {
+      return s.lastOutputAt > (lastViewed[s.id] || 0);
+    }
+
+    // busy always wins: it is the one state the transcript knows for certain.
+    // Everything else folds into the read/unread axis, which keeps working even
+    // when there is no transcript to classify (a brand new tab, or a custom
+    // SHELL_CMD that is not Claude at all).
+    function rowState(s) {
+      if (s.claudeStatus === 'busy') return 'working';
+      return isUnread(s) ? 'waiting' : 'read';
+    }
+
+    const STATE_TEXT = { working: 'Working', waiting: 'Waiting on you', read: 'Read' };
+
+    function ago(ms) {
+      if (!ms) return '';
+      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+      if (s < 60)   return `${s}s`;
+      if (s < 3600) return `${Math.floor(s / 60)}m`;
+      return `${Math.floor(s / 3600)}h`;
+    }
+
+    function renderSessionList() {
+      slRows.replaceChildren();
+      let needy = 0;
+      for (const id of order) {
+        const s = sessions.get(id);
+        if (!s) continue;
+        const state = rowState(s);
+        if (state !== 'read') needy++;
+
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'sl-row';
+        row.dataset.sessionId = id;
+        row.dataset.unread = String(isUnread(s));
+        row.setAttribute('aria-label', `${s.title || id}. ${STATE_TEXT[state]}.`);
+
+        const title = document.createElement('div');
+        title.className = 'sl-title';
+        title.textContent = s.title || (id === activeId ? 'Current session' : id);
+
+        const meta = document.createElement('div');
+        meta.className = 'sl-meta';
+        const time = document.createElement('span');
+        time.textContent = ago(s.lastOutputAt);
+        const dot = document.createElement('span');
+        dot.className = 'sl-dot';
+        meta.append(time, dot);
+
+        const status = document.createElement('div');
+        status.className = 'sl-status';
+        status.dataset.state = state;
+        const sd = document.createElement('span');
+        sd.className = 'd';
+        const sl = document.createElement('span');
+        sl.textContent = STATE_TEXT[state];
+        status.append(sd, sl);
+
+        const prev = document.createElement('div');
+        prev.className = 'sl-prev';
+        prev.textContent = s.lastPrompt || '';
+
+        row.append(title, meta, status, prev);
+        row.addEventListener('click', () => {
+          setActive(id);
+          closeSessionList();
+        });
+        slRows.appendChild(row);
+      }
+
+      slCount.textContent = `${order.length} session${order.length === 1 ? '' : 's'}`
+        + (needy ? ` · ${needy} need${needy === 1 ? 's' : ''} you` : ' · all quiet');
+    }
+
+    // The badge is the reason to poll while you are inside a session: it is how
+    // you learn another one wants you without leaving this one.
+    function updateSessionsBadge() {
+      let other = false;
+      for (const s of sessions.values()) {
+        if (s.id !== activeId && rowState(s) !== 'read') { other = true; break; }
+      }
+      sessionsBtn.classList.toggle('has-unread', other);
+    }
+
+    let metaTimer = null;
+    function scheduleMetaPoll() {
+      clearTimeout(metaTimer);
+      // Faster while the list is on screen, slow background tick otherwise.
+      const delay = document.body.dataset.view === 'list' ? 3000 : 8000;
+      metaTimer = setTimeout(async () => {
+        if (document.visibilityState === 'visible') {
+          await refreshSessionMeta();
+          if (document.body.dataset.view === 'list') renderSessionList();
+        }
+        scheduleMetaPoll();
+      }, delay);
+    }
+
+    window.openSessionList = async function() {
+      document.body.dataset.view = 'list';
+      renderSessionList();
+      await refreshSessionMeta();
+      renderSessionList();
+      scheduleMetaPoll();
+    };
+
+    window.closeSessionList = function() {
+      document.body.dataset.view = 'session';
+      markViewed(activeId);
+      updateSessionsBadge();
+      const s = sessions.get(activeId);
+      if (s) s.fitAndResize();
+      scheduleMetaPoll();
+    };
+
+    window.newSessionFromList = async function() {
+      await createSession();
+      closeSessionList();
+    };
+
+    // The cycle row still exists; whether the list replaces it outright is an
+    // open question on #21, so both remain reachable rather than deciding it here.
+    window.showSwitcher = function() {
+      closeSessionList();
+      showTmuxRow();
+    };
+
     // ── Resync ──────────────────────────────────────────────────────────────
     // Reconcile the panes on screen with the sessions the server actually has.
     // This is the recovery path for an outage the tab slept through: the
@@ -834,6 +1179,10 @@
     // likely to have happened without us noticing.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') scheduleResync();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.body.dataset.view === 'list') closeSessionList();
     });
 
     // ── Bootstrap ───────────────────────────────────────────────────────────
@@ -1198,12 +1547,13 @@
     }
 
     // ── Default mode + go ──────────────────────────────────────────────────
+    document.body.dataset.view = 'session';
     window.setMode(detectDefaultMode());
     // Expose `term` immediately under ?test=1 so static-mode render tests can
     // confirm the module script ran to completion before bootstrap finishes.
     // Real sessions overwrite this as soon as the first one is created/attached.
     if (TEST_MODE) window.term = {};
-    bootstrap();
+    bootstrap().then(scheduleMetaPoll);
 
     // Expose pre-existing functions on window so HTML inline `onclick` handlers can reach them
     // (the `<script type="module">` change scoped these to the module otherwise).

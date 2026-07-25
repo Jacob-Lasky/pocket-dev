@@ -72,8 +72,14 @@ async function scrollOffsetFromBottom(page) {
 }
 
 async function newSession(page) {
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=+New');
+  await page.click('#sessions-btn');
+  await page.click('#sl-bar >> text=+ New');
+}
+
+async function killActiveSession(page) {
+  await page.click('#sessions-btn');
+  await page.click('#sl-bar >> text=Switcher');
+  await page.click('#btn-row-tmux >> text=Kill');
 }
 
 test('a container restart brings every session back under its original id', async ({ pdServer, page }) => {
@@ -200,8 +206,7 @@ test('a killed session stays killed across a restart', async ({ pdServer, page }
   await waitForConnection(page);
   await expect.poll(() => sessionIds(page)).toHaveLength(2);
 
-  await page.click('#tmux-btn');
-  await page.click('#btn-row-tmux >> text=Kill');
+  await killActiveSession(page);
   await expect.poll(() => sessionIds(page)).toHaveLength(1);
   const survivor = await sessionIds(page);
 

@@ -10,9 +10,11 @@
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
 async function clickTmuxButton(page, btnText) {
-  // The "tmux" button reveals the session-switch row, which contains +New /
-  // Next / Last / Kill. The row hides itself after the action; reopen each time.
-  await page.click('#tmux-btn');
+  // The session-switch row (+New / Next / Last / Kill) now lives behind the
+  // session list: Sessions opens the list, Switcher drops back to the row. The
+  // row still hides itself after each action, so reopen every time.
+  await page.click('#sessions-btn');
+  await page.click('#sl-bar >> text=Switcher');
   await page.click(`#btn-row-tmux >> text=${btnText}`);
 }
 
