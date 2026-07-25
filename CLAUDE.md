@@ -136,7 +136,8 @@ The list REPLACED the cycle row: `#btn-row-tmux` and its Next/Last buttons are g
 
 - CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags).
 - Tower: `ssh tower`, `docker pull ghcr.io/jacob-lasky/pocket-dev:latest`, stop/rm/run with the canonical args. The UnRAID template at `/boot/config/plugins/dockerMan/templates-user/my-pocket-dev.xml` is the source of truth for volumes / env / `--group-add 281`.
-- The runtime container does NOT include devDependencies — `npm install --production` in the Dockerfile excludes vitest/playwright/etc.
+- The package manager is **pnpm** (pinned by `packageManager` in `mobile/package.json`). pnpm settings live in `mobile/pnpm-workspace.yaml`, NOT the `pnpm` field of `package.json`, which pnpm 11 stopped reading. `onlyBuiltDependencies` there is load-bearing: pnpm blocks dependency build scripts by default and node-pty ships no linux-x64 prebuild, so without it every server suite fails with "Cannot find module ./prebuilds/linux-x64//pty.node".
+- The runtime container does NOT include devDependencies: `pnpm install --prod --frozen-lockfile` in the Dockerfile excludes vitest/playwright/etc. pnpm is installed with `npm install -g` rather than corepack, which is gone from Node 26.
 
 ## Deepgram tailnet access (dgvpn)
 

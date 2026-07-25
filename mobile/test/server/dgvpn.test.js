@@ -32,15 +32,23 @@ describe('dgvpn build wiring', () => {
     expect(dockerfile).toMatch(/^ENV DGVPN_PROXY_PORT=\d+/m);
   });
 
-  it('copies dgvpn AFTER the npm install layer (build-cache ordering)', () => {
+  it('copies dgvpn AFTER the dependency install layer (build-cache ordering)', () => {
     // dgvpn changes far more often than mobile/. If its COPY precedes the
-    // expensive `npm install` (node-pty native build), every vpn-only edit busts
-    // that layer. Keep the dgvpn COPY below npm install so the cache survives.
-    const npmIdx = dockerfile.indexOf('npm install --production');
+    // expensive install (node-pty native build), every vpn-only edit busts that
+    // layer. Keep the dgvpn COPY below the install so the cache survives.
+    const installIdx = dockerfile.indexOf('pnpm install --prod');
     const dgvpnCopyIdx = dockerfile.indexOf('COPY --from=dgvpn-builder');
-    expect(npmIdx).toBeGreaterThanOrEqual(0);
+    expect(installIdx).toBeGreaterThanOrEqual(0);
     expect(dgvpnCopyIdx).toBeGreaterThanOrEqual(0);
-    expect(dgvpnCopyIdx).toBeGreaterThan(npmIdx);
+    expect(dgvpnCopyIdx).toBeGreaterThan(installIdx);
+  });
+
+  it('installs runtime deps with pnpm, from the lockfile, without devDependencies', () => {
+    // --frozen-lockfile fails the build when pnpm-lock.yaml and package.json
+    // disagree, instead of quietly resolving something the tests never saw.
+    // --prod keeps vitest and playwright out of the runtime image.
+    expect(dockerfile).toMatch(/pnpm install --prod --frozen-lockfile/);
+    expect(dockerfile).not.toMatch(/npm install --production/);
   });
 
   it('uses a consistent binary name across the Dockerfile and dgvpn-up', () => {

@@ -118,12 +118,27 @@ RUN groupadd -g 281 docker || true && \
     chmod -R 775 /workspace /home/claude/.claude /home/claude/.pocket-dev
 
 # Install pocket-dev server (as root, before switching users)
-# npm install compiles node-pty natively here. This is an expensive layer, so it
+# pnpm install compiles node-pty natively here. This is an expensive layer, so it
 # comes BEFORE the dgvpn block: dgvpn changes far more often than mobile/, and
 # putting the frequently-changing dgvpn COPY after this keeps the node-pty
 # rebuild cached on vpn-only changes.
+#
+# pnpm is installed with npm rather than corepack: corepack is gone from Node 26,
+# so `corepack enable` is not a portable way to get pnpm any more. The version is
+# pinned to match `packageManager` in mobile/package.json.
+#
+# --prod drops devDependencies (vitest, playwright) from the runtime image, and
+# --frozen-lockfile makes the build fail loudly if pnpm-lock.yaml is out of step
+# with package.json instead of silently resolving something else.
+#
+# pnpm's default symlinked node_modules is kept: server.js serves xterm's browser
+# assets with express.static(__dirname + '/node_modules/@xterm/xterm'), and that
+# resolves through the symlink into the .pnpm store normally. Verified by running
+# the e2e suite against a pnpm install, which loads those assets over /xterm.
+RUN npm install -g pnpm@11.3.0
 COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && npm install --production && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace && \
+    pnpm install --prod --frozen-lockfile && \
     chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-trust-workspace && \
     chown -R claude:users /mobile
 

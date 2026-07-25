@@ -71,9 +71,9 @@ The Playwright + vitest suite under `mobile/` runs on every push and PR:
 
 ```sh
 cd mobile
-npm ci
-npm test               # vitest (unit + server)
-npm run test:e2e       # Playwright on chromium + firefox + webkit
+pnpm install
+pnpm test              # vitest (unit + server)
+pnpm test:e2e          # Playwright on chromium + firefox + webkit
 ```
 
 WebKit is in the matrix because mobile Safari's CSS engine has historically interpreted some properties (e.g. `word-break: break-word`) differently than Chromium and Firefox; without it, Safari-only mobile-UI regressions ship green.
