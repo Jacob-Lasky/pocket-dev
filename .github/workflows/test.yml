@@ -3,6 +3,11 @@ on:
   push:
     branches: [main]
   pull_request:
+env:
+  # One place per artifact: this covers both CI jobs. The image has its own copy
+  # in the Dockerfile's FROM, which a workflow cannot read. Keep the two in step
+  # and bump them in the same change; they are the same decision (newest LTS).
+  NODE_VERSION: '24'
 jobs:
   unit-and-server:
     runs-on: ubuntu-latest
@@ -18,7 +23,7 @@ jobs:
           package_json_file: mobile/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -37,7 +42,7 @@ jobs:
           package_json_file: mobile/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: sudo apt-get update && sudo apt-get install -y tmux

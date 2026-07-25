@@ -136,8 +136,10 @@ The list REPLACED the cycle row: `#btn-row-tmux` and its Next/Last buttons are g
 
 - CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags).
 - Tower: `ssh tower`, `docker pull ghcr.io/jacob-lasky/pocket-dev:latest`, stop/rm/run with the canonical args. The UnRAID template at `/boot/config/plugins/dockerMan/templates-user/my-pocket-dev.xml` is the source of truth for volumes / env / `--group-add 281`.
-- The package manager is **pnpm** (pinned by `packageManager` in `mobile/package.json`). pnpm settings live in `mobile/pnpm-workspace.yaml`, NOT the `pnpm` field of `package.json`, which pnpm 11 stopped reading. `onlyBuiltDependencies` there is load-bearing: pnpm blocks dependency build scripts by default and node-pty ships no linux-x64 prebuild, so without it every server suite fails with "Cannot find module ./prebuilds/linux-x64//pty.node".
-- The runtime container does NOT include devDependencies: `pnpm install --prod --frozen-lockfile` in the Dockerfile excludes vitest/playwright/etc. pnpm is installed with `npm install -g` rather than corepack, which is gone from Node 26.
+- The package manager is **pnpm**, pinned by `packageManager` in `mobile/package.json` and read from that one place by both corepack (in the Dockerfile) and `pnpm/action-setup` (via `package_json_file` in CI). Do not repeat the version anywhere else.
+- pnpm settings live in `mobile/pnpm-workspace.yaml`, NOT the `pnpm` field of `package.json`, which pnpm 11 stopped reading. The load-bearing key is **`allowBuilds`**: pnpm blocks dependency build scripts by default and node-pty ships no linux-x64 prebuild, so without it every server suite fails with "Cannot find module ./prebuilds/linux-x64//pty.node". `onlyBuiltDependencies` is pnpm 10's spelling and 11.17.0 ignores it silently — the file records the measurement.
+- The runtime container does NOT include devDependencies: `pnpm install --prod --frozen-lockfile` in the Dockerfile excludes vitest/playwright/etc.
+- The base stays on **Node 24**, the newest LTS, and that is also the last major that bundles corepack. Going further means reintroducing an `npm i -g pnpm` bootstrap, so newest-LTS and one-source-of-truth point the same way here.
 
 ## Deepgram tailnet access (dgvpn)
 
