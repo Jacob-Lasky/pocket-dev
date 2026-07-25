@@ -144,6 +144,7 @@
     .action-btn.tmux-btn:active { background: #bc8cff22; }
     .action-btn.tmux-kill      { background: #2d1f1f; border-color: #ff7b72; color: #ff7b72; }
     .action-btn.tmux-kill:active { background: #ff7b7222; }
+    .action-btn.tmux-kill.armed { background: #ff7b72; border-color: #ff7b72; color: #0d1117; font-weight: 600; }
 
     #input-row { display: flex; gap: 8px; align-items: center; }
 
@@ -367,14 +368,19 @@
        collapsing the toolbar cannot hide it: on a phone there is no browser tab
        title, and with the cycle row gone this is the only persistent answer.
        Tapping it opens the list. */
+    #topbar {
+      flex: 0 0 auto;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
     .session-label {
       display: block;
       width: 100%;
       text-align: left;
       background: none;
       border: 0;
-      border-bottom: 1px solid #21262d;
-      padding: 2px 4px 6px;
+      padding: 8px 12px;
       margin: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -390,6 +396,7 @@
 
     /* Desktop layout */
     @media (min-width: 768px) {
+      .session-label { font-size: 13px; padding: 6px 12px; }
       #controls { flex-direction: row; align-items: center; padding: 6px 12px; gap: 10px; }
       #btn-group { flex-direction: column; gap: 4px; flex-shrink: 0; max-height: 70px; }
       #btn-group.collapsed { max-height: 0; }
@@ -404,6 +411,13 @@
 </head>
 <body>
   <div id="app">
+    <!-- The session title is the first thing on screen, not a strip buried
+         above the toolbar. It is also the tap target for the session list, so
+         it must never be inside #btn-group: collapsing the toolbar would hide
+         both the answer to "which session am I in" and the way out of it. -->
+    <div id="topbar">
+      <button id="session-label" class="session-label" onclick="openSessionList()" title="Open the session list">–</button>
+    </div>
     <div id="terminal-container">
       <div id="conn-dot" title="WebSocket disconnected"></div>
       <div id="view-pane">
@@ -412,7 +426,6 @@
       <div id="terminal-stack"></div>
     </div>
     <div id="controls">
-      <button id="session-label" class="session-label" onclick="openSessionList()" title="Open the session list">–</button>
       <div id="btn-group">
         <!-- Normal row -->
         <div id="btn-row-normal" class="btn-row">
@@ -429,7 +442,7 @@
           <button class="action-btn" onclick="sendKey('up')"    title="Up">↑</button>
           <button class="action-btn" onclick="sendKey('down')"  title="Down">↓</button>
           <button class="action-btn" onclick="refreshTerminal()" title="Refresh terminal display">⟳</button>
-          <button class="action-btn tmux-kill" onclick="tmuxKill()" title="Kill this session">Kill</button>
+          <button id="kill-btn" class="action-btn tmux-kill" onclick="killPressed()" title="Kill this session">✕</button>
         </div>
       </div>
       <div id="input-row">
@@ -465,7 +478,18 @@
 
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize  = parseInt(localStorage.getItem('pd-font-size')) || 14;
-    const savedCollapsed = localStorage.getItem('pd-toolbar-collapsed') !== 'false'; // default true
+    // Desktop starts EXPANDED, phones start collapsed. A phone needs the screen
+    // for the terminal and the keys are a thumb-reach away; a desktop has room
+    // and hiding them behind a chevron just costs a click. An explicit choice
+    // still wins on both — only the default is per-form-factor. Read the
+    // viewport once here rather than reacting to resize, because flipping a
+    // user's toolbar out from under them on a window drag is worse than a
+    // default that is briefly wrong.
+    const DESKTOP_MIN_WIDTH = 768;   // matches the media query below
+    const storedCollapsed = localStorage.getItem('pd-toolbar-collapsed');
+    const savedCollapsed = storedCollapsed === null
+      ? !window.matchMedia(`(min-width: ${DESKTOP_MIN_WIDTH}px)`).matches
+      : storedCollapsed !== 'false';
 
     const TEST_MODE = window.location.search.includes('test=1');
 
@@ -528,6 +552,10 @@
       if (k === 'p') { cycleActive(-1); return true; }
       if (k === 'c') { tmuxNew();      return true; }
       if (k === 'l') { tmuxLast();     return true; }
+      // Deliberately NOT killPressed(): the two-tap arm exists because the ✕
+      // button sits on a row people thumb blindly, and a two-key prefix
+      // sequence is already the explicit, hard-to-hit-by-accident path. tmux
+      // binds kill to the same chord.
       if (e.key === '&') { tmuxKill(); return true; }
       // Unmatched follow-up: drop the prefix silently (matches tmux's "no
       // binding" behavior — we don't replay the swallowed Ctrl-B either).
@@ -869,6 +897,8 @@
         s.pane.classList.toggle('active', s.id === id);
       }
       const active = sessions.get(id);
+      // An armed kill belongs to the session it was armed on. See disarmKill.
+      disarmKill();
       applyConnStatusToDot(active.wsStatus);
       updateSessionLabel();
       updateDocumentTitle();
@@ -944,6 +974,7 @@
       if (!s) return;
       s.destroy();
       sessions.delete(id);
+      dropSessionRow(id);
       const idx = order.indexOf(id);
       if (idx >= 0) order.splice(idx, 1);
       if (previousId === id) previousId = null;
@@ -1038,57 +1069,118 @@
       return `${Math.floor(s / 3600)}h`;
     }
 
+    // Rows are REUSED across renders, never rebuilt. This is a correctness
+    // requirement, not a performance one.
+    //
+    // A DOM click only fires when mousedown and mouseup land on the SAME
+    // element. This function is called from ws.onmessage for every frame a
+    // background session produces, so the previous `slRows.replaceChildren()`
+    // destroyed the row you were pressing before you released it, and no click
+    // event was ever generated. The row still lit up, because :hover and
+    // :active apply to whatever is under the cursor, so it looked interactive
+    // while doing nothing — and a press that happened to fall between rebuilds
+    // worked, which is why it read as random. A touch tap is short enough to
+    // usually slip through the gap, so this only bit on desktop.
+    //
+    // DO NOT reintroduce replaceChildren / innerHTML here, and do not "simplify"
+    // this back to rebuilding. test/e2e/session-list-click.spec.js presses with
+    // a real duration under background output and is the guard.
+    const slRowEls = new Map();   // session id -> the row's elements
+
+    function buildRow(id) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'sl-row';
+      row.dataset.sessionId = id;
+
+      const title = document.createElement('div');
+      title.className = 'sl-title';
+
+      const meta = document.createElement('div');
+      meta.className = 'sl-meta';
+      const time = document.createElement('span');
+      const dot = document.createElement('span');
+      dot.className = 'sl-dot';
+      meta.append(time, dot);
+
+      const status = document.createElement('div');
+      status.className = 'sl-status';
+      const sd = document.createElement('span');
+      sd.className = 'd';
+      const statusText = document.createElement('span');
+      status.append(sd, statusText);
+
+      const prev = document.createElement('div');
+      prev.className = 'sl-prev';
+
+      row.append(title, meta, status, prev);
+      // Bound once, for the life of the row, so it cannot be lost to a re-render.
+      row.addEventListener('click', () => {
+        setActive(id);
+        closeSessionList();
+      });
+      return { row, title, time, status, statusText, prev };
+    }
+
+    // Forget a row and detach it. Called both from the render sweep and from
+    // removeSession, because a session can be killed while the list is closed
+    // and the cache would otherwise hold a detached node and its click closure
+    // until the list next opened.
+    function dropSessionRow(id) {
+      const refs = slRowEls.get(id);
+      if (!refs) return;
+      refs.row.remove();
+      slRowEls.delete(id);
+    }
+
+    // Only touch a property when it actually changed: writing textContent
+    // unconditionally on every frame is what makes a reused row still churn.
+    function setText(el, value) {
+      if (el.textContent !== value) el.textContent = value;
+    }
+
     function renderSessionList() {
-      slRows.replaceChildren();
       let needy = 0;
+      const seen = new Set();
+      let cursor = slRows.firstElementChild;
+
       for (const id of order) {
         const s = sessions.get(id);
         if (!s) continue;
+        seen.add(id);
         const state = rowState(s);
         if (state !== 'read') needy++;
 
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'sl-row';
-        row.dataset.sessionId = id;
-        row.dataset.unread = String(isUnread(s));
-        row.setAttribute('aria-label', `${s.title || id}. ${STATE_TEXT[state]}.`);
+        let refs = slRowEls.get(id);
+        if (!refs) {
+          refs = buildRow(id);
+          slRowEls.set(id, refs);
+        }
+        const { row, title, time, status, statusText, prev } = refs;
 
-        const title = document.createElement('div');
-        title.className = 'sl-title';
-        title.textContent = s.title || (id === activeId ? 'Current session' : id);
+        const titleText = s.title || (id === activeId ? 'Current session' : id);
+        setText(title, titleText);
+        setText(time, ago(s.lastOutputAt));
+        setText(statusText, STATE_TEXT[state]);
+        setText(prev, s.lastPrompt || '');
+        const unread = String(isUnread(s));
+        if (row.dataset.unread !== unread) row.dataset.unread = unread;
+        if (status.dataset.state !== state) status.dataset.state = state;
+        const label = `${s.title || id}. ${STATE_TEXT[state]}.`;
+        if (row.getAttribute('aria-label') !== label) row.setAttribute('aria-label', label);
 
-        const meta = document.createElement('div');
-        meta.className = 'sl-meta';
-        const time = document.createElement('span');
-        time.textContent = ago(s.lastOutputAt);
-        const dot = document.createElement('span');
-        dot.className = 'sl-dot';
-        meta.append(time, dot);
-
-        const status = document.createElement('div');
-        status.className = 'sl-status';
-        status.dataset.state = state;
-        const sd = document.createElement('span');
-        sd.className = 'd';
-        const sl = document.createElement('span');
-        sl.textContent = STATE_TEXT[state];
-        status.append(sd, sl);
-
-        const prev = document.createElement('div');
-        prev.className = 'sl-prev';
-        prev.textContent = s.lastPrompt || '';
-
-        row.append(title, meta, status, prev);
-        row.addEventListener('click', () => {
-          setActive(id);
-          closeSessionList();
-        });
-        slRows.appendChild(row);
+        // Put the row in the right place only if it is not already there, so a
+        // steady-state render moves nothing.
+        if (row === cursor) cursor = cursor.nextElementSibling;
+        else slRows.insertBefore(row, cursor);
       }
 
-      slCount.textContent = `${order.length} session${order.length === 1 ? '' : 's'}`
-        + (needy ? ` · ${needy} need${needy === 1 ? 's' : ''} you` : ' · all quiet');
+      for (const id of [...slRowEls.keys()]) {
+        if (!seen.has(id)) dropSessionRow(id);
+      }
+
+      setText(slCount, `${order.length} session${order.length === 1 ? '' : 's'}`
+        + (needy ? ` · ${needy} need${needy === 1 ? 's' : ''} you` : ' · all quiet'));
     }
 
     // The badge is the reason to poll while you are inside a session: it is how
@@ -1116,6 +1208,7 @@
     }
 
     window.openSessionList = async function() {
+      disarmKill();
       document.body.dataset.view = 'list';
       renderSessionList();
       await refreshSessionMeta();
@@ -1481,6 +1574,49 @@
       else cycleActive(+1);
     }
 
+    // Kill is two taps: ✕ arms it, a second tap inside the window does it.
+    // It sits between Refresh and the arrow keys on a row people thumb blindly,
+    // and the thing it destroys is a live Claude session, so a single stray tap
+    // being enough was the problem.
+    //
+    // Arming is deliberately per-session: switching sessions or opening the
+    // list disarms, or you could arm on one session, switch, and destroy a
+    // different one with the confirming tap.
+    // The element is looked up per call rather than captured in a module-level
+    // const: disarmKill() is called from setActive(), which is defined far
+    // above this point, and a captured const would be in its temporal dead zone
+    // if init order ever changed. State lives on the button itself for the same
+    // reason — no module-scope binding to get ahead of.
+    const KILL_ARM_MS = 4000;
+    let killTimer = null;
+
+    function disarmKill() {
+      clearTimeout(killTimer);
+      killTimer = null;
+      const btn = document.getElementById('kill-btn');
+      if (!btn) return;
+      delete btn.dataset.armed;
+      btn.textContent = '✕';
+      btn.classList.remove('armed');
+      btn.title = 'Kill this session';
+    }
+
+    function killPressed() {
+      const btn = document.getElementById('kill-btn');
+      if (!btn) return;
+      if (btn.dataset.armed === 'true') {
+        disarmKill();
+        tmuxKill();
+        return;
+      }
+      btn.dataset.armed = 'true';
+      btn.textContent = 'Kill?';
+      btn.classList.add('armed');
+      btn.title = 'Tap again to kill this session';
+      clearTimeout(killTimer);
+      killTimer = setTimeout(disarmKill, KILL_ARM_MS);
+    }
+
     async function tmuxKill() {
       closeSessionList();
       const id = activeId;
@@ -1545,7 +1681,7 @@
     // Expose pre-existing functions on window so HTML inline `onclick` handlers can reach them
     // (the `<script type="module">` change scoped these to the module otherwise).
     Object.assign(window, {
-      sendText, sendKey, scrollToBottom, toggleCollapse, refreshTerminal,
+      sendText, sendKey, scrollToBottom, toggleCollapse, refreshTerminal, killPressed,
       tmuxNew, tmuxLast, tmuxKill,
     });
   </script>
