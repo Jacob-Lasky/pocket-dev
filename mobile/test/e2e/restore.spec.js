@@ -71,51 +71,6 @@ async function scrollOffsetFromBottom(page) {
   });
 }
 
-// TEMPORARY instrumentation for #30. Records every scroll event the browser
-// fires on xterm's own viewport element, so a webkit-only failure can be read
-// off CI logs instead of guessed at from source. Remove with the fix.
-async function installScrollProbe(page) {
-  await page.addInitScript(() => {
-    window.__pdScrollLog = [];
-    document.addEventListener('scroll', (e) => {
-      const el = e.target;
-      if (!el || !el.classList || !el.classList.contains('xterm-viewport')) return;
-      const buf = window.term && window.term.buffer && window.term.buffer.normal;
-      window.__pdScrollLog.push({
-        scrollTop: el.scrollTop,
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        ybase: buf ? buf.baseY : null,
-        ydisp: buf ? buf.viewportY : null,
-        userScrolling: !!(window.term && window.term._core
-          && window.term._core._bufferService
-          && window.term._core._bufferService.isUserScrolling),
-      });
-    }, true);
-  });
-}
-
-async function scrollDiagnostics(page) {
-  return page.evaluate(() => {
-    const t = window.term;
-    if (!t || !t.buffer) return { error: 'no term' };
-    const buf = t.buffer.normal;
-    const vp = document.querySelector('.terminal-pane:not([hidden]) .xterm-viewport')
-      || document.querySelector('.xterm-viewport');
-    return {
-      offset: buf.baseY - buf.viewportY,
-      baseY: buf.baseY,
-      viewportY: buf.viewportY,
-      rows: t.rows,
-      cols: t.cols,
-      bufferLength: buf.length,
-      isUserScrolling: !!(t._core && t._core._bufferService && t._core._bufferService.isUserScrolling),
-      viewport: vp ? { scrollTop: vp.scrollTop, scrollHeight: vp.scrollHeight, clientHeight: vp.clientHeight } : null,
-      scrollLog: window.__pdScrollLog || [],
-    };
-  });
-}
-
 async function newSession(page) {
   await page.click('#tmux-btn');
   await page.click('#btn-row-tmux >> text=+New');
@@ -178,7 +133,6 @@ test('+New after a restart does not collide with a restored id', async ({ pdServ
 });
 
 test('when only the server process restarts, sessions reattach with their scrollback', async ({ pdServer, page }) => {
-  await installScrollProbe(page);
   await gotoTest(page, pdServer);
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'survives-node-restart-ECHO');
@@ -208,14 +162,7 @@ test('when only the server process restarts, sessions reattach with their scroll
   // Polled, not sampled: the fit on reconnect sends a resize, and tmux's
   // repaint comes back asynchronously, so the pane settles a beat after the
   // socket opens.
-  try {
-    await expect.poll(() => scrollOffsetFromBottom(page), { timeout: 10000 }).toBe(0);
-  } catch (err) {
-    // TEMPORARY (#30): dump the state that explains WHY, so the webkit-only
-    // failure is diagnosable from CI logs. Remove with the fix.
-    console.log('#30 DIAG ' + JSON.stringify(await scrollDiagnostics(page), null, 2));
-    throw err;
-  }
+  await expect.poll(() => scrollOffsetFromBottom(page), { timeout: 10000 }).toBe(0);
 });
 
 test('tabs come back after a hard kill, and the shutdown marker tells the two apart', async ({ pdServer, page }) => {

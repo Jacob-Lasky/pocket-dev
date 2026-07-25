@@ -422,7 +422,10 @@
         // xterm scrollback, so a drag scrolls that locally. scanMouseState
         // (fed every output chunk) tells the touch handler which case we're in.
         this.mouse = { track: false, sgr: false };
+        // Does this pane track the bottom of its buffer? See installFollowGuard.
+        this.follow = true;
         this.installTouchScroll();
+        this.installFollowGuard();
 
         this.ws       = null;
         this.wsStatus = 'connecting';
@@ -439,6 +442,75 @@
       // handling; when we commit to a scroll we stopPropagation so xterm never
       // forwards the touch to the coder as stray mouse clicks. Two-finger
       // gestures pass through untouched (pinch-zoom lives on #terminal-container).
+      isAtBottom() {
+        const b = this.term.buffer.active;
+        return b.viewportY >= b.baseY;
+      }
+
+      // Undo scroll positions the browser imposed, keep the ones a user chose.
+      //
+      // xterm cannot tell those apart. Viewport._handleScroll turns any
+      // scrollTop it did not itself set into scrollLines(newRow - ydisp), and a
+      // negative result latches isUserScrolling, which permanently stops the
+      // buffer following new output. Nothing clears that latch on its own.
+      //
+      // That is measured, not theoretical (#30). On webkit, after a node-only
+      // restart: xterm syncs scrollTop to 32 (ydisp 2 * 16px) against a 671px
+      // scroll area, then a later refresh shrinks the area to 639px, exactly
+      // clientHeight, leaving no scrollable range at all. The browser clamps
+      // scrollTop 32 -> 0 by itself; xterm reads that unflagged event as a
+      // 2-row scroll up and the pane sits 2 rows off the bottom for good.
+      // Chromium and Firefox coalesce the clamp with the flagged event, which
+      // is the entire reason it read as webkit flake for a day.
+      //
+      // The discriminator is GEOMETRY, deliberately, not input devices. A
+      // browser only relocates scrollTop on its own when the scroll area
+      // shrinks under it, and a user can only scroll within the area as it
+      // stands. So a scroll event that arrives with the area unchanged is the
+      // user's, always, and is left alone.
+      //
+      // DO NOT rewrite this to track wheel/pointer/touch and treat "no gesture"
+      // as proof the browser did it. That was tried first and it is wrong:
+      // dragging a native scrollbar dispatches no pointerdown in Chrome or
+      // Firefox, so a real drag looks gestureless and the guard fights the
+      // user. The viewport here has a real scrollbar, it is not styled away.
+      //
+      // DO NOT replace this with a one-shot scrollToBottom() elsewhere either.
+      // That was the previous fix and it cannot work: it runs before the clamp
+      // that undoes it.
+      installFollowGuard() {
+        // term.open() ran in the constructor, so the viewport exists. Left
+        // unguarded on purpose: a silently disabled guard is how #30 survives,
+        // and a TypeError here is a loud, immediate signal that xterm's DOM
+        // changed shape.
+        const vp = this.pane.querySelector('.xterm-viewport');
+        let lastScrollHeight = vp.scrollHeight;
+
+        // Known, bounded imprecision: the area can shrink WITHOUT producing a
+        // scroll event (when the current scrollTop still fits), which leaves
+        // lastScrollHeight stale-high until the next event. The next real
+        // scroll then reads as a shrink and gets undone once. It self-corrects
+        // immediately, because that event refreshes the height. Deliberately
+        // not fixed by refreshing this from fitAndResize(): the resize-induced
+        // clamp is the exact case this guard exists to catch, and pre-updating
+        // the height there would hide it.
+        vp.addEventListener('scroll', () => {
+          const shrank  = vp.scrollHeight < lastScrollHeight;
+          const noRange = vp.scrollHeight <= vp.clientHeight;
+          lastScrollHeight = vp.scrollHeight;
+
+          // Geometry moved under the pane, so this position is not a choice
+          // anyone made. Restore the one the pane had.
+          if ((shrank || noRange) && this.follow && !this.isAtBottom()) {
+            this.term.scrollToBottom();
+            return;
+          }
+          // Otherwise wherever the pane ends up IS the intent, in both
+          // directions: scrolling back to the bottom re-arms following.
+          this.follow = this.isAtBottom();
+        }, { passive: true });
+      }
+
       installTouchScroll() {
         let dragging = false, committed = false, lastY = 0, startY = 0, acc = 0;
         const stepPx = () => Math.max(14, currentFontSize * 1.2); // ~one text row
@@ -503,18 +575,19 @@
             this.fitAndResize();
             acquireWakeLock();
           }
-          // Pin to the bottom, and keep this AFTER the fit above. reset()
-          // empties the buffer but does not reliably clear xterm's "the user
-          // scrolled up, stop auto-following" state, and fitAddon.fit() then
-          // reflows lines between screen and scrollback without carrying the
-          // follow state across. Either one on its own leaves the pane parked
-          // above the bottom while the replay lands, so the visible window
-          // straddles the pre-restart paint and the replayed one and shows the
-          // same line twice. Measured in CI after a node-only restart: baseY 2,
-          // viewportY 0, with the bottom-anchored screen correct all along.
-          // Reliable on webkit, intermittent on chromium and firefox, which is
-          // why it read as flake. Pinning before the fit was tried first and
-          // was NOT enough, because the fit undid it.
+          // A reattach always starts following, whatever the pane was doing
+          // before the socket dropped. reset() empties the buffer but does not
+          // reliably clear xterm's "the user scrolled up" state, so this clears
+          // it explicitly and re-arms the follow guard.
+          //
+          // This pair is NOT sufficient on its own, and it is worth being
+          // precise about why, because it was once believed to be the whole
+          // fix. At this point the buffer is empty from reset(), so
+          // scrollToBottom() resolves to scrollLines(0): it clears the flag and
+          // moves nothing. Everything that actually unpins the pane happens
+          // AFTER this, once the replay and the resize repaint land. That is
+          // installFollowGuard's job.
+          this.follow = true;
           this.term.scrollToBottom();
         };
 
@@ -526,8 +599,7 @@
           this.mouse = scanMouseState(str, this.mouse);
           if (activeId === this.id) {
             scheduleViewRefresh();
-            const buf = this.term.buffer.active;
-            if (buf.viewportY < buf.baseY) scrollBtn.classList.add('has-new-output');
+            if (!this.isAtBottom()) scrollBtn.classList.add('has-new-output');
           }
         };
 
@@ -853,8 +925,7 @@
     function updateScrollBtn() {
       const s = sessions.get(activeId);
       if (!s) { scrollBtn.classList.remove('visible'); return; }
-      const buf = s.term.buffer.active;
-      const atBottom = buf.viewportY >= buf.baseY;
+      const atBottom = s.isAtBottom();
       scrollBtn.classList.toggle('visible', !atBottom);
       if (atBottom) scrollBtn.classList.remove('has-new-output');
     }
@@ -862,6 +933,9 @@
     function scrollToBottom() {
       const s = sessions.get(activeId);
       if (!s) return;
+      // Pressing the button is an explicit "follow again", so it re-arms the
+      // guard as well as moving the viewport.
+      s.follow = true;
       s.term.scrollToBottom();
       scrollBtn.classList.remove('has-new-output');
     }
