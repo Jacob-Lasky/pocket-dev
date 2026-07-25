@@ -45,6 +45,17 @@ const (
 
 func main() {
 	log.SetFlags(0)
+	// Busybox-style multi-call binary: the same static, CGO-free executable is
+	// both the long-lived tsnet proxy daemon AND the ssh ProxyCommand CONNECT
+	// client (see connect.go / the `dgssh` wrapper). Dispatching on invocation
+	// keeps the ssh path dependency-free — no netcat or python in the image.
+	if args, ok := connectMode(); ok {
+		log.SetPrefix("dgvpn-connect: ")
+		if err := connectMain(args); err != nil {
+			log.Fatalf("%v", err)
+		}
+		return
+	}
 	log.SetPrefix("dgvpn: ")
 	// run() owns all setup so its deferred cleanup (ts.Close, cancel) actually
 	// runs before exit. Calling log.Fatalf directly from the setup body would
@@ -53,6 +64,15 @@ func main() {
 	if err := run(); err != nil {
 		log.Fatalf("%v", err)
 	}
+}
+
+// connectMode reports whether this invocation is the ssh ProxyCommand CONNECT
+// client rather than the proxy daemon, returning the client's args. Thin
+// os.Args adapter over parseConnectInvocation (connect.go), which holds the
+// testable dispatch logic. A bare `dgvpn-proxy` with no args stays the daemon,
+// so the dgvpn-up launch path (`nohup dgvpn-proxy`) is unaffected.
+func connectMode() ([]string, bool) {
+	return parseConnectInvocation(os.Args)
 }
 
 func run() error {

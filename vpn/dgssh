@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# ssh to a Deepgram tailnet host (`.consul`) through the dgvpn userspace tsnet
+# proxy. This is the ssh-shaped sibling of `dgvpn`: ssh ignores HTTP_PROXY, so
+# instead of exporting proxy env vars we point ssh's ProxyCommand at the
+# `dgvpn-connect` CONNECT client, which tunnels raw TCP through the same proxy
+# `dgvpn` uses for HTTP. The proxy resolves `.consul` itself via the tsnet
+# LocalAPI split-DNS resolver (vpn/proxy.go), so this reaches tailnet SSH hosts
+# WITHOUT kernel tailscaled, a TUN device, or NET_ADMIN.
+#
+# DO NOT "simplify" this to `tailscale up` + stock ssh: userspace tailscaled
+# cannot resolve `.consul` split-DNS (tailscale#16906/#4677), and kernel mode
+# needs privileges this unprivileged container does not have. That is the whole
+# reason the vpn/ sidecar exists — see the Dockerfile header and CLAUDE.md.
+#
+#   dgssh aws-tools                              # uses ~/.ssh/config Host block
+#   dgssh user@aws-tools.node.aws.consul
+#   rsync -e dgssh ./branch aws-tools:/tmp/branch
+#
+# The ssh HostName MUST be the `.consul` name (not a pre-resolved IP): the
+# proxy only tunnels suffix-matching hosts and resolves them on the tailnet
+# side; a bare IP would dial directly and fail (no exit node).
+#
+# Brings the tunnel up first (one-time SSO, ~24h) exactly like `dgvpn`; on a
+# pending login it prints the URL and exits 3 without running ssh so the caller
+# can authenticate and retry.
+set -uo pipefail
+
+PORT="${DGVPN_PROXY_PORT:-1055}"
+
+if [ "$#" -eq 0 ]; then
+  {
+    echo "usage: dgssh [ssh-args...] <host>"
+    echo "  ssh to a .consul tailnet host through the dgvpn proxy."
+    echo "  Also usable as rsync's remote shell: rsync -e dgssh ..."
+  } >&2
+  exit 2
+fi
+
+# shellcheck source=/dev/null
+source /usr/local/bin/dgvpn-lib.sh
+dgvpn_require_up dgssh
+
+# %h/%p are expanded by ssh to the target host/port. Passing the hostname (not
+# an IP) is what lets the proxy's suffix routing + split-DNS resolution kick in.
+# BatchMode is intentionally NOT forced here: aws-tools auth is an SSH cert, but
+# a caller may still need a passphrase prompt, so leave interactivity to ssh.
+exec ssh \
+  -o ProxyCommand="dgvpn-connect 127.0.0.1:${PORT} %h %p" \
+  "$@"
