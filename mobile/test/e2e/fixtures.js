@@ -224,13 +224,31 @@ export const test = base.extend({
 // `test=1` query string, the toolbar-expand init script, and the connected-dot
 // wait all stay in one place.
 export async function gotoTest(page, server) {
-  // Default localStorage state has the toolbar collapsed (max-height: 0), which
-  // makes the Copy/Select/tmux buttons unreachable for clicks (the parent
-  // #controls intercepts pointer events). Expand it before navigation so any
-  // test can click toolbar buttons without per-spec boilerplate.
+  // A collapsed toolbar is max-height: 0, which makes the Copy/Select/Sessions
+  // buttons unreachable for clicks (the parent #controls intercepts pointer
+  // events). Pin it open before navigation so any test can click toolbar
+  // buttons without per-spec boilerplate.
+  //
+  // This WRITES the preference, so it also defeats the per-form-factor default
+  // (expanded on desktop, collapsed on a phone), which only applies when the
+  // key is absent. Anything testing that default must navigate with gotoRaw.
   await page.addInitScript(() => {
     localStorage.setItem('pd-toolbar-collapsed', 'false');
   });
+  await page.goto(server.baseURL + '/?test=1');
+}
+
+// Panes are created by createSession(), which is a fetch: the click that starts
+// it returns before the pane exists, so tests that need the second pane have to
+// wait for it rather than for the click.
+export async function waitForPanes(page, n) {
+  await expect
+    .poll(() => page.evaluate(() => document.querySelectorAll('.terminal-pane').length), { timeout: 10000 })
+    .toBe(n);
+}
+
+// Navigate with no preferences seeded, for tests about first-run defaults.
+export async function gotoRaw(page, server) {
   await page.goto(server.baseURL + '/?test=1');
 }
 
@@ -262,9 +280,15 @@ export async function switchToRow(page, index) {
 }
 
 // Kill lives in the session itself, next to the thing it destroys, rather than
-// on a list you scan one-handed.
+// on a list you scan one-handed. It is two taps: the button reads ✕ until the
+// first press arms it, then Kill? until the second confirms. Tests go through
+// both presses rather than calling tmuxKill(), so the arming step stays covered
+// by everything that kills a session.
 export async function killActiveSession(page) {
-  await page.click('#btn-row-normal ~ .btn-row >> text=Kill');
+  const btn = page.locator('#kill-btn');
+  await btn.click();
+  await expect(btn).toHaveText('Kill?');
+  await btn.click();
 }
 
 export async function sessionRows(page) {
