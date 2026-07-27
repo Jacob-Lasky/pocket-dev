@@ -41,8 +41,15 @@ trap 'rm -f "$tmp"' EXIT
 jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$config" > "$tmp" 2>/dev/null || exit 0
 [ -s "$tmp" ] || exit 0
 
-# Copy the CONTENTS back, never `mv` the temp file over the target. DO NOT
-# "improve" this into an atomic rename: ~/.claude.json is a file-level bind
-# mount (see pocket-dev.xml), and renaming onto a mount point fails with EBUSY,
-# which would silently leave the trust flag unset forever.
+# Copy the CONTENTS back, never `mv` the temp file over the target.
+#
+# The original reason was that ~/.claude.json was a file-level bind mount, and
+# renaming onto a mount point fails with EBUSY — which would have left the trust
+# flag unset forever, silently. That specific mount is gone: the whole home is
+# one mount now, so .claude.json is an ordinary file inside it.
+#
+# Keep writing in place anyway. An in-place write costs nothing here, and it is
+# the only version of this that survives someone re-introducing a file-level
+# mount at this path (a plausible thing to reach for, and it would fail exactly
+# as quietly as before). trustWorkspace.test.js pins the inode to hold the line.
 cat "$tmp" > "$config" 2>/dev/null || exit 0
