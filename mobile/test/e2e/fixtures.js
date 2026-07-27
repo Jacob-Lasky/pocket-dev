@@ -269,14 +269,44 @@ export async function openSessionList(page) {
   await page.click('#sessions-btn');
 }
 
+// Which session's pane is on screen. The single synchronous fact that says a
+// switch has actually COMPLETED: setActive toggles the class on every pane
+// before anything async happens.
+export async function activeSessionId(page) {
+  return page.evaluate(() => document.querySelector('.terminal-pane.active')?.dataset.sessionId ?? null);
+}
+
+// Wait until the pane on screen is a DIFFERENT session than before.
+//
+// `waitForConnection` is not this: a socket can be open on a session that is not
+// the one being switched to, so a test that only waits for a connection can act
+// while the previous session is still the active one. Leaving a session now
+// flushes its read state, so acting in that window drives output into a session
+// the client is about to mark read, and the test sees a state no user could
+// produce. Caught 2026-07-27 in `opening a session is what marks it read`.
+async function waitForActiveChange(page, previous) {
+  await expect.poll(async () => {
+    const now = await activeSessionId(page);
+    return now !== null && now !== previous;
+  }, { timeout: 10000 }).toBe(true);
+}
+
 export async function newSession(page) {
+  const before = await activeSessionId(page);
   await openSessionList(page);
   await page.click('#sl-bar >> text=+ New');
+  await waitForActiveChange(page, before);
 }
 
 export async function switchToRow(page, index) {
+  const before = await activeSessionId(page);
   await openSessionList(page);
-  await page.locator('.sl-row').nth(index).click();
+  const row    = page.locator('.sl-row').nth(index);
+  // Read the target BEFORE clicking: tapping the row you are already in is a
+  // legitimate no-op, and there is no change to wait for in that case.
+  const target = await row.getAttribute('data-session-id');
+  await row.click();
+  if (target !== before) await waitForActiveChange(page, before);
 }
 
 // Kill lives in the session itself, next to the thing it destroys, rather than

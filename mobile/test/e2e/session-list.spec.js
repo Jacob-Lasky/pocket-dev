@@ -1,23 +1,33 @@
-// The session list: three states, from two sources.
+// The session list: four states, from two sources.
 //
-// The server can only say whether a conversation is mid-turn or finished.
-// "Waiting on you" and "read" are the SAME finished state and differ only by
-// whether the user has looked since its last output, so that axis is tracked in
-// the browser. These tests exist mostly to hold that split in place, because it
-// is the part most likely to get quietly re-modelled as three server states.
+// The transcript says what the conversation is doing — working, finished, or
+// blocked on a question it asked ('asking'). What it cannot say is whether a
+// human has LOOKED: "waiting on you" and "read" are the same finished state on
+// disk, so that axis is the server's unread flag. These tests exist mostly to
+// hold that split in place, because it is the part most likely to get quietly
+// re-modelled as one server enum.
 //
 // Runs on pdServerClaudeStub, which leaves SHELL_CMD unset so real conversation
 // ids and titles exist. The cat fixture cannot reach any of that.
 
 import {
   test, expect, gotoTest, waitForConnection,
-  openSessionList, newSession, switchToRow, sessionRows,
+  openSessionList, newSession, switchToRow, sessionRows, sendAndWaitForEcho,
 } from './fixtures.js';
 
 const titleRecord  = (t) => ({ type: 'ai-title', aiTitle: t });
 const promptRecord = (p) => ({ type: 'last-prompt', lastPrompt: p });
 const finishedTurn = { type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } };
-const workingTurn  = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } };
+const workingTurn  = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'Bash' }] } };
+// A question put to the user. Indistinguishable from workingTurn except for the
+// tool's name, which is the entire point.
+const askingTurn   = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } };
+
+// The badge is an attribute with two tiers, so assert on the tier, never just
+// on presence: "something is working" and "something wants you" being
+// indistinguishable is the defect it was built to fix.
+const badge = (page, tier) => page.locator(`#sessions-btn[data-badge="${tier}"]`);
+const anyBadge = (page) => page.locator('#sessions-btn[data-badge]');
 
 const openList = openSessionList;
 const rowCount  = (page) => page.locator('.sl-row').count();
@@ -137,13 +147,66 @@ test('the Sessions button flags another session wanting attention', async ({ pdS
     .poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-1`)?.unread, { timeout: 20000 })
     .toBe(false);
   await switchToRow(page, 1);
-  await expect(page.locator('#sessions-btn')).not.toHaveClass(/has-unread/, { timeout: 10000 });
+  await expect(anyBadge(page)).toHaveCount(0, { timeout: 10000 });
 
   // Session 1 produces output while session 2 is on screen. Learning that
   // without leaving this session is the whole point of the badge.
   await sendTo(page, `${base}-1`, 'output for the other tab');
 
-  await expect(page.locator('#sessions-btn')).toHaveClass(/has-unread/, { timeout: 8000 });
+  // Waits for a metadata poll on purpose. Arriving bytes no longer flag a
+  // session in the browser, because the browser cannot tell a finished turn
+  // from a repaint, so the badge is worth exactly one poll interval of latency.
+  await expect(badge(page, 'attention')).toHaveCount(1, { timeout: 15000 });
+});
+
+test('a session merely working does NOT raise the attention badge', async ({ pdServerClaudeStub, page }) => {
+  // The reported defect: the badge fired for any session that was not 'read',
+  // which includes every session that is thinking. Something is almost always
+  // thinking, so the badge was on permanently and answered nothing — the user
+  // still had to open the list to find out whether anything wanted them.
+  await gotoTest(page, pdServerClaudeStub);
+  await waitForConnection(page);
+  const base = 'pdstub-' + pdServerClaudeStub.port;
+  await newSession(page);
+  await waitForConnection(page);
+
+  const uuid1 = await pdServerClaudeStub.uuidFor(`${base}-1`);
+  await pdServerClaudeStub.writeTranscript(uuid1, [titleRecord('Grinding away'), workingTurn]);
+
+  // Sit in session 2 with session 1 mid-turn. The dim 'working' tier is allowed
+  // (it answers "is anything running?"); 'attention' is not.
+  await switchToRow(page, 1);
+  await expect(badge(page, 'working')).toHaveCount(1, { timeout: 10000 });
+  await expect(badge(page, 'attention')).toHaveCount(0);
+});
+
+test('a session holding a question wants you, and keeps wanting you once seen', async ({ pdServerClaudeStub, page }) => {
+  // The reported defect: a session that had asked a direct multiple-choice
+  // question read as "Working", because a pending tool call is a pending tool
+  // call whether the answer comes from a machine or a human. Measured on the
+  // live container 2026-07-27: one sat that way for 39 minutes.
+  await gotoTest(page, pdServerClaudeStub);
+  await waitForConnection(page);
+  const base = 'pdstub-' + pdServerClaudeStub.port;
+  await newSession(page);
+  await waitForConnection(page);
+
+  const uuid1 = await pdServerClaudeStub.uuidFor(`${base}-1`);
+  await pdServerClaudeStub.writeTranscript(uuid1, [titleRecord('Asked you something'), askingTurn]);
+
+  await switchToRow(page, 1);
+  await expect(badge(page, 'attention')).toHaveCount(1, { timeout: 10000 });
+
+  await openList(page);
+  await expect.poll(() => stateOf(page, 0), { timeout: 8000 }).toBe('asking');
+
+  // Now LOOK at it, and look away again. A glance is not an answer, so unlike
+  // an unread finished turn this must not clear.
+  await rowFor(page, 0).click();
+  await switchToRow(page, 1);
+  await openList(page);
+  await expect.poll(() => stateOf(page, 0), { timeout: 8000 }).toBe('asking');
+  await expect(badge(page, 'attention')).toHaveCount(1);
 });
 
 test('a page reload does not turn read sessions unread', async ({ pdServerClaudeStub, page }) => {
@@ -168,6 +231,51 @@ test('a page reload does not turn read sessions unread', async ({ pdServerClaude
   await openList(page);
   await expect.poll(() => rowCount(page)).toBe(2);
   expect(await stateOf(page, 0)).toBe('read');
+});
+
+test('a reconnect does not turn a read BACKGROUND session unread', async ({ pdServer, page }) => {
+  // The sharp version of the test above, and a real reported bug the loose one
+  // missed. After a reload the active session is row 0, and the active session
+  // is never unread by definition, so asserting on it proves nothing. The
+  // sessions that break are the ones NOT on screen: the server replays its
+  // whole buffer to every pane that attaches, and the client used to count any
+  // arriving bytes as "unread" for a background session. Every reconnect — a
+  // phone waking, a network blip, a restart — therefore claimed that every
+  // session the user was not looking at wanted them.
+  //
+  // Made deterministic by stalling the metadata poll after bootstrap, so the
+  // client cannot quietly correct itself before the assertion. Without that
+  // this is a race, and racy assertions have cost this repo a day before.
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  const base = 'pdtest-' + pdServer.port;
+  await newSession(page);
+  await waitForConnection(page);
+
+  // Give session 2 something in its replay buffer, then leave it read. It has
+  // to be session 2: after a reload the first session becomes the active one.
+  await sendAndWaitForEcho(page, 'bytes in the replay buffer');
+  await switchToRow(page, 0);
+  await expect
+    .poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-2`)?.unread, { timeout: 20000 })
+    .toBe(false);
+
+  let getsAllowed = 1;
+  await page.route('**/sessions', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    if (getsAllowed-- > 0) return route.continue();   // bootstrap needs one
+    return route.abort();                             // and then no corrections
+  });
+
+  await page.reload();
+  await waitForConnection(page);
+  await openList(page);
+  await expect.poll(() => rowCount(page)).toBe(2);
+
+  // Row 1 is session 2: off screen, replayed, and already read.
+  expect(await stateOf(page, 1)).toBe('read');
+  await expect(rowFor(page, 1)).toHaveAttribute('data-unread', 'false');
+  await expect(anyBadge(page)).toHaveCount(0);
 });
 
 test('the list survives having no titles at all', async ({ pdServer, page }) => {

@@ -59,6 +59,16 @@ function writeTranscript(uuid, records) {
 
 const BUSY = [{ type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } }];
 const IDLE = [{ type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'all yours' }] } }];
+// A question put to the user. Blocked on a human, so it is neither busy nor
+// merely finished, and it must never be told to continue.
+const ASKING = [{ type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } }];
+
+// Turn records carrying their own uuid, which is what the unread axis compares.
+const TURN_A = 'a1111111-1111-4111-8111-111111111111';
+const TURN_B = 'b2222222-2222-4222-8222-222222222222';
+const finished = (uuid) => ({ type: 'assistant', uuid, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'over to you' }] } });
+const midTurn  = (uuid) => ({ type: 'assistant', uuid, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'Bash' }] } });
+const question = (uuid) => ({ type: 'assistant', uuid, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } });
 
 beforeEach(() => {
   dir         = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-state-'));
@@ -205,6 +215,14 @@ describe('resuming an interrupted conversation', () => {
     expect(restoreWith(null).env).not.toHaveProperty('PD_RESUME_PROMPT');
   });
 
+  it('says nothing to a session holding a question — the prompt would answer it', () => {
+    // The sharpest case for not nudging. The pending record is a question put to
+    // the user, so "continue please" arrives AS the answer and Claude acts on a
+    // choice nobody made. Both shutdown kinds, because neither makes it OK.
+    expect(restoreWith(ASKING).env).not.toHaveProperty('PD_RESUME_PROMPT');
+    expect(restoreWith(ASKING, { autoContinue: false }).env).not.toHaveProperty('PD_RESUME_PROMPT');
+  });
+
   it('says nothing when the user interrupted on purpose', () => {
     const interrupted = [
       { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } },
@@ -270,6 +288,174 @@ describe('resuming an interrupted conversation', () => {
     expect(args).toContain('-e');
     expect(args).toContain('PD_RESUME_PROMPT=continue please');
     expect(args.indexOf('PD_RESUME_PROMPT=continue please')).toBeLessThan(args.length - 1);
+  });
+});
+
+// The unread axis for a session whose conversation we CAN read. It advances per
+// TURN, not per byte, and these are the guards for the three ways the byte
+// version was wrong in production (all reported 2026-07-27).
+describe('unread counts turns, not output', () => {
+  // The sid file has to exist BEFORE create(), because create seeds the
+  // session's status from it: a conversation that was already finished must not
+  // read as newly-finished the first time anyone looks.
+  function withConversation(records, { id = 'main-1' } = {}) {
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(id), UUID);
+    if (records) writeTranscript(UUID, records);
+    const { api } = makeApi();
+    api.create(id);
+    return { api, proc: spawned[spawned.length - 1].proc, id };
+  }
+
+  it('does not go unread while it is thinking, however much it paints', () => {
+    // The reported bug: a TUI coder emits a frame per thought, and every frame
+    // used to count as something new to read.
+    const { api, proc } = withConversation([midTurn(TURN_A)]);
+    for (let i = 0; i < 50; i++) proc.emit(`\x1b[2K frame ${i}`);
+    const [session] = api.describe();
+    expect(session.status).toBe('busy');
+    expect(session.unread).toBe(false);
+  });
+
+  it('goes unread when a turn finishes', () => {
+    const { api } = withConversation([midTurn(TURN_A)]);
+    writeTranscript(UUID, [midTurn(TURN_A), finished(TURN_B)]);
+    const [session] = api.describe();
+    expect(session.status).toBe('idle');
+    expect(session.unread).toBe(true);
+  });
+
+  it('stays read when a finished session merely repaints', () => {
+    // The other reported bug: a session sitting there waiting reverted to
+    // needing attention on its own. Anything that redraws the screen without
+    // advancing the conversation must not move this.
+    const { api, proc, id } = withConversation([midTurn(TURN_A)]);
+    writeTranscript(UUID, [midTurn(TURN_A), finished(TURN_B)]);
+    expect(api.describe()[0].unread).toBe(true);
+    api.markViewed(id);
+
+    for (let i = 0; i < 20; i++) proc.emit('\x1b[H\x1b[2J redrawn');
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('goes unread for a NEW finished turn even though the status did not change', () => {
+    // Two consecutive finished turns both read 'idle'. Comparing status alone
+    // would miss the second one whenever the busy phase fell between two polls,
+    // so the comparison is against the deciding record's uuid.
+    const { api, id } = withConversation([finished(TURN_A)]);
+    expect(api.describe()[0].unread).toBe(false);
+    api.markViewed(id);
+
+    writeTranscript(UUID, [finished(TURN_A), { type: 'user', message: { role: 'user', content: 'and another thing' } }, finished(TURN_B)]);
+    const [session] = api.describe();
+    expect(session.status).toBe('idle');
+    expect(session.unread).toBe(true);
+  });
+
+  it('reports a pending question as asking, and counts it as something new', () => {
+    const { api } = withConversation([midTurn(TURN_A)]);
+    writeTranscript(UUID, [midTurn(TURN_A), question(TURN_B)]);
+    const [session] = api.describe();
+    expect(session.status).toBe('asking');
+    expect(session.unread).toBe(true);
+  });
+
+  it('keeps reporting asking after the session has been viewed', () => {
+    // Looking at a question is not answering it. The unread axis clears, the
+    // status does not, and the client leans on the status for exactly this.
+    const { api, id } = withConversation([midTurn(TURN_A)]);
+    writeTranscript(UUID, [midTurn(TURN_A), question(TURN_B)]);
+    api.describe();
+    api.markViewed(id);
+    const [session] = api.describe();
+    expect(session.unread).toBe(false);
+    expect(session.status).toBe('asking');
+  });
+
+  it('is not unread on the first look at a conversation that was already finished', () => {
+    // Restore's invariant: the pty history is gone, so a session you already
+    // dealt with must not resurface just because this process is new.
+    const { api } = withConversation([finished(TURN_A)]);
+    const [session] = api.describe();
+    expect(session.status).toBe('idle');
+    expect(session.unread).toBe(false);
+  });
+
+  it('does not count output for a session it can classify', () => {
+    // Bytes are the fallback for a session with no readable conversation, not a
+    // second opinion on one that has one.
+    const { api, proc, id } = withConversation([finished(TURN_A)]);
+    api.markViewed(id);
+    proc.emit('a stray repaint');
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('does not announce a turn the user opened the session to read', () => {
+    // markViewed OBSERVES before it catches up. The unread axis only advances
+    // when someone reads the transcript, so a turn that finished since the last
+    // poll is uncounted at the moment the user opens the session; catching up
+    // first would bank a total that excludes it, and the next poll would then
+    // announce a turn already read. Reachable in the seconds between a turn
+    // ending and the next poll, which is exactly when a waiting user shows up.
+    const { api, id } = withConversation([midTurn(TURN_A)]);
+    writeTranscript(UUID, [midTurn(TURN_A), finished(TURN_B)]);
+
+    // No describe() in between: nobody has polled since the turn landed.
+    api.markViewed(id);
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('forgets a killed session conversation metadata', async () => {
+    // The memo cache is keyed by conversation uuid and was append-only: every
+    // session ever killed kept its title and preview resident for the life of
+    // the process.
+    //
+    // Proved behaviourally rather than by peering at the cache, by forcing a
+    // cache-key COLLISION: the second transcript is written to the same byte
+    // length and its mtime is put back, so {file, mtimeMs, size} is identical.
+    // A surviving entry therefore answers with the stale title; an evicted one
+    // has to re-read and sees the new one.
+    const titleFile = path.join(projectsDir, '-home-claude', `${UUID}.jsonl`);
+    const { api, id } = withConversation([{ type: 'ai-title', aiTitle: 'AAAAA' }, finished(TURN_A)]);
+    expect(api.describe()[0].title).toBe('AAAAA');
+    const { atime, mtime } = fs.statSync(titleFile);
+    const sizeBefore = fs.statSync(titleFile).size;
+
+    await new Promise(resolve => api.destroy(id, resolve));
+
+    writeTranscript(UUID, [{ type: 'ai-title', aiTitle: 'BBBBB' }, finished(TURN_A)]);
+    fs.utimesSync(titleFile, atime, mtime);
+    expect(fs.statSync(titleFile).size).toBe(sizeBefore);   // the key really does collide
+
+    // Same id, same conversation: what a restore looks like.
+    const store = createSessionStore({ dir, logger });
+    fs.writeFileSync(store.sidPath(id), UUID);
+    api.create(id);
+    expect(api.describe()[0].title).toBe('BBBBB');
+  });
+
+  it('reads the sid file BEFORE clearing it when a session is destroyed', () => {
+    // The uuid IS the cache key, and clearSid destroys the only record of it, so
+    // reordering these two lines turns eviction into a silent no-op. Nothing
+    // observable breaks, which is exactly why it gets a test.
+    const real  = createSessionStore({ dir, logger });
+    const calls = [];
+    const store = {
+      ...real,
+      readSid:  (sid) => { calls.push(`readSid:${sid}`);  return real.readSid(sid); },
+      clearSid: (sid) => { calls.push(`clearSid:${sid}`); return real.clearSid(sid); },
+    };
+    const api = createSessionsApi({
+      store, projectsDir, logger,
+      spawnPty: (opts) => { const proc = fakePty(); spawned.push({ ...opts, proc }); return proc; },
+    });
+    const state = api.create();
+    calls.length = 0;
+    api.destroy(state.id, () => {});
+
+    expect(calls.indexOf(`readSid:${state.id}`)).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf(`readSid:${state.id}`)).toBeLessThan(calls.indexOf(`clearSid:${state.id}`));
   });
 });
 

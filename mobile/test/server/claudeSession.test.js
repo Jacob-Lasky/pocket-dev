@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { findTranscript, classifyTranscript, inspectTranscript, statusOf, inspect } from '../../claudeSession.js';
+import { findTranscript, classifyTranscript, inspectTranscript } from '../../claudeSession.js';
 
 // Record shapes below are copied from real Claude Code transcripts (structure
 // only). They are the contract this classifier reads; if Claude changes them,
@@ -16,6 +16,12 @@ const assistantToolUse = { type: 'assistant', isSidechain: false, message: { rol
 const userToolResult   = { type: 'user',      isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] } };
 const userPrompt       = { type: 'user',      isSidechain: false, message: { role: 'user', content: [{ type: 'text', text: 'please refactor this' }] } };
 const userInterrupt    = { type: 'user',      isSidechain: false, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } };
+// A tool call the MACHINE answers looks identical to one only a HUMAN can
+// answer, apart from the name. Shape copied from a real pending question
+// (measured 2026-07-27: 12 of these across six transcripts, one unanswered for
+// 39 minutes, every second of which pocket-dev reported as "Working").
+const assistantAsking  = { type: 'assistant', isSidechain: false, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } };
+const assistantPlan    = { type: 'assistant', isSidechain: false, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'ExitPlanMode' }] } };
 // Bookkeeping records Claude appends after the conversation proper.
 const trailer = [{ type: 'last-prompt' }, { type: 'ai-title' }, { type: 'mode' }, { type: 'permission-mode' }];
 
@@ -66,6 +72,39 @@ describe('classifyTranscript', () => {
 
   it('reads a tool call in flight as busy', () => {
     expect(classifyTranscript(writeTranscript(UUID, [userPrompt, assistantToolUse]))).toBe('busy');
+  });
+
+  it('reads a pending question as asking, not busy — it is blocked on the user', () => {
+    expect(classifyTranscript(writeTranscript(UUID, [userPrompt, assistantAsking]))).toBe('asking');
+    expect(classifyTranscript(writeTranscript(UUID, [userPrompt, assistantPlan]))).toBe('asking');
+  });
+
+  it('reads an ANSWERED question as busy again', () => {
+    // The answer arrives as the tool_result, and Claude is off working on it.
+    expect(classifyTranscript(writeTranscript(UUID, [assistantAsking, userToolResult]))).toBe('busy');
+  });
+
+  it('does not call an ordinary long-running tool call asking', () => {
+    // The whole discrimination is the tool NAME. If pendingness alone were
+    // enough, every Bash command would tell the user to go answer something.
+    expect(classifyTranscript(writeTranscript(UUID, [userPrompt, assistantToolUse]))).toBe('busy');
+    for (const name of ['Bash', 'WebFetch', 'Agent', 'Read', undefined]) {
+      const call = { type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name }] } };
+      expect(classifyTranscript(writeTranscript(UUID, [userPrompt, call]))).toBe('busy');
+    }
+  });
+
+  it('does not call a half-streamed question asking', () => {
+    // stop_reason null means the stream was cut off, so the call never ran and
+    // nobody is waiting on an answer to a question that was never put.
+    const partial = { type: 'assistant', message: { role: 'assistant', stop_reason: null, content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } };
+    expect(classifyTranscript(writeTranscript(UUID, [userPrompt, partial]))).toBe('busy');
+  });
+
+  it('ignores a question asked on a subagent branch', () => {
+    // A subagent has no user to ask, and its branch finishes independently.
+    const sidechainAsking = { ...assistantAsking, isSidechain: true };
+    expect(classifyTranscript(writeTranscript(UUID, [assistantToolUse, sidechainAsking]))).toBe('busy');
   });
 
   it('reads an unanswered tool result as busy', () => {
@@ -137,16 +176,39 @@ describe('classifyTranscript', () => {
   });
 });
 
-describe('statusOf', () => {
-  it('maps a uuid straight through to its status', () => {
-    writeTranscript(UUID,  [userPrompt, assistantEndTurn]);
-    writeTranscript(UUID2, [userPrompt, assistantToolUse]);
-    expect(statusOf(UUID,  { projectsDir })).toBe('idle');
-    expect(statusOf(UUID2, { projectsDir })).toBe('busy');
+// turnId is what makes "has anything happened since I last looked" answerable
+// without timestamps or file sizes. The server compares it per poll, so a value
+// that moved when the conversation did not would put a session back into the
+// unread state for no reason — the exact bug this exists to prevent.
+describe('inspectTranscript turnId', () => {
+  const withUuid = (record, uuid) => ({ ...record, uuid });
+
+  it('is the deciding record own uuid', () => {
+    const file = writeTranscript(UUID, [userPrompt, withUuid(assistantEndTurn, UUID2)]);
+    expect(inspectTranscript(file).turnId).toBe(UUID2);
   });
 
-  it('is unknown when the conversation was never written', () => {
-    expect(statusOf(UUID, { projectsDir })).toBe('unknown');
+  it('does not move when only bookkeeping records are appended', () => {
+    // ai-title / last-prompt land between turns and are not conversation. If
+    // they moved this, every title refresh would read as a new turn.
+    const records = [userPrompt, withUuid(assistantEndTurn, UUID2)];
+    const before = inspectTranscript(writeTranscript(UUID, records)).turnId;
+    const after  = inspectTranscript(writeTranscript(UUID, [...records, title('Named later'), prompt('same turn')])).turnId;
+    expect(after).toBe(before);
+  });
+
+  it('moves when a new turn finishes', () => {
+    const first  = inspectTranscript(writeTranscript(UUID, [withUuid(assistantEndTurn, UUID2)]));
+    const second = inspectTranscript(writeTranscript(UUID, [
+      withUuid(assistantEndTurn, UUID2), userPrompt, withUuid(assistantEndTurn, '9f1c1e30-2f4d-4a1f-9a5e-1b2c3d4e5f60'),
+    ]));
+    expect(second.status).toBe('idle');
+    expect(second.turnId).not.toBe(first.turnId);
+  });
+
+  it('is null when there is no record to decide from, or it carries no uuid', () => {
+    expect(inspectTranscript(writeTranscript(UUID, trailer)).turnId).toBeNull();
+    expect(inspectTranscript(writeTranscript(UUID, [assistantEndTurn])).turnId).toBeNull();
   });
 });
 
@@ -161,6 +223,7 @@ describe('inspectTranscript', () => {
     const file = writeTranscript(UUID, [userPrompt, title('Restructure skills'), prompt('do the thing'), assistantEndTurn]);
     expect(inspectTranscript(file)).toEqual({
       status: 'idle',
+      turnId: null,
       title: 'Restructure skills',
       lastPrompt: 'do the thing',
     });
@@ -180,7 +243,7 @@ describe('inspectTranscript', () => {
   it('returns nulls rather than guessing when a conversation has no title yet', () => {
     // A session created seconds ago is the normal case here, not an error.
     expect(inspectTranscript(writeTranscript(UUID, [userPrompt]))).toEqual({
-      status: 'busy', title: null, lastPrompt: null,
+      status: 'busy', turnId: null, title: null, lastPrompt: null,
     });
   });
 
@@ -219,19 +282,3 @@ describe('inspectTranscript', () => {
   });
 });
 
-describe('inspect', () => {
-  it('resolves a uuid to its title and status', () => {
-    writeTranscript(UUID, [title('Named conversation'), prompt('hello'), assistantEndTurn]);
-    expect(inspect(UUID, { projectsDir })).toEqual({
-      status: 'idle', title: 'Named conversation', lastPrompt: 'hello',
-    });
-  });
-
-  it('is all nulls for a conversation with no transcript', () => {
-    expect(inspect(UUID, { projectsDir })).toEqual({ status: 'unknown', title: null, lastPrompt: null });
-  });
-
-  it('is all nulls for a uuid that is not a uuid', () => {
-    expect(inspect('../../etc/passwd', { projectsDir })).toEqual({ status: 'unknown', title: null, lastPrompt: null });
-  });
-});
