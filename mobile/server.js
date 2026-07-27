@@ -228,6 +228,11 @@ function createSessionsApi({
     if (sessions.has(id)) return sessions.get(id);
     noteId(id);
 
+    // Where this session's conversation already stood before we adopted it.
+    // Cheap: metaFor is memoised, and for a session with no recorded uuid (any
+    // brand new tab) it answers without touching the disk.
+    const { status: initialStatus, turnId: initialTurnId } = observe(id);
+
     const sidFile = store.sidPath(id);
     // The launcher decides whether a transcript exists and the server decides
     // what state it was in, so they MUST agree on where transcripts live. Pass
@@ -252,28 +257,47 @@ function createSessionsApi({
       clients: new Set(),
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
-      // The read/unread axis, server-side so every device agrees.
+      // The unread axis, server-side so every device agrees.
       //
-      // It counts output rather than timing it. Wall-clock comparison looked
-      // fine and was wrong: output landing in the SAME millisecond as a view
-      // compares equal and gets swallowed, and no ordering of > or >= fixes
-      // that, because the timestamps genuinely cannot distinguish "printed just
+      // It COUNTS rather than timing. Wall-clock comparison looked fine and was
+      // wrong: something landing in the SAME millisecond as a view compares
+      // equal and gets swallowed, and no ordering of > or >= fixes that,
+      // because the timestamps genuinely cannot distinguish "arrived just
       // before you looked" from "just after". A monotonic counter can, exactly,
       // and owes nothing to clock resolution or a clock that steps.
       //
+      // What it counts is TURNS, not bytes — see noteTurn. Bytes were the first
+      // implementation and they are the wrong unit: a TUI coder emits a stream
+      // of frames while it thinks, so every thought re-flagged the session as
+      // having something to read, and Jake reported exactly that (2026-07-27).
+      // A session's byte count is a measure of how much it is painting, which
+      // is not related to whether anything happened that a human needs to see.
+      //
       // Both counters restart at zero with the process, so after a restart
-      // nothing is unread until the session actually says something new. That
-      // is deliberate: the pty history is gone anyway, and resurfacing five
-      // sessions you already dealt with would be noise.
-      outputSeq: 0,
+      // nothing is unread until the session actually finishes something new.
+      // That is deliberate: the pty history is gone anyway, and resurfacing
+      // five sessions you already dealt with would be noise. A session left
+      // holding a QUESTION still surfaces, because 'asking' does not travel on
+      // this axis at all (see describe).
+      attentionSeq: 0,
       viewedSeq: 0,
+      // Last status we OBSERVED, and the turn it was decided from. Seeded at
+      // create so a session that was already finished before this process
+      // existed is not reported as newly-finished the first time we look.
+      status: initialStatus,
+      turnId: initialTurnId,
       // Display only: how long ago the session last said anything.
       lastOutputAt: 0,
     };
 
     ptyProc.onData(data => {
-      state.outputSeq += 1;
       state.lastOutputAt = Date.now();
+      // Bytes move the unread axis ONLY for a session we cannot classify: no
+      // transcript (a brand new tab), or a custom SHELL_CMD that is not Claude
+      // at all. There, output is the only evidence of anything happening that
+      // exists. For a Claude session noteTurn owns this, so a repaint or a
+      // thinking frame cannot make the session claim it wants you.
+      if (state.status === 'unknown') state.attentionSeq += 1;
       appendToReplay(state, data);
       for (const ws of state.clients) {
         if (ws.readyState === 1) ws.send(data);
@@ -283,6 +307,7 @@ function createSessionsApi({
     ptyProc.onExit(() => {
       // PTY died (e.g. tmux session killed externally). Drop state and close clients.
       sessions.delete(id);
+      forgetMeta(id);
       store.clearSid(id);
       persist();
       for (const ws of state.clients) {
@@ -315,15 +340,24 @@ function createSessionsApi({
       try {
         // Read the uuid BEFORE spawning: the launcher may mint a new one, and
         // the question being asked here is about the conversation that DIED.
-        const uuid   = store.readSid(entry.id);
-        const status = RESUME_ENABLED && uuid
-          ? claudeSession.statusOf(uuid, { projectsDir })
-          : 'unknown';
+        //
+        // Via metaFor, not claudeSession.statusOf, so this read and the one
+        // create() makes to seed the session's unread axis are the SAME read.
+        // Two independent reads could disagree if a turn landed between them,
+        // and the session would then look newly-finished the first time anyone
+        // opened the list after a restart.
+        const uuid   = RESUME_ENABLED ? store.readSid(entry.id) : null;
+        const status = metaFor(uuid).status;
 
         // 'unknown' never prompts — see claudeSession.js. Only a conversation
         // we can positively see was mid-turn gets asked to carry on; one that
         // was waiting on the user comes back and goes on waiting, which is the
         // whole point of classifying instead of always continuing.
+        //
+        // 'asking' must not prompt either, and it is the sharper case: the
+        // pending record is a question put to the user, so "continue please"
+        // would arrive as the answer to it and Claude would act on a choice the
+        // user never made.
         const resumePrompt = status === 'busy'
           ? (autoContinue ? RESUME_PROMPT : CRASH_PROMPT)
           : null;
@@ -331,7 +365,8 @@ function createSessionsApi({
         restored.push(entry.id);
 
         if (status !== 'busy') {
-          if (status === 'idle') logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
+          if (status === 'idle')   logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
+          if (status === 'asking') logger.log(`session ${entry.id}: was waiting for an answer to a question, restored as-is`);
         } else if (autoContinue) {
           logger.log(`session ${entry.id}: was mid-turn, resuming with "${resumePrompt}"`);
         } else {
@@ -354,6 +389,7 @@ function createSessionsApi({
     sessions.delete(id);
     // Drop the recorded conversation too: ids are reused across restarts, and a
     // future `main-1` must not resume a conversation the user deliberately killed.
+    forgetMeta(id);
     store.clearSid(id);
     persist();
     for (const ws of state.clients) {
@@ -372,10 +408,19 @@ function createSessionsApi({
 
   // Someone looked at this session. Recorded here rather than in the browser so
   // reading a session on the phone also clears it on the desktop.
+  //
+  // It OBSERVES before it catches up, and that ordering is load-bearing. The
+  // unread axis only advances when someone reads the transcript, so a turn that
+  // finished since the last poll has not been counted yet. Catching up first
+  // would bank a count that does not include it, and the next poll would then
+  // announce a turn the user has already read — reachable in the two-second
+  // window between a turn ending and the next poll, which is exactly when
+  // someone who was waiting opens the session.
   function markViewed(id) {
     const state = sessions.get(id);
     if (!state) return false;
-    state.viewedSeq = state.outputSeq;
+    noteTurn(state, observe(id));
+    state.viewedSeq = state.attentionSeq;
     return true;
   }
 
@@ -392,8 +437,13 @@ function createSessionsApi({
   // scans the project directories.
   const metaCache = new Map();
 
+  // Frozen because metaFor hands the SAME object to every caller that has
+  // nothing to read; a caller that decided to annotate its copy would be
+  // editing every other session's answer.
+  const NO_META = Object.freeze({ status: 'unknown', turnId: null, title: null, lastPrompt: null });
+
   function metaFor(uuid) {
-    if (!uuid) return { status: 'unknown', title: null, lastPrompt: null };
+    if (!uuid) return NO_META;
 
     const cached = metaCache.get(uuid);
     let file = cached && cached.file;
@@ -403,8 +453,8 @@ function createSessionsApi({
     }
     if (!file) {
       file = claudeSession.findTranscript(uuid, { projectsDir });
-      if (!file) return { status: 'unknown', title: null, lastPrompt: null };
-      try { stat = fs.statSync(file); } catch { return { status: 'unknown', title: null, lastPrompt: null }; }
+      if (!file) return NO_META;
+      try { stat = fs.statSync(file); } catch { return NO_META; }
     }
 
     if (cached && cached.file === file && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
@@ -415,13 +465,70 @@ function createSessionsApi({
     return value;
   }
 
+  // Fold a fresh reading of a session's conversation into its unread axis.
+  //
+  // One turn that wants the user is one thing to read, however many frames it
+  // painted getting there. `turnId` is the deciding record's uuid, so this fires
+  // once per turn and cannot be fooled by a repaint (which does not touch the
+  // transcript) or by the bookkeeping records Claude appends between turns
+  // (which are not message records, so they never become the deciding one).
+  //
+  // Comparing the turn rather than the status is what closes the gap where a
+  // whole turn starts and finishes between two polls: two consecutive finished
+  // turns read as 'idle' both times, but they are different records.
+  //
+  // 'asking' counts here too, so a question that arrives while you are
+  // elsewhere lights the badge like any other finished turn. It does not stop
+  // there, though: describe reports the status as well, and a pending question
+  // outranks the unread axis on the client, because looking at a question is not
+  // answering it.
+  //
+  // A change, and only a change, is news. What stops a restart from declaring
+  // every finished session unread is that create() SEEDS status and turnId from
+  // the same read, so the first look after adopting a session compares equal.
+  // DO NOT add a "skip the first observation" special case on top of that: the
+  // seed is the mechanism, and a second one hides real transitions (measured —
+  // a null-turnId guard here suppressed every transition in a transcript whose
+  // records carry no uuid).
+  function noteTurn(state, meta) {
+    if (meta.status === state.status && meta.turnId === state.turnId) return;
+    if (claudeSession.WANTS_USER.has(meta.status)) state.attentionSeq += 1;
+    state.status = meta.status;
+    state.turnId = meta.turnId;
+  }
+
+  // What a session's conversation says right now. The one place that decides
+  // whether we are allowed to look at all: with a custom SHELL_CMD there is no
+  // conversation, and create/describe/markViewed must not each re-decide that.
+  function observe(id) {
+    return RESUME_ENABLED ? metaFor(store.readSid(id)) : NO_META;
+  }
+
+  // Evict a dead session's memo entry. Called while the sid file still exists,
+  // because the uuid IS the cache key and clearSid destroys the only record of
+  // it. Without this the cache is append-only for the life of the process: every
+  // session ever killed keeps its title and preview resident, and a long-lived
+  // container churns through plenty of them.
+  function forgetMeta(id) {
+    const uuid = store.readSid(id);
+    if (uuid) metaCache.delete(uuid);
+  }
+
   // What the browser gets: the roster plus what each session actually IS.
   // `title` is null for a session whose conversation has not been written yet
   // (a tab created seconds ago) and for any session pocket-dev does not own the
   // command line for; the client falls back rather than inventing a name.
+  //
+  // This is a GET handler's body and it MUTATES, which is worth being explicit
+  // about: reading each transcript is the only moment pocket-dev learns that a
+  // turn ended, so it is also where the unread axis advances. The alternative, a
+  // server-side timer polling every transcript on its own schedule, buys
+  // nothing — nobody can be waiting on an answer that no browser has asked for
+  // — and costs a wakeup per session forever.
   function describe() {
     return [...sessions.values()].map(s => {
-      const meta = RESUME_ENABLED ? metaFor(store.readSid(s.id)) : { status: 'unknown', title: null, lastPrompt: null };
+      const meta = observe(s.id);
+      noteTurn(s, meta);
       return {
         id: s.id,
         cols: s.cols,
@@ -429,7 +536,7 @@ function createSessionsApi({
         title: meta.title,
         lastPrompt: meta.lastPrompt,
         status: meta.status,
-        unread: s.outputSeq > s.viewedSeq,
+        unread: s.attentionSeq > s.viewedSeq,
         lastOutputAt: s.lastOutputAt,
       };
     });

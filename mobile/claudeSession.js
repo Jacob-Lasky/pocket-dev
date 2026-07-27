@@ -78,9 +78,36 @@ function textOf(message) {
   return content.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
 }
 
+// Tools whose result comes from the HUMAN rather than from the machine.
+//
+// This is the difference between "Claude is working" and "Claude is blocked on
+// you", and from the outside the two look identical: both are an assistant turn
+// that ended in a tool call with no result yet. Only the tool's name separates
+// them. Measured across Jake's transcripts 2026-07-27: a pending
+// AskUserQuestion sat unanswered for up to 39 minutes, the whole of which
+// pocket-dev reported as "Working".
+//
+// Keep this list SHORT and keep it to tools that cannot proceed without a
+// person. A tool that merely takes a long time (Bash, WebFetch, an Agent) is
+// busy, not asking, and putting one in here would tell the user to go answer
+// something that is going to answer itself.
+//
+// AskUserQuestion is measured: 12 real pending instances across six
+// transcripts. ExitPlanMode is REASONED, not measured — no transcript on either
+// machine contains one, because Jake's sessions run with permissions skipped
+// and rarely enter plan mode. It is here because plan approval is by
+// construction a decision only the user can make, so its result arrives from a
+// human exactly as AskUserQuestion's does. If that is ever wrong the cost is
+// small and self-clearing (a session reads as asking for the second or two the
+// call is open), which is why it does not wait for a sample.
+const USER_INPUT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
 // Classify the state of a conversation from its transcript tail.
 //
 //   'idle'    Claude finished its turn and the next move is the user's.
+//   'asking'  Claude put a direct question to the user and is blocked on the
+//             answer. A stronger form of idle: it wants a SPECIFIC reply, so it
+//             does not stop wanting one just because the user glanced at it.
 //   'busy'    Claude was mid-turn: a tool call in flight, a tool result not yet
 //             answered, or a user message it never got to respond to.
 //   'unknown' Nothing we recognise. Caller must treat this as "do not touch".
@@ -95,6 +122,18 @@ function classifyTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
 }
 
 function classifyRecords(lines) {
+  return decide(lines).status;
+}
+
+// The record that decides the status, and its identity.
+//
+// `turnId` is the deciding record's own uuid, which every message record
+// carries. It is what lets a caller tell "the same turn I already saw" from "a
+// new one", WITHOUT comparing timestamps or file sizes: a TUI repaint does not
+// touch the transcript, and the bookkeeping records Claude appends between
+// turns (ai-title, last-prompt, summary) are not message records, so neither
+// moves it. A genuinely new turn always does.
+function decide(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
     let record;
     try {
@@ -104,20 +143,41 @@ function classifyRecords(lines) {
     }
     if (!record || (record.type !== 'user' && record.type !== 'assistant')) continue;
     // Subagent turns run on their own branch and finish independently of the
-    // main thread; hook/command output is bookkeeping, not conversation.
+    // main thread; hook/command output is bookkeeping, not conversation. A
+    // subagent also cannot ask the user anything, so skipping it here is what
+    // keeps a sidechain's tool call from reading as a question.
     if (record.isSidechain === true || record.isMeta === true) continue;
+
+    const turnId = typeof record.uuid === 'string' ? record.uuid : null;
 
     if (record.type === 'assistant') {
       const stop = record.message && record.message.stop_reason;
-      return stop === 'end_turn' ? 'idle' : 'busy';
+      if (stop === 'end_turn') return { status: 'idle', turnId };
+      // A tool call with no result yet. Whether that means "working" or
+      // "blocked on you" is entirely a question of WHICH tool, so ask.
+      //
+      // Gated on stop_reason 'tool_use' on purpose: an interrupted stream
+      // (stop_reason null) may carry a half-written tool_use block for a call
+      // that never ran, and nobody is waiting on a question that was never put.
+      if (stop === 'tool_use' && pendingUserInput(record.message)) return { status: 'asking', turnId };
+      return { status: 'busy', turnId };
     }
     // A user record is normally a tool_result (Claude was working) — except the
     // interrupt marker, which means the user hit Escape on purpose. Restarting
     // work they deliberately stopped is the one nudge that would actively annoy.
-    if (textOf(record.message).trimStart().startsWith('[Request interrupted by user')) return 'idle';
-    return 'busy';
+    if (textOf(record.message).trimStart().startsWith('[Request interrupted by user')) {
+      return { status: 'idle', turnId };
+    }
+    return { status: 'busy', turnId };
   }
-  return 'unknown';
+  return { status: 'unknown', turnId: null };
+}
+
+// Does this assistant message end in a tool call that only a human can answer?
+function pendingUserInput(message) {
+  const content = message && message.content;
+  if (!Array.isArray(content)) return false;
+  return content.some(b => b && b.type === 'tool_use' && USER_INPUT_TOOLS.has(b.name));
 }
 
 // Longest title / preview we will hand to a caller. These strings come off disk
@@ -136,7 +196,9 @@ function cleanOneLine(value, max) {
 
 // Everything worth knowing about a conversation, from ONE read of the tail.
 //
-//   status      'busy' | 'idle' | 'unknown', as classifyTranscript
+//   status      'busy' | 'idle' | 'asking' | 'unknown', as classifyTranscript
+//   turnId      uuid of the record the status was decided from, so a caller can
+//               tell a new turn from one it has already accounted for
 //   title       Claude's own `aiTitle`, the name its resume picker shows
 //   lastPrompt  the user's most recent message, for a preview line
 //
@@ -170,22 +232,26 @@ function inspectTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
     if (lastPrompt === null && record.type === 'last-prompt') lastPrompt = cleanOneLine(record.lastPrompt, MAX_PREVIEW);
   }
 
-  return { status: classifyRecords(lines), title, lastPrompt };
+  const { status, turnId } = decide(lines);
+  return { status, turnId, title, lastPrompt };
 }
 
-// Convenience wrapper: uuid -> 'busy' | 'idle' | 'unknown'.
-function statusOf(uuid, { projectsDir }) {
-  const file = findTranscript(uuid, { projectsDir });
-  if (!file) return 'unknown';
-  return classifyTranscript(file);
-}
+// Every status this module can emit, and the ones that mean a human has to do
+// something. ONE definition, because the alternative is a bare `status ===
+// 'idle' || status === 'asking'` in the server and a second copy of the same
+// judgement in the browser, drifting apart the moment a fifth status appears.
+// The client cannot import this (CJS server, ESM browser, JSON in between), so
+// `test/unit/statusContract.test.js` asserts the two agree instead.
+const STATUSES    = Object.freeze(['idle', 'asking', 'busy', 'unknown']);
+const WANTS_USER  = Object.freeze(new Set(['idle', 'asking']));
 
-// uuid -> { status, title, lastPrompt }. A conversation with no transcript on
-// disk is not an error: a session created seconds ago has not written one yet.
-function inspect(uuid, { projectsDir, tailBytes = TAIL_BYTES } = {}) {
-  const file = findTranscript(uuid, { projectsDir });
-  if (!file) return { status: 'unknown', title: null, lastPrompt: null };
-  return inspectTranscript(file, { tailBytes });
-}
-
-module.exports = { findTranscript, classifyTranscript, inspectTranscript, statusOf, inspect };
+// Deliberately NO uuid-level wrappers here. There were two (`statusOf` and
+// `inspect`, each uuid -> findTranscript -> read) and the server stopped using
+// both: it holds the resolved path in its own memo cache, keyed on mtime and
+// size, so re-resolving per poll would undo the caching that memo exists for.
+// An exported convenience whose only caller is its own test is dead weight that
+// reads as API.
+module.exports = {
+  findTranscript, classifyTranscript, inspectTranscript,
+  USER_INPUT_TOOLS, STATUSES, WANTS_USER,
+};

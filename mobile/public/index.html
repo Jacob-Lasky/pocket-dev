@@ -327,11 +327,17 @@
       letter-spacing: 0.1em;
       text-transform: uppercase;
     }
+    /* Green means act, amber means wait, grey means done with. Both states that
+       want the user are green: which one it is, is the label's job. */
     .sl-status .d { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
     .sl-status[data-state="working"]      { color: #d29922; }
     .sl-status[data-state="working"] .d   { background: #d29922; animation: sl-pulse 1.4s ease-in-out infinite; }
     .sl-status[data-state="waiting"]      { color: #3fb950; }
     .sl-status[data-state="waiting"] .d   { background: #3fb950; }
+    /* A pending question is the one state that blocks progress outright, so it
+       is the one that gets to be louder than the rest of the row. */
+    .sl-status[data-state="asking"]       { color: #56d364; font-weight: 600; }
+    .sl-status[data-state="asking"] .d    { background: #56d364; box-shadow: 0 0 6px #56d36499; }
     .sl-status[data-state="read"]         { color: #6e7681; }
     .sl-status[data-state="read"] .d      { background: #6e7681; }
 
@@ -351,17 +357,30 @@
       white-space: nowrap;
     }
 
-    /* A dot on the Sessions button when another session wants attention: the
-       whole point is learning that without leaving the one you are in. */
+    /* A dot on the Sessions button for what the OTHER sessions are doing: the
+       whole point is learning that without leaving the one you are in.
+       Two tiers, and the distinction is the reason the badge is worth having.
+       Green (attention) means a session wants you: go look. Amber (working)
+       means one is mid-turn and nothing needs you, so it is deliberately dim,
+       unglowing and half-opaque — present enough to answer "is anything
+       running?", quiet enough that it never reads as a summons. A single dot
+       covering both was indistinguishable from a permanent one, since something
+       is almost always working. */
     #sessions-btn { position: relative; }
-    #sessions-btn.has-unread::after {
+    #sessions-btn[data-badge]::after {
       content: '';
       position: absolute;
       top: 4px; right: 5px;
       width: 7px; height: 7px;
       border-radius: 50%;
+    }
+    #sessions-btn[data-badge="attention"]::after {
       background: #3fb950;
       box-shadow: 0 0 5px #3fb95088;
+    }
+    #sessions-btn[data-badge="working"]::after {
+      background: #d29922;
+      opacity: .5;
     }
 
     /* Which session am I in. Sits above the button group and outside it, so
@@ -475,6 +494,7 @@
     import { detectDefaultMode, applyMode } from '/js/mode.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
     import { scanMouseState, wheelSequence, wheelStepsFromDelta } from '/js/scroll.js';
+    import { STATE_TEXT, rowState, badgeState, summarise, isUnread, pollDelay } from '/js/attention.js';
 
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize  = parseInt(localStorage.getItem('pd-font-size')) || 14;
@@ -818,13 +838,23 @@
         ws.onmessage = e => {
           const str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
           this.term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
-          // The server owns unread and only counts real pty output, so a page
-          // reload replaying the buffer cannot mark anything unread. This is
-          // just an optimistic nudge so the badge does not wait for a poll.
+          // Arriving bytes NEVER mark a session unread here.
+          //
+          // This used to optimistically set unread = true for any background
+          // session that painted, to save waiting for a poll, and it was wrong
+          // twice over. It made every frame of a coder's thinking stream flag
+          // the session as having something to read, and — worse, because it
+          // looked like a session going stale on its own — the server replays
+          // its whole buffer on every WS attach, so any reconnect (a phone
+          // waking, a network blip, a restart) marked every session the user was
+          // not in unread until the next poll corrected it. Both were reported
+          // 2026-07-27 as "it reverts back to needing attention and idk why".
+          //
+          // The server is the only thing that knows, because only it can see
+          // that a TURN ended rather than that pixels moved. So the badge waits
+          // for the poll, which is at most a few seconds and is never wrong.
           if (activeId !== this.id) {
-            this.unread = true;
-            updateSessionsBadge();
-            if (document.body.dataset.view === 'list') renderSessionList();
+            /* nothing to do: unread is the server's call, arriving on the next poll */
           } else {
             // Keep the SERVER's record in step while you sit here reading, so
             // another device does not still think this session wants you.
@@ -891,7 +921,18 @@
 
     function setActive(id) {
       if (!sessions.has(id)) return;
-      if (activeId !== null && activeId !== id) previousId = activeId;
+      if (activeId !== null && activeId !== id) {
+        previousId = activeId;
+        // Flush the outgoing session's read state on the way out, unthrottled.
+        //
+        // The ping that runs while you sit in a session is throttled to 2s, so
+        // anything it printed in the last couple of seconds before you left was
+        // never acknowledged — and nothing acknowledges it later, because
+        // markViewed only ever runs for the ACTIVE session. The session you were
+        // just staring at then sat there claiming it wanted you. That is one of
+        // the two "it goes back to unread on its own" reports (2026-07-27).
+        markViewed(previousId);
+      }
       activeId = id;
       for (const s of sessions.values()) {
         s.pane.classList.toggle('active', s.id === id);
@@ -1042,24 +1083,11 @@
       markViewed(id);
     }
 
-    function isUnread(s) {
-      // The session on screen is never unread. You are looking at it, so its
-      // output is read as it arrives; without this a busy active session would
-      // keep re-flagging itself the moment it printed anything.
-      if (s.id === activeId) return false;
-      return s.unread === true;
-    }
-
-    // busy always wins: it is the one state the transcript knows for certain.
-    // Everything else folds into the read/unread axis, which keeps working even
-    // when there is no transcript to classify (a brand new tab, or a custom
-    // SHELL_CMD that is not Claude at all).
-    function rowState(s) {
-      if (s.claudeStatus === 'busy') return 'working';
-      return isUnread(s) ? 'waiting' : 'read';
-    }
-
-    const STATE_TEXT = { working: 'Working', waiting: 'Waiting on you', read: 'Read' };
+    // The four-state model and the badge tiers live in /js/attention.js, which
+    // is pure and unit-tested. These wrappers just bind the active session,
+    // which is the one thing the module cannot know.
+    const stateOfSession = (s) => rowState(s, activeId);
+    const unreadFlag     = (s) => isUnread(s, activeId);
 
     function ago(ms) {
       if (!ms) return '';
@@ -1140,16 +1168,16 @@
     }
 
     function renderSessionList() {
-      let needy = 0;
       const seen = new Set();
+      const listed = [];
       let cursor = slRows.firstElementChild;
 
       for (const id of order) {
         const s = sessions.get(id);
         if (!s) continue;
         seen.add(id);
-        const state = rowState(s);
-        if (state !== 'read') needy++;
+        listed.push(s);
+        const state = stateOfSession(s);
 
         let refs = slRowEls.get(id);
         if (!refs) {
@@ -1163,7 +1191,7 @@
         setText(time, ago(s.lastOutputAt));
         setText(statusText, STATE_TEXT[state]);
         setText(prev, s.lastPrompt || '');
-        const unread = String(isUnread(s));
+        const unread = String(unreadFlag(s));
         if (row.dataset.unread !== unread) row.dataset.unread = unread;
         if (status.dataset.state !== state) status.dataset.state = state;
         const label = `${s.title || id}. ${STATE_TEXT[state]}.`;
@@ -1179,25 +1207,29 @@
         if (!seen.has(id)) dropSessionRow(id);
       }
 
-      setText(slCount, `${order.length} session${order.length === 1 ? '' : 's'}`
-        + (needy ? ` · ${needy} need${needy === 1 ? 's' : ''} you` : ' · all quiet'));
+      setText(slCount, summarise(listed, activeId));
     }
 
     // The badge is the reason to poll while you are inside a session: it is how
-    // you learn another one wants you without leaving this one.
+    // you learn another one wants you without leaving this one. It says which of
+    // the two things it is, because a dot that also lit for "working" was on
+    // almost permanently and so answered nothing.
     function updateSessionsBadge() {
-      let other = false;
-      for (const s of sessions.values()) {
-        if (s.id !== activeId && rowState(s) !== 'read') { other = true; break; }
-      }
-      sessionsBtn.classList.toggle('has-unread', other);
+      const badge = badgeState([...sessions.values()], activeId);
+      if (badge) sessionsBtn.dataset.badge = badge;
+      else delete sessionsBtn.dataset.badge;
     }
 
     let metaTimer = null;
     function scheduleMetaPoll() {
       clearTimeout(metaTimer);
-      // Faster while the list is on screen, slow background tick otherwise.
-      const delay = document.body.dataset.view === 'list' ? 3000 : 8000;
+      // The interval is the badge's worst-case latency, since arriving bytes no
+      // longer flag anything in the browser. pollDelay owns the reasoning.
+      const delay = pollDelay({
+        listOpen:  document.body.dataset.view === 'list',
+        sessions:  sessions.values(),
+        activeId,
+      });
       metaTimer = setTimeout(async () => {
         if (document.visibilityState === 'visible') {
           await refreshSessionMeta();
