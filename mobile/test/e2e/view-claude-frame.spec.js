@@ -69,6 +69,9 @@ test('Copy grabs the visible window as clean text (chromium clipboard)', async (
 
   await gotoTest(page, pdServerClaudeFrame);
   await waitForConnection(page);
+  // Same exposure as copy.spec.js: Chromium rejects a clipboard write from an
+  // unfocused document, and a parallel worker's context is enough to take focus.
+  await page.bringToFront();
   await expect
     .poll(async () => page.evaluate(() => document.querySelector('#terminal-container').innerText.replace(/\s+/g, '')),
       { timeout: 8000 })

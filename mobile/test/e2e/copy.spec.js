@@ -44,11 +44,34 @@ test('Copy button writes terminal output to clipboard with no trailing whitespac
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'clipboard-test-marker');
 
+  // PREVENT the rejection readClipboard exists to report: Chromium refuses
+  // clipboard access from an unfocused document, and a parallel worker's context
+  // taking focus is enough to lose it. That is also why this reproduces under
+  // CI's scheduling and not on a fast local box (60 runs across 4 workers could
+  // not trigger it). Diagnosis and prevention are both wanted here, because a
+  // named failure still fails.
+  await page.bringToFront();
+
+  // The WRITE half of the same ambiguity. readClipboard covers a refused read;
+  // this covers a refused write, which is otherwise indistinguishable from a
+  // clipboard that simply never received anything.
+  await page.evaluate(() => {
+    window.__clipWrite = { ok: null, err: null };
+    const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+    navigator.clipboard.writeText = (text) => orig(text)
+      .then((r) => { window.__clipWrite = { ok: true, err: null }; return r; })
+      .catch((e) => { window.__clipWrite = { ok: false, err: String(e) }; throw e; });
+  });
+
   await page.click('#copy-btn');
-  // Poll because clipboardWrite is async with no DOM signal to wait on; ~200ms
-  // is typical locally. The timeout is a bound, NOT the mechanism that makes
-  // this reliable — see readClipboard above for why a longer one is not the fix
-  // when the read is being refused rather than lagging.
+
+  // The write resolved.
+  await expect.poll(() => page.evaluate(() => window.__clipWrite), { timeout: 8000 })
+    .toEqual({ ok: true, err: null });
+
+  // And the value landed. Poll because clipboardWrite is async with no DOM
+  // signal to wait on; ~200ms is typical locally. The timeout is a bound, NOT
+  // the mechanism that makes this reliable — see readClipboard above.
   await expect.poll(() => readClipboard(page), { timeout: 8000 })
     .toContain('clipboard-test-marker');
 
