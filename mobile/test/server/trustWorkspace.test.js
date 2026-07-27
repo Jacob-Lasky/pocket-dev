@@ -76,10 +76,12 @@ describe('pd-trust-workspace', () => {
   });
 
   it('writes in place, preserving the inode', () => {
-    // Regression guard for the bind mount: ~/.claude.json is mounted as a FILE
-    // in the container, so a rename onto it fails with EBUSY. If someone
-    // "improves" this into an atomic write-and-rename, the inode changes here
-    // and the trust flag silently stops being set in production.
+    // Originally a guard for a file-level bind mount at ~/.claude.json, where a
+    // rename fails with EBUSY. That mount is gone (the whole home is one mount
+    // now), but the assertion is kept: it is what makes re-introducing a
+    // file-level mount at this path safe, and that failure is silent — the trust
+    // flag just stops being set and every restored tab comes back on a prompt.
+    // See the comment in pd-trust-workspace.
     fs.writeFileSync(config, JSON.stringify({ projects: {} }));
     const before = fs.statSync(config).ino;
     run();

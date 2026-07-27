@@ -83,23 +83,6 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create entrypoint script directly in the image (as root before switching users)
-RUN echo '#!/bin/bash\n\
-set -e\n\
-# Group-writable umask (002). DO NOT raise back to 022. The container runs as\n\
-# claude:users (uid 99, gid 100) and writes to /coding (= host /mnt/user/misc/coding,\n\
-# an SMB share). The mediauser SMB account is also gid 100 (users); with the default\n\
-# 022 umask, everything Claude creates is 0755/0644 and same-group SMB users cannot\n\
-# write into it. 002 makes new files 0664/dirs 0775 so the shared tree is two-way\n\
-# writable. Explicit chmods (ssh keys 600, etc.) are unaffected by umask.\n\
-umask 002\n\
-# Ensure proper permissions on mounted volumes\n\
-chmod 775 /home/claude/.claude 2>/dev/null || true\n\
-chmod 775 /workspace 2>/dev/null || true\n\
-# Execute the main command\n\
-exec "$@"' > /usr/local/bin/entrypoint.sh && \
-    chmod +x /usr/local/bin/entrypoint.sh
-
 # Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
 # to the newest model in its family at launch, by design (Jake wants these to
 # track latest automatically). DO NOT pin them back to claude-opus-X-Y / a dated
@@ -110,12 +93,16 @@ RUN echo '#!/bin/bash' > /usr/local/bin/cdspo \
     && echo 'exec claude --dangerously-skip-permissions --model sonnet "$@"' >> /usr/local/bin/cdsps \
     && chmod +x /usr/local/bin/cdspo /usr/local/bin/cdsps
 
-# Create docker group and user with proper permissions
+# Create docker group and user with proper permissions.
+# The per-state-dir mkdirs that used to live here (.claude, .pocket-dev) are gone:
+# /home/claude is a bind mount at runtime and ships EMPTY in the image, so a dir
+# created here would be masked by the mount and never seen. entrypoint.sh creates
+# them inside the mounted home instead, where they persist.
 RUN groupadd -g 281 docker || true && \
     useradd -m -u 99 -g 100 -G 281 claude && \
-    mkdir -p /workspace /home/claude/.claude /home/claude/.pocket-dev && \
-    chown -R claude:users /workspace /home/claude/.claude /home/claude/.pocket-dev && \
-    chmod -R 775 /workspace /home/claude/.claude /home/claude/.pocket-dev
+    mkdir -p /workspace && \
+    chown -R claude:users /workspace && \
+    chmod -R 775 /workspace
 
 # Install pocket-dev server (as root, before switching users)
 # pnpm install compiles node-pty natively here. This is an expensive layer, so it
@@ -154,39 +141,30 @@ RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-trust-workspace 
     chown -R claude:users /mobile
 
 # Where the session roster and each tab's Claude conversation id live, so a
-# restart brings the user's sessions back instead of one blank one. Bind-mount
-# this (the `Session State` volume in pocket-dev.xml) to survive a container
-# RECREATE too — without a mount it lives in the writable layer, which an image
-# update throws away.
+# restart brings the user's sessions back instead of one blank one. This is
+# inside /home/claude, which is the single `Home` bind mount in pocket-dev.xml,
+# so it survives a container RECREATE with no volume of its own.
 ENV PD_STATE_DIR=/home/claude/.pocket-dev
 
 # dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
 # as root into /usr/local/bin (on PATH for the claude user). The proxy runs as
 # the unprivileged claude user at runtime: userspace tsnet needs no TUN device
 # and no NET_ADMIN, so this works in the unprivileged container. State lives
-# under /home/claude/.dgvpn, which survives a restart on its own but only
-# survives a RECREATE when the `dgvpn State` volume is actually mounted. Kept
-# last (just before USER claude) so iterating on vpn/ does not bust the apt or
-# npm layers above.
+# under /home/claude/.dgvpn, inside the single `Home` bind mount, so the ~24h
+# Keycloak registration survives a RECREATE without a volume of its own. The dir
+# is created by entrypoint.sh (inside the mount), NOT here — anything this layer
+# put at that path would just be masked. Kept last (just before USER claude) so
+# iterating on vpn/ does not bust the apt or npm layers above.
 COPY --from=dgvpn-builder /dgvpn-proxy /usr/local/bin/dgvpn-proxy
 COPY vpn/dgvpn vpn/dgvpn-up /usr/local/bin/
 RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
-    chmod +x /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgvpn-proxy && \
-    mkdir -p /home/claude/.dgvpn && chown claude:users /home/claude/.dgvpn
+    chmod +x /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up /usr/local/bin/dgvpn-proxy
 # Single source of truth for the proxy port at runtime. The Go binary and both
 # wrapper scripts read DGVPN_PROXY_PORT; their in-code defaults are fallbacks
 # only. Set it once here so the three never drift. Override via the template to
 # move the port. DGVPN_DIR matches the persisted `dgvpn State` volume in pocket-dev.xml.
 ENV DGVPN_PROXY_PORT=1055
 ENV DGVPN_DIR=/home/claude/.dgvpn
-
-# A writable, persistable prefix for tools a session installs for ITSELF
-# (flyctl, extra CLIs). It exists because the alternative people reach for is
-# bind-mounting /home/claude/.local — DO NOT do that: the image bakes `claude`,
-# `uv` and `uvx` into /home/claude/.local/bin at build time, and mounting a host
-# dir over it masks them and leaves a container with no Claude in it. /opt/pd is
-# empty in the image, so a mount there can never hide anything.
-RUN mkdir -p /opt/pd/bin && chown -R claude:users /opt/pd && chmod -R 775 /opt/pd
 
 # Switch to claude user before installing
 USER claude
@@ -195,8 +173,59 @@ USER claude
 RUN curl -fsSL https://claude.ai/install.sh | bash \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Ensure claude is in user's PATH and HOME is set correctly
-ENV PATH="/opt/pd/bin:/home/claude/.fly/bin:/home/claude/.local/bin:${PATH}"
+# Move the image's home OUT of /home/claude so the real home can be a single
+# bind mount.
+#
+# WHY. /home/claude was doing two incompatible jobs: holding image artifacts
+# (the claude/uv binaries, shell rc files, fish and uv configs) and holding
+# every tool's state. That forced one bind mount per dotfile in the template
+# (.claude, .claude.json, .config/gh, .dgvpn, .pocket-dev, .codex,
+# .google_workspace_mcp) and made mounting the home wholesale forbidden, because
+# a mount over /home/claude masks .local/bin and leaves a container with no
+# `claude` in it. Anything the list forgot — .aws, .kube, .fly — silently
+# evaporated on every image update. Separating the two jobs is what lets the
+# whole home be ONE mount that persists tools nobody has thought of yet.
+#
+# The symlink rewrite is the load-bearing part. The claude installer writes an
+# ABSOLUTE symlink (.local/bin/claude -> /home/claude/.local/share/claude/
+# versions/<v>), so a bare `mv` leaves a dangling link that only resolves if
+# entrypoint.sh has already linked ~/.local back. That circular dependency would
+# mean a container with a failed entrypoint has no runnable Claude and no
+# obvious reason why. Rewriting the links to point inside /opt/pd-home makes the
+# skeleton self-contained: PATH below reaches the real binary even if no seeding
+# ever runs. DO NOT drop the rewrite and rely on ~/.local being linked.
+USER root
+RUN mv /home/claude /opt/pd-home && \
+    rm -rf /opt/pd-home/.cache /opt/pd-home/.npm && \
+    find /opt/pd-home -type l | while read -r link; do \
+        target="$(readlink "$link")"; \
+        case "$target" in /home/claude/*) \
+            ln -sfn "/opt/pd-home${target#/home/claude}" "$link" ;; \
+        esac; \
+    done && \
+    mkdir -p /home/claude && \
+    chown -R claude:users /opt/pd-home /home/claude && \
+    chmod 775 /home/claude
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r//' /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
+USER claude
+
+# Where the image keeps its own home, and where the ephemeral caches go. These
+# are the SINGLE definition of both paths: entrypoint.sh reads them rather than
+# repeating the literals, so the relocation target cannot drift between the
+# image and the script that depends on it. homeMount.test.js asserts the
+# script's fallbacks still match these values.
+ENV PD_SKEL_DIR=/opt/pd-home
+ENV PD_CACHE_DIR=/var/tmp/pd-cache
+
+# PATH points at the RELOCATED skeleton, not at ~/.local/bin, so `claude` and
+# `uv` resolve even if the home mount is empty and seeding has not run.
+# $HOME/bin is the prefix for CLIs a session installs for itself: it is inside
+# the home mount, so it persists across recreates with no volume of its own.
+# This replaces the old /opt/pd tool prefix, which existed only because the home
+# was not persistent. ~/.fly/bin likewise needs no mount now.
+ENV PATH="/home/claude/bin:/home/claude/.fly/bin:/opt/pd-home/.local/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV HOME="/home/claude"

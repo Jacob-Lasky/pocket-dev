@@ -28,19 +28,26 @@ docker compose up -d --build
 # WebUI at http://localhost:7681
 ```
 
-`docker-compose.yml` mirrors the UnRAID template but uses `./workspace` and `./config` as host paths so local data doesn't collide with a deployed instance. The docker socket is mounted `:ro` for safety in dev.
+`docker-compose.yml` mirrors the UnRAID template but uses `./workspace` and `./home` as host paths so local data doesn't collide with a deployed instance. The docker socket is mounted `:ro` for safety in dev.
 
 ## Volumes (UnRAID defaults)
 
 | Host path | Container path | Purpose |
 |---|---|---|
 | `/mnt/user/appdata/claude-code/workspace` | `/workspace` | Claude's working directory; persists files between container recreates |
-| `/mnt/user/appdata/claude-code/config` | `/home/claude/.claude` | Claude config + auth state |
-| `/mnt/user/appdata/claude-code/claude.json` | `/home/claude/.claude.json` | MCP server configs + Claude settings (file-level mount) |
-| `/mnt/user/appdata/claude-code/pocket-dev` | `/home/claude/.pocket-dev` | Open sessions + each tab's Claude conversation id, so a restart or image update restores your tabs instead of dropping them |
-| `/mnt/user/appdata/claude-code/gh` | `/home/claude/.config/gh` | `gh auth login` token; without it the token dies with every image update |
-| `/mnt/user/appdata/claude-code/tools` | `/opt/pd` | Writable, on-`PATH` prefix for CLIs a session installs for itself. Use this instead of mounting `/home/claude/.local`, which would mask the `claude` and `uv` binaries baked into the image |
+| `/mnt/user/appdata/claude-code/home` | `/home/claude` | **The entire home, and the only state mount you need.** Claude's config and per-tab conversation ids, the `gh` token, the dgvpn registration, `~/bin` tools a session installs for itself, and credentials for anything else that writes to `~` (`aws`, `kubectl`, `fly`, `docker`). Must be owned `99:100` on the host |
 | `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Access to the host's docker daemon. **`:ro` does not make the API read-only** — it only marks the socket file read-only, and the daemon still honours `run` / `stop` / `rm`. Treat this mount as host root, and drop it or front it with a filtered `docker-socket-proxy` if that is not what you want |
+
+### Why the home is one mount
+
+There used to be a mount per dotfile — `.claude`, `.claude.json`, `.config/gh`, `.dgvpn`, `.pocket-dev`, and more. Anything not on that list silently evaporated on the next image update, which is a recreate: `~/.aws`, `~/.kube`, an installed `flyctl`. Adding a tool meant editing the template and recreating the container, and forgetting to looked exactly like everything working until the update landed.
+
+Mounting the whole home was blocked by a real constraint: the image bakes `claude`, `uv` and `uvx` into `/home/claude/.local/bin`, so a mount over the home masks them and yields a container with no Claude in it. The fix was to stop making the home do two jobs. The image now builds its artifacts into `/opt/pd-home` and ships `/home/claude` **empty**; `entrypoint.sh` symlinks the image-owned entries (`.local`, the shell rc files, `.config/fish`, `.config/uv`) back in at boot. State and artifacts no longer share a directory, so the home can be one mount that persists tools nobody has thought of yet.
+
+Two consequences worth knowing:
+
+- **Install session tools into `~/bin`** (on `PATH`, inside the mount), not `~/.local/bin` — that one is a symlink into the image skeleton, and writes there are lost on the next update.
+- **`~/.cache` and `~/.npm` are deliberately not persisted.** They are relinked to a container-local path, because the home mount lands on the UnRAID array over shfs FUSE and a write-heavy cache is the wrong traffic for it.
 
 ## Sessions survive a restart
 

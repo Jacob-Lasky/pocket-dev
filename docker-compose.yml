@@ -16,21 +16,20 @@ services:
       - PGID=100
 
     volumes:
-      # Persistent workspace and config
       - ./workspace:/workspace
-      - ./config:/home/claude/.claude
 
-      # Open sessions + each tab's Claude conversation id. Without this the
-      # roster lives in the writable layer, so `docker compose up --build`
-      # (a recreate) loses your tabs; with it they come back and resume.
-      - ./state:/home/claude/.pocket-dev
-
-      # Auth and self-installed tooling that must outlive a recreate. NOTE the
-      # gh mount is .config/gh specifically, and tools go to /opt/pd: do NOT
-      # mount /home/claude/.local, which would mask the claude and uv binaries
-      # baked into the image.
-      - ./gh:/home/claude/.config/gh
-      - ./tools:/opt/pd
+      # The whole home, and the only state mount there is. Claude's config and
+      # conversation ids, the gh token, the dgvpn registration, and credentials
+      # for tools that were never on a mount list (aws, kubectl, fly) all persist
+      # across a `docker compose up --build` recreate.
+      #
+      # Mounting the home used to be forbidden because it masked the claude and
+      # uv binaries baked into /home/claude/.local. It is safe now only because
+      # the image keeps its artifacts in /opt/pd-home and ships this path EMPTY,
+      # with entrypoint.sh linking them back in. DO NOT add a second mount at a
+      # path underneath this one: it shadows part of the home with another host
+      # dir, and state starts landing in two places at once.
+      - ./home:/home/claude
 
       # Docker socket. WARNING: :ro does NOT make the Docker API read-only. It
       # marks the socket file read-only and nothing else — the daemon still
