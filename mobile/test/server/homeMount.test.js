@@ -107,8 +107,46 @@ describe('entrypoint.sh: seeding the mounted home', () => {
     // The home mount lands on the UnRAID array over shfs FUSE. npm/uv caches are
     // large and write-heavy: wrong traffic for that filesystem and pure bloat in
     // appdata backups. They are relinked to a container-local path on purpose.
-    expect(script).toMatch(/CACHE=\/var\/tmp\/pd-cache/);
     expect(script).toMatch(/for entry in \.cache \.npm/);
+  });
+
+  it('takes both relocation paths from the Dockerfile, with matching fallbacks', () => {
+    // The Dockerfile is the single definition; the script reads PD_SKEL_DIR and
+    // PD_CACHE_DIR rather than repeating the literals. The fallbacks exist so the
+    // script runs outside the image (entrypointSeed.test.js drives it that way),
+    // and they are only safe while they agree with the image. If they drift, the
+    // container and the tests are exercising two different layouts.
+    for (const [envVar, shellVar] of [
+      ['PD_SKEL_DIR', 'SKEL'],
+      ['PD_CACHE_DIR', 'CACHE'],
+    ]) {
+      const fromDockerfile = dockerfile.match(new RegExp(`^ENV ${envVar}=(\\S+)`, 'm'));
+      expect(fromDockerfile, `${envVar} must be set in the Dockerfile`).not.toBeNull();
+
+      const fallback = script.match(
+        new RegExp(`^${shellVar}="\\$\\{${envVar}:-([^}]+)\\}"`, 'm'),
+      );
+      expect(fallback, `${shellVar} must read ${envVar} with a fallback`).not.toBeNull();
+      expect(fallback[1]).toBe(fromDockerfile[1]);
+    }
+  });
+
+  it('relocates the image home to the path it exports as PD_SKEL_DIR', () => {
+    // The `mv` target and the exported skeleton path are the same thing; if they
+    // ever disagree the entrypoint links against a directory that does not exist
+    // and every image-owned entry silently goes missing.
+    const skel = dockerfile.match(/^ENV PD_SKEL_DIR=(\S+)/m)[1];
+    expect(dockerfile).toContain(`mv /home/claude ${skel}`);
+    expect(dockerfile.match(/^ENV PATH="([^"]+)"/m)[1]).toContain(`${skel}/.local/bin`);
+  });
+
+  it('degrades instead of refusing to boot on an unwritable home', () => {
+    // Seeding must be skipped, not attempted, when the home cannot be written:
+    // under `set -e` every failing mkdir/ln would abort the script and turn a
+    // degraded boot into no boot at all. Executed coverage is in
+    // entrypointSeed.test.js; this pins the structural guard that makes it work.
+    expect(script).toMatch(/HOME_WRITABLE=0/);
+    expect(script).toMatch(/if \[ "\$HOME_WRITABLE" = "1" \]; then/);
   });
 
   it('creates the state dirs the server and dgvpn expect', () => {

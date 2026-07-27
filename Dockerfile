@@ -211,6 +211,14 @@ RUN sed -i 's/\r//' /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 USER claude
 
+# Where the image keeps its own home, and where the ephemeral caches go. These
+# are the SINGLE definition of both paths: entrypoint.sh reads them rather than
+# repeating the literals, so the relocation target cannot drift between the
+# image and the script that depends on it. homeMount.test.js asserts the
+# script's fallbacks still match these values.
+ENV PD_SKEL_DIR=/opt/pd-home
+ENV PD_CACHE_DIR=/var/tmp/pd-cache
+
 # PATH points at the RELOCATED skeleton, not at ~/.local/bin, so `claude` and
 # `uv` resolve even if the home mount is empty and seeding has not run.
 # $HOME/bin is the prefix for CLIs a session installs for itself: it is inside

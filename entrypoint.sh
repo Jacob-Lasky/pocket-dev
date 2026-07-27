@@ -10,9 +10,9 @@
 # .local/bin and leaves a container with no `claude` in it.
 #
 # The fix is to stop mixing the two. The image now builds its home into
-# /opt/pd-home and leaves /home/claude EMPTY, so the whole home can be one
-# mount and every tool's state persists with no template change, forever. This
-# script links the image-owned entries back in at boot.
+# $PD_SKEL_DIR and leaves /home/claude EMPTY, so the whole home can be one mount
+# and every tool's state persists with no template change, forever. This script
+# links the image-owned entries back in at boot.
 #
 # DO NOT convert these links to copies. A copy is written once and then never
 # updated, so an image update would ship a new `claude` that no container ever
@@ -28,8 +28,36 @@ set -e
 # keys 600, etc.) are unaffected by umask.
 umask 002
 
-SKEL=/opt/pd-home
-CACHE=/var/tmp/pd-cache
+# The Dockerfile owns both paths and exports them, so the relocation target is
+# defined in exactly ONE place. The fallbacks are for running this script
+# outside the image (the test suite does); they are not a second source of
+# truth, and homeMount.test.js asserts they still match the Dockerfile.
+SKEL="${PD_SKEL_DIR:-/opt/pd-home}"
+CACHE="${PD_CACHE_DIR:-/var/tmp/pd-cache}"
+
+# An unwritable home is THE silent failure of this design: sessionStore disables
+# itself without a word on a dir it cannot write, so a root-owned mount looks
+# exactly like a working one until you notice the tabs stopped coming back.
+# Nothing downstream complains, so complain here.
+#
+# Then SKIP seeding and boot anyway. Two reasons this is the right branch rather
+# than an exit: a broken state dir must never be the reason the server will not
+# come up (the same rule sessionStore follows), and the container stays usable
+# because PATH points into the skeleton directly, so `claude` resolves with no
+# seeding at all. DO NOT let the seeding below run unguarded here — every mkdir
+# and ln would fail and `set -e` would turn a degraded boot into no boot, which
+# is how this was written the first time and what the test caught.
+HOME_WRITABLE=1
+if ! mkdir -p "$HOME" 2>/dev/null || ! touch "$HOME/.pd-write-test" 2>/dev/null; then
+  HOME_WRITABLE=0
+  echo "pocket-dev: WARNING: $HOME is not writable by uid $(id -u):$(id -g)." >&2
+  echo "pocket-dev: Session restore, gh auth and every credential under ~ will" >&2
+  echo "pocket-dev: fail to persist, and this is the ONLY warning you get." >&2
+  echo "pocket-dev: Fix: chown -R 99:100 the host path bound to /home/claude." >&2
+  echo "pocket-dev: Booting anyway; claude still resolves from $SKEL." >&2
+else
+  rm -f "$HOME/.pd-write-test"
+fi
 
 # Link one image-owned entry into HOME.
 #
@@ -45,38 +73,50 @@ link_from_image() {
   ln -sfn "$src" "$dst"
 }
 
-for entry in .bash_logout .bashrc .profile .zshrc .local; do
-  link_from_image "$entry"
-done
+if [ "$HOME_WRITABLE" = "1" ]; then
 
-# .config is NOT image-owned as a whole: gh's auth token lives in .config/gh and
-# has to persist. Link only the two leaves the image provides.
-mkdir -p "$HOME/.config"
-for entry in .config/fish .config/uv; do
-  link_from_image "$entry"
-done
+  for entry in .bash_logout .bashrc .profile .zshrc .local; do
+    link_from_image "$entry"
+  done
 
-# Caches are deliberately NOT persisted. The home mount lands on the UnRAID
-# array via shfs FUSE, and npm/uv caches are large and write-heavy — exactly the
-# wrong traffic for that filesystem, and pure bloat in appdata backups. Losing a
-# cache on recreate costs one re-download; that is what a cache is for.
-mkdir -p "$CACHE/.cache" "$CACHE/.npm"
-for entry in .cache .npm; do
-  [ -L "$HOME/$entry" ] || rm -rf "$HOME/$entry"
-  ln -sfn "$CACHE/$entry" "$HOME/$entry"
-done
+  # .config is NOT image-owned as a whole: gh's auth token lives in .config/gh
+  # and has to persist. Link only the two leaves the image provides.
+  #
+  # NOTE the `if`, not `[ -L ... ] && rm ...`: under `set -e` a compound whose
+  # test is false returns nonzero and takes the whole script down with it. If
+  # .config were itself a link, `mkdir -p` would follow it and the gh token
+  # would land outside the mount — the exact class of quiet non-persistence
+  # this change exists to end.
+  if [ -L "$HOME/.config" ]; then rm -f "$HOME/.config"; fi
+  mkdir -p "$HOME/.config"
+  for entry in .config/fish .config/uv; do
+    link_from_image "$entry"
+  done
 
-# State dirs that must exist before anything reads them: the server's roster
-# (PD_STATE_DIR), dgvpn's registration (DGVPN_DIR), and Claude's own config dir.
-# On a first boot the mounted home is empty, so nothing else creates these.
-#
-# $HOME/bin is the on-PATH prefix for CLIs a session installs for itself. It
-# lives in the home mount, so those tools survive a recreate without a volume of
-# their own — that is what retired the old /opt/pd prefix. DO NOT point tool
-# installs at ~/.local/bin instead: that is a symlink into the read-mostly image
-# skeleton, and writes there are lost on the next image update.
-mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin"
-chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" 2>/dev/null || true
+  # Caches are deliberately NOT persisted. The home mount lands on the UnRAID
+  # array via shfs FUSE, and npm/uv caches are large and write-heavy: exactly
+  # the wrong traffic for that filesystem, and pure bloat in appdata backups.
+  # Losing a cache on recreate costs one re-download; that is what a cache is for.
+  mkdir -p "$CACHE/.cache" "$CACHE/.npm"
+  for entry in .cache .npm; do
+    [ -L "$HOME/$entry" ] || rm -rf "$HOME/$entry"
+    ln -sfn "$CACHE/$entry" "$HOME/$entry"
+  done
+
+  # State dirs that must exist before anything reads them: the server's roster
+  # (PD_STATE_DIR), dgvpn's registration (DGVPN_DIR), and Claude's own config
+  # dir. On a first boot the mounted home is empty, so nothing else creates them.
+  #
+  # $HOME/bin is the on-PATH prefix for CLIs a session installs for itself. It
+  # lives in the home mount, so those tools survive a recreate without a volume
+  # of their own — that is what retired the old /opt/pd prefix. DO NOT point
+  # tool installs at ~/.local/bin instead: that is a symlink into the read-mostly
+  # image skeleton, and writes there are lost on the next image update.
+  mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin"
+  chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" 2>/dev/null || true
+
+fi
+
 chmod 775 /workspace 2>/dev/null || true
 
 # Execute the main command
