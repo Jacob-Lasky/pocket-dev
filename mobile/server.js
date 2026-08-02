@@ -71,6 +71,45 @@ const PROJECTS_DIR = process.env.PD_CLAUDE_PROJECTS_DIR || path.join(HOME, '.cla
 // PD_RESUME=0 turns it off outright.
 const RESUME_ENABLED = !process.env.SHELL_CMD && process.env.PD_RESUME !== '0';
 
+// Give a NEW tab's Remote Control session a real name once Claude has worked
+// out what the conversation is about.
+//
+// Only a new tab needs this. Claude resolves a bridge session's name at
+// REGISTRATION, preferring a custom title, then its own ai-title, then the last
+// user message, and only then the random `<prefix>-<two words>`. A resumed
+// conversation therefore already has a name on disk to register under; a tab
+// opened seconds ago has nothing, gets the random one, and keeps it for the
+// life of the process because nothing pushes the ai-title afterwards (measured
+// 2026-08-02: a real session produced an ai-title and no rename followed).
+//
+// The ONLY channel for this is typing into the pty. claudeSession.js is
+// inspection-only and pocket-dev does not write into ~/.claude/projects, so
+// appending the record directly is off the table. That is also why this is
+// hedged so carefully below: a write lands in whatever the user is typing.
+//
+// It rides the metadata poll rather than a timer of its own, which bounds it
+// deliberately: nothing polling means nothing renamed. That is the right trade
+// because creating a tab requires the browser in the first place, and the
+// browser polls every few seconds while it is open, so the moment this fires
+// (about ten seconds after the first turn) is a moment it is already open. A
+// timer would buy the closed-browser case at the cost of advancing the unread
+// axis with nobody watching, which is a worse thing to get wrong.
+//
+// PD_AUTO_NAME=0 turns it off on its own, separately from PD_REMOTE_CONTROL,
+// because "bridge my sessions" and "type into my terminal for me" are different
+// amounts of trust and someone may reasonably want the first without the second.
+const AUTO_NAME = REMOTE_CONTROL
+  && !process.env.SHELL_CMD
+  && process.env.PD_AUTO_NAME !== '0';
+
+// How long the session has to have been quiet, input-wise, before we type into
+// it. The rename fires just after the first turn, when the user is reading
+// rather than typing, so in practice this never waits; it exists for the case
+// where they started composing the next message in that window. Losing a
+// half-typed line to a cosmetic rename would be a bad trade, and deferring
+// costs nothing because the next poll tries again.
+const AUTO_NAME_QUIET_MS = 10_000;
+
 // What a restored session that was mid-turn is asked, so it picks the work back
 // up instead of sitting there waiting for a human who thinks it is still going.
 //
@@ -175,6 +214,7 @@ function createApp({ sessionsApi } = {}) {
       const { text } = req.body;
       if (typeof text !== 'string' || !text.length)
         return res.status(400).json({ error: 'text required' });
+      sessionsApi.noteInput(req.session);
       req.session.pty.write(text);
       req.session.pty.write('\r');
       res.json({ ok: true });
@@ -184,6 +224,7 @@ function createApp({ sessionsApi } = {}) {
       const { key } = req.body;
       const ctrlMatch = key && key.match(/^ctrl-([a-z])$/);
       if (ctrlMatch) {
+        sessionsApi.noteInput(req.session);
         req.session.pty.write(String.fromCharCode(ctrlMatch[1].charCodeAt(0) - 96));
         return res.json({ ok: true });
       }
@@ -193,6 +234,7 @@ function createApp({ sessionsApi } = {}) {
       };
       const seq = sequences[key];
       if (!seq) return res.status(400).json({ error: 'unknown key' });
+      sessionsApi.noteInput(req.session);
       req.session.pty.write(seq);
       res.json({ ok: true });
     });
@@ -262,7 +304,7 @@ function createSessionsApi({
     // Where this session's conversation already stood before we adopted it.
     // Cheap: metaFor is memoised, and for a session with no recorded uuid (any
     // brand new tab) it answers without touching the disk.
-    const { status: initialStatus, turnId: initialTurnId } = observe(id);
+    const { status: initialStatus, turnId: initialTurnId, title: initialTitle } = observe(id);
 
     const sidFile = store.sidPath(id);
     // The launcher decides whether a transcript exists and the server decides
@@ -319,6 +361,20 @@ function createSessionsApi({
       turnId: initialTurnId,
       // Display only: how long ago the session last said anything.
       lastOutputAt: 0,
+      // When a human last typed at this session, so the auto-rename can refuse
+      // to write into a half-composed message. Seeded to 0, not to now: a tab
+      // nobody has touched is the quietest one there is.
+      lastInputAt: 0,
+      // Whether the Remote Control name has been dealt with.
+      //
+      // Seeded from the title the conversation ALREADY had when we adopted it,
+      // which is what confines the whole feature to genuinely new tabs. A
+      // restored or resumed session has an ai-title on disk, so Claude named its
+      // bridge session correctly at registration and there is nothing to fix;
+      // marking it done here means a long conversation can never be renamed out
+      // from under a name the user chose on their phone. A brand new tab has no
+      // title, so this is false and the first one to appear triggers the rename.
+      autoNamed: !AUTO_NAME || initialTitle !== null,
     };
 
     ptyProc.onData(data => {
@@ -528,6 +584,44 @@ function createSessionsApi({
     state.turnId = meta.turnId;
   }
 
+  // A human just typed at this session. The auto-rename is the only reader:
+  // everything else on the input path already has its own bookkeeping.
+  function noteInput(state) {
+    state.lastInputAt = Date.now();
+  }
+
+  // Push Claude's own conversation title to the Remote Control bridge, once, by
+  // typing `/rename` at it. See AUTO_NAME for why this is worth doing and why
+  // the pty is the only way to do it.
+  //
+  // Every condition here is load-bearing:
+  //
+  //   autoNamed        already handled, or a session that arrived with a title
+  //                    and so was never ours to rename (see create).
+  //   title            nothing to rename it to yet. This is the trigger: a new
+  //                    tab flips from null to a title after its first turn.
+  //   status busy      Claude is mid-turn. Input typed at a busy TUI is not
+  //                    lost, but it queues and lands in a repaint, and there is
+  //                    no reason to race it when the next poll will do.
+  //   quiet            the user may be composing. A rename is cosmetic and a
+  //                    half-written message is not, so it always yields.
+  //
+  // `autoNamed` is set BEFORE the write, not after: a failed write must not
+  // leave this retrying on every poll for the life of the session.
+  //
+  // The command and its newline go as ONE write. Verified 2026-08-02 against
+  // the real TUI: the slash-command palette opens on `/` but does not swallow
+  // the trailing carriage return, and the session renamed on the first try.
+  function maybeAutoName(state, meta) {
+    if (state.autoNamed || !meta.title) return;
+    if (meta.status === 'busy') return;
+    if (Date.now() - state.lastInputAt < AUTO_NAME_QUIET_MS) return;
+
+    state.autoNamed = true;
+    logger.log(`[${state.id}] naming Remote Control session: ${meta.title}`);
+    state.pty.write(`/rename ${meta.title}\r`);
+  }
+
   // What a session's conversation says right now. The one place that decides
   // whether we are allowed to look at all: with a custom SHELL_CMD there is no
   // conversation, and create/describe/markViewed must not each re-decide that.
@@ -560,6 +654,7 @@ function createSessionsApi({
     return [...sessions.values()].map(s => {
       const meta = observe(s.id);
       noteTurn(s, meta);
+      maybeAutoName(s, meta);
       return {
         id: s.id,
         cols: s.cols,
@@ -598,6 +693,9 @@ function createSessionsApi({
           }
         } catch {}
       } else {
+        // The browser's keystrokes. This is the path the auto-rename cares
+        // about most: it is what "the user is typing right now" actually means.
+        noteInput(state);
         state.pty.write(msg);
       }
     });
@@ -605,7 +703,7 @@ function createSessionsApi({
     ws.on('close', () => state.clients.delete(ws));
   }
 
-  return { create, restore, destroy, get, list, describe, markViewed, attachWs };
+  return { create, restore, destroy, get, list, describe, markViewed, noteInput, attachWs };
 }
 
 module.exports = {

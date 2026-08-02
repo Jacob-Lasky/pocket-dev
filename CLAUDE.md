@@ -163,7 +163,13 @@ Two smaller traps in the same line:
 
 The prefix is there because an auto-generated name is `<hostname>-<random words>` and this container's hostname is a docker id that changes on every recreate, so the phone would otherwise list tabs as `d969bbd91655-mossy-frog` and rename them all on the next image update.
 
-**Claude's own conversation title does NOT reach the phone.** The binary contains the machinery for it (an `updateBridgeSessionTitle` call, and a name-resolution order that prefers a custom title, then the `ai-title`, then the last user message, then the random name), but driving a real session through a turn produced an `ai-title` and no rename, on either the initial name or afterwards. `/rename <name>` DOES reach it, verified through the bridge log, because it writes a `custom-title`, which outranks everything else and locks the name against later auto-titling.
+**Claude's own conversation title does NOT reach the phone on its own, so the server types it in.** The binary contains the machinery (an `updateBridgeSessionTitle` call, and a name-resolution order preferring a custom title, then the `ai-title`, then the last user message, then the random name), but driving a real session through a turn produced an `ai-title` and no rename. `/rename` DOES reach the bridge, verified in its log, because it writes a `custom-title`, which outranks everything else and locks the name against later auto-titling.
+
+The name is resolved at REGISTRATION and never revisited, and that is what scopes the fix. A resumed conversation already has an `ai-title` on disk to register under, so it names itself correctly and the server leaves it alone. Only a tab opened before its conversation existed gets the random name and keeps it, so `maybeAutoName` in `server.js` waits for that tab's first title and types `/rename <title>` at it once.
+
+**Typing into the pty is the only channel, and that is why the guards look paranoid.** `claudeSession.js` is inspection-only and pocket-dev does not write into `~/.claude/projects`, so appending the record directly is not an option. A write therefore lands in whatever the user is composing, and the rename is cosmetic while a half-written message is not. So it fires only for a session that had no title when it was adopted (which is what confines it to new tabs, and what stops a long conversation being renamed out from under a name chosen on the phone), never while the status is `busy`, and never within `AUTO_NAME_QUIET_MS` of the last keystroke. `autoNamed` is set before the write, so a failure cannot retry forever. The command and its newline go as ONE write: measured 2026-08-02, the slash-command palette opens on `/` but does not swallow the trailing carriage return.
+
+`PD_AUTO_NAME=0` turns just this off, separately from `PD_REMOTE_CONTROL`, because bridging a session and typing into it on the user's behalf are different amounts of trust.
 
 ## The home is one mount — and why that was ever hard
 
