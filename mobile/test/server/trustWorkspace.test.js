@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnEnv } from './pdEnv.js';
 
 // pd-trust-workspace rewrites a file that is a BIND MOUNT in production, and it
 // is the difference between restore being hands-free and every restored tab
@@ -15,7 +16,7 @@ let home, config;
 
 function run(env = {}, args = []) {
   return spawnSync('bash', [SCRIPT, ...args], {
-    env: { ...process.env, HOME: home, ...env },
+    env: spawnEnv({ HOME: home, ...env }),
     encoding: 'utf8',
   });
 }
