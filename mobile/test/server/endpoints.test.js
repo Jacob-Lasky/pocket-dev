@@ -61,6 +61,9 @@ function stubSessionsApi() {
       status: 'unknown', unread: false, lastOutputAt: 0,
     }))),
     markViewed: vi.fn((id) => sessions.has(id)),
+    // Part of the route contract: /send and /key report the keystroke so the
+    // Remote Control auto-rename knows not to type over someone mid-message.
+    noteInput: vi.fn((state) => { state.lastInputAt = 1; }),
     attachWs: vi.fn(),
     _internalSessions: sessions, // not used by routes; exposed for assertions
   };
@@ -163,6 +166,33 @@ describe('session-aware endpoints', () => {
 
     await request(app).post('/key').send({ session: created.id, key: 'ctrl-c' });
     expect(pty.write).toHaveBeenCalledWith('\x03');
+  });
+
+  it('reports input on /send and /key, so the auto-rename does not type over you', async () => {
+    // Both routes are a human at a keyboard. If either stops reporting, the
+    // Remote Control rename can land in the middle of a message being composed
+    // from the phone or the on-screen key row, and nothing else would notice.
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const { body: created } = await request(app).post('/sessions');
+    const state = sessionsApi._internalSessions.get(created.id);
+
+    await request(app).post('/send').send({ session: created.id, text: 'hello' });
+    expect(sessionsApi.noteInput).toHaveBeenCalledWith(state);
+
+    sessionsApi.noteInput.mockClear();
+    await request(app).post('/key').send({ session: created.id, key: 'escape' });
+    expect(sessionsApi.noteInput).toHaveBeenCalledWith(state);
+
+    // The ctrl- branch returns early, so it needs its own check.
+    sessionsApi.noteInput.mockClear();
+    await request(app).post('/key').send({ session: created.id, key: 'ctrl-c' });
+    expect(sessionsApi.noteInput).toHaveBeenCalledWith(state);
+
+    // A rejected key is not input: nothing reached the pty.
+    sessionsApi.noteInput.mockClear();
+    await request(app).post('/key').send({ session: created.id, key: 'banana' });
+    expect(sessionsApi.noteInput).not.toHaveBeenCalled();
   });
 
   it('POST /key rejects unknown keys', async () => {

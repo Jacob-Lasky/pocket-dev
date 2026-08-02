@@ -708,3 +708,110 @@ describe('describe(): what the browser is told about each session', () => {
     expect(api.describe()[0]).toMatchObject({ title: null, status: 'unknown' });
   });
 });
+
+describe('naming a new tab for Remote Control', () => {
+  // Claude picks a bridge session's name at REGISTRATION and never revisits it,
+  // so a tab opened before its conversation existed keeps a random name for the
+  // life of the process. This is the server handing it the real one, once.
+  const aiTitle = (t) => ({ type: 'ai-title', aiTitle: t, sessionId: UUID });
+  const renames = (proc) => proc.writes.filter(w => w.startsWith('/rename'));
+  const lastSpawn = () => spawned[spawned.length - 1].proc;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  // A brand new tab: created BEFORE any transcript exists, which is exactly
+  // what leaves it eligible. The uuid and the conversation show up afterwards,
+  // in the order the launcher and Claude actually produce them.
+  function newTab(records) {
+    const { api, store } = makeApi();
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    if (records) writeTranscript(UUID, records);
+    return { api, state, proc: lastSpawn() };
+  }
+
+  it('types /rename once the conversation has a title', () => {
+    const { api, proc } = newTab([aiTitle('Clarify session auto-renaming'), ...IDLE]);
+    api.describe();
+    // One write, command and newline together: the slash-command palette opens
+    // on `/` but does not swallow the carriage return.
+    expect(renames(proc)).toEqual(['/rename Clarify session auto-renaming\r']);
+  });
+
+  it('does it once, not on every poll', () => {
+    const { api, proc } = newTab([aiTitle('Something'), ...IDLE]);
+    for (let i = 0; i < 5; i++) api.describe();
+    expect(renames(proc)).toHaveLength(1);
+  });
+
+  it('leaves a session that already had a title when we adopted it alone', () => {
+    // The restored/resumed case. Claude names the bridge session from the
+    // ai-title already on disk, so there is nothing to fix, and renaming here
+    // would overwrite whatever the user called it from their phone.
+    const { api, store } = makeApi();
+    fs.mkdirSync(path.dirname(store.sidPath('main-1')), { recursive: true });
+    fs.writeFileSync(store.sidPath('main-1'), UUID);
+    writeTranscript(UUID, [aiTitle('A conversation from before the restart'), ...IDLE]);
+
+    api.create('main-1');
+    api.describe();
+    expect(renames(lastSpawn())).toEqual([]);
+  });
+
+  it('does nothing until there is a title to use', () => {
+    const { api, proc } = newTab(null);
+    api.describe();
+    expect(renames(proc)).toEqual([]);
+  });
+
+  it('waits while Claude is mid-turn rather than racing a repaint', () => {
+    const { api, proc } = newTab([aiTitle('Busy conversation'), ...BUSY]);
+    api.describe();
+    expect(renames(proc)).toEqual([]);
+
+    writeTranscript(UUID, [aiTitle('Busy conversation'), ...IDLE]);
+    api.describe();
+    expect(renames(proc)).toHaveLength(1);
+  });
+
+  it('yields to a user who is typing, and renames once they stop', () => {
+    // A rename is cosmetic; a half-composed message is not. This is the whole
+    // reason the write is hedged rather than fired the moment a title appears.
+    const { api, state, proc } = newTab([aiTitle('Interrupted by typing'), ...IDLE]);
+    api.noteInput(state);
+    api.describe();
+    expect(renames(proc)).toEqual([]);
+
+    // Deferred, not abandoned: the next poll after the session goes quiet does it.
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 11_000);
+    api.describe();
+    expect(renames(proc)).toHaveLength(1);
+  });
+
+  it('honours PD_AUTO_NAME=0 while leaving Remote Control itself on', async () => {
+    // Bridging a session and typing into it on the user's behalf are different
+    // amounts of trust, so they get separate switches.
+    const mod = await loadWith({ PD_AUTO_NAME: '0' });
+    const store = createSessionStore({ dir, logger });
+    const api = mod.createSessionsApi({
+      store,
+      projectsDir,
+      spawnPty: () => { const proc = fakePty(); spawned.push({ proc }); return proc; },
+      logger,
+    });
+
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, [aiTitle('Not my name to set'), ...IDLE]);
+
+    api.describe();
+    expect(renames(lastSpawn())).toEqual([]);
+    expect(mod.buildSessionCommand()).toContain('--rc');
+  });
+});
