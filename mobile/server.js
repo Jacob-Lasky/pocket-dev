@@ -11,7 +11,38 @@ const { createSessionStore, nullSessionStore } = require('./sessionStore');
 const claudeSession = require('./claudeSession');
 
 const SESSION_BASE = process.env.TMUX_SESSION || 'main';
-const DEFAULT_CMD  = 'claude --dangerously-skip-permissions --model "opus[1m]"';
+// Remote Control is on by default, so a session can also be driven from
+// claude.ai or the Claude mobile app. Reaching pocket-dev from a phone is the
+// whole point of the project, and Remote Control is the good way to do it.
+//
+// Measured 2026-08-02 against Claude Code 2.1.220: `--rc` is an undocumented
+// alias for `--remote-control` and it does start the bridge, while the
+// documented `remoteControlAtStartup` setting in ~/.claude/settings.json is
+// read and then never acted on. Three launches with that setting true, one of
+// them through this server, all came up with no bridge; the flag came up with
+// one every time. DO NOT swap this flag for that setting.
+//
+// DO NOT write `-rc` with one dash. Commander splits it into `-r c`, which
+// means `--resume c`, and the session dies looking for a conversation named c.
+//
+// The prefix is load-bearing. An auto-generated Remote Control name is
+// `<hostname>-<random words>`, and this container's hostname is a docker id
+// that changes on every recreate, so without it each tab reaches the phone as
+// something like `d969bbd91655-mossy-frog`.
+//
+// PD_REMOTE_CONTROL=0 turns it off, the same shape as PD_RESUME and
+// PD_TRUST_WORKSPACE. Registering a tab with the bridge makes it drivable by
+// anyone holding the account, so this one in particular needs a way out that
+// does not involve editing the image.
+const REMOTE_CONTROL = process.env.PD_REMOTE_CONTROL !== '0';
+
+// Keep `--rc` in front of another flag. Its name argument is optional, so at
+// the end of the string it would swallow whatever pd-claude-session appends.
+const RC_ARGS = REMOTE_CONTROL
+  ? ' --rc --remote-control-session-name-prefix pocket-dev'
+  : '';
+
+const DEFAULT_CMD  = `claude --dangerously-skip-permissions --model "opus[1m]"${RC_ARGS}`;
 const CMD          = process.env.SHELL_CMD    || DEFAULT_CMD;
 const PORT         = parseInt(process.env.PORT, 10) || 7681;
 const MAX_REPLAY_BYTES = 512 * 1024;

@@ -148,6 +148,23 @@ Three rules the UI depends on. **The active session is never unread** (you are l
 
 The list REPLACED the cycle row: `#btn-row-tmux` and its Next/Last buttons are gone, `Kill` moved into the session's own toolbar next to the thing it destroys, and `#session-label` became a permanent strip above the toolbar (outside `#btn-group`, so collapsing the toolbar cannot hide it — on a phone there is no browser tab title, so it is the only persistent answer to "which session am I in"). Cycling survives only as the Ctrl-B prefix keys, which need no UI.
 
+## Remote Control — the other way into a session
+
+`DEFAULT_CMD` carries `--rc`, so every tab registers with the Remote Control bridge and can also be driven from claude.ai/code or the Claude mobile app. The browser terminal and Remote Control are two views of the same tmux session, not alternatives, and a phone is exactly where the second one earns its keep.
+
+**It has to be the flag, and this is the part that will get "simplified" one day.** Claude Code ships a documented user setting, `remoteControlAtStartup`, whose description is "Start Remote Control bridge automatically each session". Measured 2026-08-02 against 2.1.220, it does not do that. Setting it true in `~/.claude/settings.json` and launching three ways (a bare `claude`, one through this server, and one with the same key injected via `--settings`) produced no bridge in any of them, over several minutes each, while `--rc` produced one every time. The resolver in the binary genuinely reads user settings, so this is not a placement mistake; the value is read and then nothing acts on it. Swapping the flag for the setting therefore reads as a tidy-up and silently turns Remote Control off. `sessionsRestore.test.js` guards the flag for the same reason `tmuxConf.test.js` guards its knob: the bridge needs a real account and a round trip to claude.ai, so the cat-based e2e suite cannot see any of this.
+
+Two smaller traps in the same line:
+
+- **`-rc` with one dash is not an abbreviation of `--rc`.** Commander splits it into `-r c`, which is `--resume c`, and the session comes up looking for a conversation named `c`.
+- **`--rc` takes an OPTIONAL name, so it must never be the last token.** `pd-claude-session` appends `--resume <uuid>` or `--session-id <uuid>`, and a trailing `--rc` would consume the first of those as its session name. Keeping `--remote-control-session-name-prefix` immediately after it makes that structural rather than a thing to remember.
+
+`PD_REMOTE_CONTROL=0` turns the whole thing off, the same shape as `PD_RESUME` and `PD_TRUST_WORKSPACE`. A bridged tab is drivable by anyone holding the account, and the flag lives in the image, so the alternative to a knob is rebuilding to get out of it.
+
+The prefix is there because an auto-generated name is `<hostname>-<random words>` and this container's hostname is a docker id that changes on every recreate, so the phone would otherwise list tabs as `d969bbd91655-mossy-frog` and rename them all on the next image update.
+
+**Claude's own conversation title does NOT reach the phone.** The binary contains the machinery for it (an `updateBridgeSessionTitle` call, and a name-resolution order that prefers a custom title, then the `ai-title`, then the last user message, then the random name), but driving a real session through a turn produced an `ai-title` and no rename, on either the initial name or afterwards. `/rename <name>` DOES reach it, verified through the bridge log, because it writes a `custom-title`, which outranks everything else and locks the name against later auto-titling.
+
 ## The home is one mount — and why that was ever hard
 
 `/home/claude` is a single bind mount, and the only state mount the container has. Everything written to `~` persists across an image update: Claude's config and conversation ids, the `gh` token, the dgvpn registration, `~/bin`, and credentials for tools no one has added to a list (`.aws`, `.kube`, `.fly`, `.docker`).

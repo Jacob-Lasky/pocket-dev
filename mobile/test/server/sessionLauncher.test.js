@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { LAUNCHER_PATH } from '../../server.js';
+import { spawnEnv } from './pdEnv.js';
 
 // pd-claude-session decides, on every iteration of the restart loop, whether to
 // resume the previous conversation or start a new one. Nothing in the browser
@@ -21,14 +22,12 @@ let home, stubDir, argvLog, sidFile;
 const RUN_SECONDS = '2.5s';
 
 function runLauncher({ withSidFile = true, resumePrompt = null } = {}) {
-  const env = {
-    ...process.env,
+  const env = spawnEnv({
     HOME: home,
     PATH: `${stubDir}:${process.env.PATH}`,
     PD_ARGV_LOG: argvLog,
-  };
+  });
   if (withSidFile) env.PD_SID_FILE = sidFile;
-  else delete env.PD_SID_FILE;
   if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
 
   spawnSync('timeout', [

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnEnv } from './pdEnv.js';
 
 // entrypoint.sh RUN FOR REAL against a temp HOME and a temp skeleton.
 //
@@ -40,13 +41,12 @@ function buildSkeleton() {
 
 function run(env = {}) {
   return spawnSync('bash', [SCRIPT, 'true'], {
-    env: {
-      ...process.env,
+    env: spawnEnv({
       HOME: home,
       PD_SKEL_DIR: skel,
       PD_CACHE_DIR: cache,
       ...env,
-    },
+    }),
     encoding: 'utf8',
   });
 }

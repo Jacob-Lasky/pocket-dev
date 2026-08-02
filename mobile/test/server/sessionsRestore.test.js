@@ -13,6 +13,16 @@ import { createSessionStore } from '../../sessionStore.js';
 
 const UUID = '6d7657b2-2e36-4a45-a083-4c300969650d';
 
+// Re-evaluate server.js with env stubs in place. CMD, RESUME_ENABLED and
+// REMOTE_CONTROL are all read once at module level, so resetModules is the only
+// way to see a different configuration. Shared by the SHELL_CMD and the
+// Remote Control cases, which both need it.
+async function loadWith(env) {
+  vi.resetModules();
+  for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+  return import('../../server.js');
+}
+
 function fakePty() {
   const proc = {
     writes: [],
@@ -533,10 +543,64 @@ describe('read/unread, server-side so devices agree', () => {
 });
 
 describe('the command tmux is told to run', () => {
+  // The PD_REMOTE_CONTROL case stubs env and reloads the module; without this
+  // the stub leaks into every test that runs after it.
+  afterEach(() => vi.unstubAllEnvs());
+
   it('quotes the launcher path, so a checkout dir with spaces still starts', () => {
     const cmd = buildSessionCommand();
     expect(cmd).toMatch(/^'.*pd-claude-session' /);
     expect(cmd).toContain('claude --dangerously-skip-permissions');
+  });
+
+  it('turns Remote Control on, so a tab can be driven from the phone', () => {
+    // Source-level guard, for the same reason tmuxConf.test.js is one: the
+    // bridge needs a real logged-in account and a round trip to claude.ai, so
+    // the cat-based e2e suite cannot reach this at all.
+    //
+    // It has to be the flag. Measured 2026-08-02 on Claude Code 2.1.220, the
+    // documented `remoteControlAtStartup` user setting is read and then never
+    // starts a bridge, so a future "simplify this into settings.json" is a
+    // silent revert to no Remote Control.
+    expect(buildSessionCommand()).toContain('--rc ');
+  });
+
+  it('spells it --rc, never -rc, which would parse as --resume', () => {
+    // Commander reads a single-dash -rc as -r c, so the session would come up
+    // hunting for a conversation called "c" instead of enabling anything.
+    expect(buildSessionCommand()).not.toMatch(/(^|\s)-rc(\s|$)/);
+  });
+
+  it('keeps a flag directly after --rc, so it cannot eat the next argument', () => {
+    // --rc takes an OPTIONAL session name. Left at the end of the command it
+    // would swallow the first thing pd-claude-session appends and name the
+    // Remote Control session after it.
+    const tokens = buildSessionCommand().split(/\s+/);
+    const rc = tokens.indexOf('--rc');
+    expect(rc).toBeGreaterThan(-1);
+    expect(tokens[rc + 1]).toMatch(/^--/);
+  });
+
+  it('honours PD_REMOTE_CONTROL=0, because a bridged tab is drivable by the account', () => {
+    // Every other thing pocket-dev does to a session on the operator's behalf
+    // has an off switch (PD_RESUME, PD_TRUST_WORKSPACE). Registering with the
+    // bridge is the one that most needs one, and the flag lives in the image,
+    // so without this the only way out is a rebuild.
+    return loadWith({ PD_REMOTE_CONTROL: '0' }).then(({ buildSessionCommand: build }) => {
+      const cmd = build();
+      expect(cmd).not.toContain('--rc');
+      expect(cmd).not.toContain('remote-control');
+      // Still Claude, still resuming: the knob turns off Remote Control only.
+      expect(cmd).toContain('claude --dangerously-skip-permissions');
+      expect(cmd).toContain('pd-claude-session');
+    });
+  });
+
+  it('names Remote Control sessions after pocket-dev, not the container id', () => {
+    // Auto-generated names are <hostname>-<random words>, and the hostname here
+    // is a docker id that is different after every recreate, so the phone would
+    // show a fresh set of meaningless names each time the image is updated.
+    expect(buildSessionCommand()).toContain('--remote-control-session-name-prefix pocket-dev');
   });
 
   it('tells the launcher where transcripts live, so it and the server agree', () => {
@@ -552,13 +616,6 @@ describe('with a custom SHELL_CMD', () => {
   // Resume machinery must switch off entirely for a command that is not Claude
   // — this is what keeps the `cat`-based e2e fixture working, and what stops
   // --resume being bolted onto an arbitrary program.
-  async function loadWith(env) {
-    vi.resetModules();
-    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
-    // resetModules above forces a fresh evaluation, so the module-level env
-    // reads (RESUME_ENABLED, CMD) pick up the stubs.
-    return import('../../server.js');
-  }
 
   afterEach(() => vi.unstubAllEnvs());
 
