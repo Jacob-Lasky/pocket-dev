@@ -216,6 +216,28 @@ dgvpn gh repo view ...                                            # public egres
 
 **DO NOT replace the Go sidecar with `tailscale up` / `tailscaled`.** This is the load-bearing reason the code exists. Userspace `tailscaled` cannot resolve `.consul` split-DNS for outbound connections (tailscale#16906, tailscale#4677): it answers only globally-resolvable or MagicDNS names, and `.consul` is neither. The sidecar works around this exactly as deephive did (#380), resolving names itself via the tsnet LocalAPI (`proxy.go`'s `resolveViaLocalAPI`) before dialing. Kernel-mode `tailscaled` would also need a TUN device and `NET_ADMIN`, which this unprivileged container does not have. If you "simplify" this to a stock tailscale client, `.consul` silently stops resolving.
 
+## Codex, the second model in the container
+
+`/usr/local/bin/codex` is OpenAI's coding CLI, installed by `npm install -g @openai/codex` in the Dockerfile. It exists for one reason: the `/second-opinion` skill, which consults a different lab's model on a diff or a design call and then adjudicates the two views against the code. The value there is decorrelated error, and a container holding only Anthropic's model cannot produce any. The skill checks `command -v codex` and stops when it is missing rather than quietly substituting Claude's own view, so "the skill is installed" and "the skill can run" are separate facts and the second one is this section.
+
+**It goes in `/usr/local`, and both alternatives are traps.** `/home/claude` is a bind mount that ships EMPTY, so an image-owned binary written under it is masked the moment the mount lands. `~/bin` is worse: it is the prefix for CLIs a SESSION installs for itself, it sits EARLIER on `PATH` than `/usr/local/bin`, and a copy left there would shadow the image's own on every future update, silently, forever. `test/server/codex.test.js` guards both, plus the build-cache ordering (the install is ~300 MB of Rust binary and belongs above `COPY mobile/`, not below it).
+
+**Unpinned on purpose**, the same call already made for `claude` and `gh`: each build takes the current release and `codex --version` puts the resolved one in the build log. The `/second-opinion` skill records CLI traps measured against a specific version and says to re-verify after a major bump, which is a per-major job, not a per-build one.
+
+**Auth lives in `~/.codex/auth.json`, inside the home mount, so it survives image updates on its own.** There is no browser in the container, so the login is the device-code flow:
+
+```sh
+codex login --device-auth
+```
+
+Copying an `auth.json` in from a machine that has a browser also works and is documented upstream, and it is how the container was first authenticated (2026-08-15, `auth_mode: chatgpt`). Prefer the device flow when re-authenticating: the copy puts two machines on one session, and a refresh from either is a shared fate. Verified at the time of the copy that a desktop `codex` and the container's kept working simultaneously, so this is a preference, not a known break. DO NOT put an `OPENAI_API_KEY` in the template to work around a login: the account is a ChatGPT subscription, so an API key would silently move the consult onto per-token billing.
+
+**The sandbox flag is not decoration, and `bubblewrap` is in the apt list because of it.** `/second-opinion` always passes `-s read-only`, which on Linux is implemented with bubblewrap. It works unprivileged in this container, verified live 2026-08-15 as uid 99:100 with `sandbox: read-only` in the banner. Codex bundles its own `bwrap` and falls back to it when the OS has none, so the sandbox worked before the package was added too, but every run printed `could not find bubblewrap on PATH`, which reads exactly like the sandbox failing to engage. The package costs ~150 KB and buys a clean banner. DO NOT drop `-s read-only` to make something work: a consultant that can write makes its opinion indistinguishable from its changes, and the diff under review stops being the diff under review.
+
+**Codex refuses to run outside a git repo**, with `Not inside a trusted directory and --skip-git-repo-check was not specified`. That is upstream behaviour, not something this image configures, and it bites in the container more than on a desktop because a pocket-dev session starts in `$HOME`, which is not a repo. Run the consult from inside the checkout (which is where a diff comes from anyway), or pass `--skip-git-repo-check` for a question with no material attached. DO NOT work around it by pre-trusting `/home/claude` in `~/.codex/config.toml`: the gate is what stops a consult from ranging over whatever happens to be in the home, and the home here holds every credential the container has.
+
+**Calibration, measured in this container** (2026-08-15, codex-cli 0.147.0, `gpt-5.6-sol`): the two-line `def pct(part, whole): return part / whole * 100` diff from `/second-opinion`'s calibration table, run through the directed consult, returned the documented `ZeroDivisionError` plus the `TypeError`, `OverflowError`, `inf` and bool-is-int findings. That is the check to re-run after a codex major bump, because it fails informatively: a setup that is broken returns nothing, and nothing is also what an undirected prompt returns.
+
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.
