@@ -6,7 +6,7 @@ A browser-accessible terminal for [Claude Code](https://github.com/anthropics/cl
 
 - `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
 - `mobile/public/` — the client (xterm.js for the live terminal; the wrapped View renderer walks xterm's parsed buffer directly in `js/view.js`; a small toolbar; an iOS-friendly PWA manifest).
-- `Dockerfile` — `node:20-slim` base. Ships `gh` CLI, `docker-ce-cli`, and the Playwright/chromium headless runtime libs so in-container sessions can run UI probes.
+- `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, and the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container.
 
 For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
 
@@ -49,6 +49,27 @@ Two consequences worth knowing:
 - **Install session tools into `~/bin`** (on `PATH`, inside the mount), not `~/.local/bin` — that one is a symlink into the image skeleton, and writes there are lost on the next update.
 - **`~/.cache` and `~/.npm` are deliberately not persisted.** They are relinked to a container-local path, because the home mount lands on the UnRAID array over shfs FUSE and a write-heavy cache is the wrong traffic for it.
 
+## A second model in the box
+
+The image also ships [Codex](https://github.com/openai/codex), OpenAI's coding CLI, at `/usr/local/bin/codex`. It is not an alternative to Claude here, it is a second opinion: a model from a different lab has different blind spots, so asking it to attack a diff catches things a self-review agrees with itself about.
+
+```sh
+git diff | codex exec "Assume this contains at least one defect. Enumerate the inputs that break it and what each one causes. Do not report style." \
+  -s read-only -c model_reasoning_effort="high" -o /tmp/co.txt
+```
+
+Two things about that invocation are load-bearing rather than stylistic. `-s read-only` keeps the consultant from editing the tree it is reviewing. And a **directed** prompt is what makes it useful at all: on an identical two-line diff, a bare `codex exec review --uncommitted` reported nothing while the prompt above found an unhandled `ZeroDivisionError`. Treat a clean result from an undirected run as no information.
+
+Run it from inside a checkout. Codex refuses to start outside a git repo (`Not inside a trusted directory`), and a session's starting directory is `$HOME`, which is not one. For a question with no diff attached, pass `--skip-git-repo-check`.
+
+**Log in once, and it stays.** Codex writes `~/.codex/auth.json`, which is inside the home mount, so the login survives image updates and recreates with no volume of its own. The container has no browser, so use the device-code flow:
+
+```sh
+codex login --device-auth   # prints a URL and a code; open them on any other device
+```
+
+The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
+
 ## Sessions survive a restart
 
 Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
@@ -87,7 +108,7 @@ WebKit is in the matrix because mobile Safari's CSS engine has historically inte
 
 ## Tech
 
-- Base: `node:20-slim` (Debian Bookworm)
+- Base: `node:24-bookworm-slim` (Debian Bookworm, newest LTS and the last major that bundles corepack)
 - Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit`
 - View renderer: in-house buffer walk in `mobile/public/js/view.js` (reads xterm's parsed buffer → colour-preserving wrapped HTML; no ANSI round-trip)
 - Session persistence: `tmux`, plus an on-disk roster + per-tab Claude conversation id under `PD_STATE_DIR` so sessions outlive the container

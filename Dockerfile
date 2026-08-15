@@ -30,6 +30,13 @@ FROM node:24-bookworm-slim
 # upgrade without checking Playwright's per-distro deps list — a missing
 # libglib2 or libnss3 is what punted a prior session into asking the user to
 # verify the UI manually instead of running the probe.
+#
+# bubblewrap is what `codex -s read-only` sandboxes itself with on Linux, and
+# /second-opinion passes that flag on every consult. Codex ships a bundled bwrap
+# and falls back to it, so the sandbox WORKS without this package, but every run
+# then prints a "could not find bubblewrap on PATH" warning that reads exactly
+# like the sandbox failing to engage. It costs ~150 KB and removes a line that
+# would otherwise be re-diagnosed from scratch by every session that sees it.
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -39,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     jq \
+    bubblewrap \
     build-essential \
     python3 \
     libnss3 \
@@ -82,6 +90,39 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y gh \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Codex, OpenAI's coding CLI, so a session can consult a SECOND lab's model
+# without leaving the container. This is what the /second-opinion skill drives,
+# and that skill's whole value is decorrelated error: Claude reviewing Claude
+# shares its blind spots, so a container holding only one vendor's model cannot
+# produce a second opinion at all. The skill checks `command -v codex` and stops
+# when it is missing rather than substituting Claude's own view, which is why
+# the tool has to be present in the image and not merely available in principle.
+#
+# npm -g into /usr/local, NOT into $HOME. The home is a bind mount that ships
+# EMPTY (see the relocation block near the end of this file), so anything
+# image-owned written under /home/claude is masked at runtime. Do NOT "fix" that
+# by installing into ~/bin instead: that prefix is for CLIs a SESSION installs
+# for itself, it sits EARLIER on PATH than /usr/local/bin, and a stale copy left
+# there would permanently shadow the image's own and never update again.
+#
+# Deliberately UNPINNED, the same call already made for `claude` (install.sh)
+# and `gh` (apt stable): every image build takes the current release, so the
+# tool tracks upstream instead of freezing at whatever was newest the day this
+# line was written. `codex --version` at the end puts the resolved version in
+# the build log, so a build is still self-documenting about what it shipped.
+#
+# Roughly 300 MB, nearly all of it two Rust binaries (258 MB codex, 50 MB
+# codex-code-mode-host; measured on 0.147.0). npm resolves only the linux-x64
+# optional dependency, so there are no other platforms' binaries to prune, and
+# the same bytes arrive whichever install channel is used.
+#
+# Auth is NOT baked in and must not be: `codex login --device-auth` writes
+# ~/.codex/auth.json at runtime, which is inside the home mount and therefore
+# already survives image updates with no volume of its own.
+RUN npm install -g --no-fund --no-audit @openai/codex \
+    && npm cache clean --force \
+    && codex --version
 
 # Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
 # to the newest model in its family at launch, by design (Jake wants these to
