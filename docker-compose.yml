@@ -49,3 +49,28 @@ services:
     # Unraid's docker group GID is 281
     group_add:
       - 281
+
+    # The three below mirror pocket-dev.xml's ExtraParams. README calls this file
+    # a mirror of the UnRAID template, and it had silently stopped being one: the
+    # memory cap and SYS_PTRACE lived only in the template, so a local `compose up`
+    # ran uncapped and behaved differently from the deployed container in ways
+    # nothing reported. Keep the two files in step; codex.test.js asserts it.
+
+    # Codex sandboxes every command it spawns with bubblewrap, which needs an
+    # unprivileged user namespace. Docker's default seccomp profile denies that,
+    # and `codex exec review` then aborts before reading any file while still
+    # printing "No findings were identified". Measured 2026-08-15: this is the only
+    # knob that works (apparmor is not the blocker; SYS_ADMIN clears unshare then
+    # fails on pivot_root; codex's own use_legacy_landlock is deprecated and fails
+    # with Sandbox(LandlockRestrict)). This IS a real loosening, defensible only
+    # because the docker socket above is already host-root equivalent.
+    security_opt:
+      - seccomp:unconfined
+
+    # Debuggers attaching to child processes inside the container.
+    cap_add:
+      - SYS_PTRACE
+
+    # Matches the template. An uncapped container on a host running other
+    # workloads is how a runaway compile takes the whole box down.
+    mem_limit: 16g
