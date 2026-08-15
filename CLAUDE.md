@@ -238,6 +238,32 @@ Copying an `auth.json` in from a machine that has a browser also works and is do
 
 **Calibration, measured in this container** (2026-08-15, codex-cli 0.147.0, `gpt-5.6-sol`): the two-line `def pct(part, whole): return part / whole * 100` diff from `/second-opinion`'s calibration table, run through the directed consult, returned the documented `ZeroDivisionError` plus the `TypeError`, `OverflowError`, `inf` and bool-is-int findings. That is the check to re-run after a codex major bump, because it fails informatively: a setup that is broken returns nothing, and nothing is also what an undirected prompt returns.
 
+**`--security-opt seccomp=unconfined` is in `ExtraParams` for codex, and removing it breaks `codex exec review` in a way that LIES.** Docker's default seccomp profile denies unprivileged `unshare(CLONE_NEWUSER)`, so bubblewrap cannot create a namespace, so every codex mode that must EXEC a command to gather its own material dies before reading anything. Measured 2026-08-15: Tower's kernel allows namespaces (`user.max_user_namespaces = 256276`, host root can `unshare`), the container got `EPERM`, and of the three candidate knobs only this one works. `apparmor=unconfined` is not the blocker at all, and `--cap-add SYS_ADMIN` gets past `unshare` only to fail on `pivot_root`.
+
+The failure it prevents is the reason this is worth a security flag rather than a note. Without it:
+
+```
+bwrap: No permissions to create new namespace ...   (x3, each 0ms)
+codex: "No findings could be identified because the repository inspection command failed"
+```
+
+Four of six such runs LED with "No findings were identified" and buried the abort in the second clause, so a reader skimming the first sentence records a clean review that never happened. **"I could not look" and "I looked and found nothing" must not be allowed to look alike**, and that is a property of the sandbox working, not of the prose.
+
+**Why this specific loosening is acceptable here, and the case against it, because it is a real case.** For: the container already bind-mounts `/var/run/docker.sock`, which the README correctly calls host-root equivalent, so seccomp filtering is not the boundary protecting Tower and never was; and the direction is counter-intuitive but real, since turning the container's seccomp off is what lets codex turn ITS sandbox on.
+
+Against, from a `/second-opinion` consult on this very change, and NOT paraphrased away because it is correct: seccomp applies to **every** process in the container, not only codex's bwrapped children, so this also drops Docker's filter for the node server, Claude, and anything else running here. Docker blocks `io_uring` in that profile specifically because of container-escape history, and uid 99 does not protect a shared kernel from an unprivileged syscall exploit. **The strongest form of the objection is about the future, not today**: if the docker socket is ever removed or fronted with a filtered proxy, that hardening would be silently undercut, because this flag would be left behind as a second escape path nobody re-examined. So the honest statement is that this flag is acceptable **only while the raw socket is mounted**, and **removing the socket is the event that should force this decision to be re-taken**, not a moment to celebrate.
+
+Two narrower alternatives were tried and measured, not assumed:
+
+- **`-c use_legacy_landlock=true`**, codex's own non-bwrap backend. It is already deprecated ("will be removed soon") and fails here anyway: `error applying legacy Linux sandbox restrictions: Sandbox(LandlockRestrict)`, and the answer file then reads "No findings could be verified", the same lie in a different costume.
+- **A custom seccomp profile.** Rejected on maintenance grounds (it pins a private copy of Docker's default that rots silently as Docker updates), and note it would need MORE than the userns clone flags: the `SYS_ADMIN` experiment got past `unshare` only to fail on `pivot_root`, so the real allowlist has to be traced rather than guessed.
+
+**DO NOT reach for `--privileged` or `--cap-add SYS_ADMIN` instead**: measured, neither one makes bwrap work, so they would buy strictly more privilege for strictly less function.
+
+**Fixing the sandbox does NOT make `review` good, and do not read it that way.** With seccomp off, the same `pct` diff through bare `review` returned "No definite regression or actionable bug is evident", still missing the `ZeroDivisionError` the directed consult finds every time. That is the under-reporting `/second-opinion` already documents. What the flag buys is that a useless-but-honest answer stops being indistinguishable from a crash.
+
+**The directed consult was never observed to need the sandbox, which is NOT the same as it being unable to.** Its material arrives piped on stdin, so in every measured run it answered without executing anything. But `codex exec` is agentic and may choose to read files or run commands, so "the piped path is immune" is an observation about the runs so far, not a property of the tool. Do not lean on it as a fallback for a container where the sandbox is broken; fix the sandbox.
+
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.

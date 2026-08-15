@@ -19,7 +19,7 @@ Authentication: provide ANTHROPIC_API_KEY or run 'claude login' once. Auth persi
   <WebUI>http://[IP]:[PORT:7681]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/Jacob-Lasky/pocket-dev/main/pocket-dev.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/Jacob-Lasky/pocket-dev/main/icon.png</Icon>
-  <ExtraParams>--group-add 281</ExtraParams>
+  <ExtraParams>--group-add 281 --memory=16G --cap-add=SYS_PTRACE --security-opt seccomp=unconfined</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

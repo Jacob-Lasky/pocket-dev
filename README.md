@@ -62,6 +62,8 @@ Two things about that invocation are load-bearing rather than stylistic. `-s rea
 
 Run it from inside a checkout. Codex refuses to start outside a git repo (`Not inside a trusted directory`), and a session's starting directory is `$HOME`, which is not one. For a question with no diff attached, pass `--skip-git-repo-check`.
 
+**The container runs with `--security-opt seccomp=unconfined`, and codex is why.** Codex sandboxes every command it spawns with bubblewrap, which needs an unprivileged user namespace; Docker's default seccomp profile denies that, so `codex exec review` died before reading a single file while still printing "No findings were identified" with the abort tucked into the second clause. A review that never ran and a review that found nothing looked identical. The flag is a real loosening, and it is defensible here only because this container already mounts the docker socket (host-root equivalent, see the volumes table), so seccomp was never the boundary protecting the host. It also cuts the other way: it is what allows codex's own read-only sandbox to engage.
+
 **Log in once, and it stays.** Codex writes `~/.codex/auth.json`, which is inside the home mount, so the login survives image updates and recreates with no volume of its own. The container has no browser, so use the device-code flow:
 
 ```sh
