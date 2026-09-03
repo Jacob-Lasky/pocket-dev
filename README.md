@@ -19,7 +19,7 @@ For repo orientation — particularly the two-layers-of-alt-screen gotcha around
 
 The container exposes port 7681. Click the WebUI button or hit `http://<server>:7681/` from any device on your network. The mobile UI is the same as desktop; iOS users can "Add to Home Screen" for a PWA experience.
 
-Port 4387 is Lavish Editor's review server (see "Point at the thing" below). Set `LAVISH_AXI_LINK_HOST` to the hostname you reach this host by, or the review URLs it prints carry the container's internal bridge address and open nowhere.
+Port 7682, one above the terminal, is Lavish Editor's review server (see "Point at the thing" below). Set `LAVISH_AXI_LINK_HOST` to the hostname you reach this host by, or the review URLs it prints carry the container's internal bridge address and open nowhere.
 
 ## Run locally (development)
 
@@ -87,7 +87,7 @@ lavish-axi poll /coding/dump/plan/plan.html  # long-poll until you send feedback
 
 The bind address is handled for you: `entrypoint.sh` resolves the container's own address at boot, because Lavish refuses a wildcard bind (`0.0.0.0` is coerced back to loopback) and a loopback listener is unreachable through a published port. That holds on a bridge network, which is what the template declares; `--network host` ignores `-p` entirely and macvlan needs no mapping, so set `LAVISH_AXI_HOST` yourself there. `CLAUDE.md` has the measurement.
 
-**Port 4387 serves the artifact with no authentication**, and the Host allowlist is DNS-rebinding protection rather than a login: a direct client just sends an accepted `Host`. That is acceptable next to 7681, which is an unauthenticated terminal in a container holding the docker socket, so for anyone who can reach both it grants nothing new. It is still a second reachable server with its own file-read and feedback surface, and a firewall may treat the two ports differently, so publish 4387 exactly where 7681 already is and nowhere else. Sessions and queued feedback live in `~/.lavish-axi`, inside the home mount, so they survive a recreate.
+**Port 7682 serves the artifact with no authentication**, and the Host allowlist is DNS-rebinding protection rather than a login: a direct client just sends an accepted `Host`. That is acceptable next to 7681, which is an unauthenticated terminal in a container holding the docker socket, so for anyone who can reach both it grants nothing new. It is still a second reachable server with its own file-read and feedback surface, and a firewall may treat the two ports differently, so publish it exactly where 7681 already is and nowhere else. Sessions and queued feedback live in `~/.lavish-axi`, inside the home mount, so they survive a recreate.
 
 ## Sessions survive a restart
 

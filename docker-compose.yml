@@ -59,8 +59,9 @@ services:
       # own IP because Lavish refuses a wildcard bind, and on a BRIDGE network
       # Docker's published port DNATs to exactly that address. Under
       # `--network host` there is no DNAT and this mapping is ignored, so set
-      # LAVISH_AXI_HOST yourself there. Unauthenticated, like 7681.
-      - "4387:4387"
+      # LAVISH_AXI_HOST yourself there. Unauthenticated, like 7681, whose
+      # number this one is deliberately one above.
+      - "7682:7682"
 
     # Add to docker group to access socket
     # Unraid's docker group GID is 281

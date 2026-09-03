@@ -234,6 +234,19 @@ ENV DGVPN_DIR=/home/claude/.dgvpn
 # it spawns, and the published port in pocket-dev.xml / docker-compose.yml all
 # have to agree, so it is set once here and read from the environment everywhere.
 #
+# 7682 is the WEB TERMINAL PORT PLUS ONE, and that relationship is the whole
+# reason for the number: one port to remember, the neighbour is the other one.
+# lavish.test.js asserts the arithmetic against pocket-dev.xml's WebUI Port so
+# the two cannot drift apart. (7682 is free rather than merely unused: it was
+# pocket-dev's own mobile-input-bridge port until 4548bf8 removed that bridge.)
+#
+# The cost of moving off Lavish's built-in default of 4387, stated because it is
+# a real one: at 4387 a process that somehow never saw LAVISH_AXI_PORT still
+# agreed with the published mapping by accident. Here it would bind 4387 and be
+# unreachable. Sessions are safe because server.js forwards every LAVISH_
+# variable through `new-session -e`, and the documented docker exec probe
+# imports PID 1's environment, which carries the port along with the address.
+#
 # LAVISH_AXI_NO_OPEN=1 because there is no browser in this container. Lavish
 # already catches the failed launch and downgrades its status from "opened" to
 # "ready", so this is not load-bearing, but without it every open shells out to
@@ -244,7 +257,7 @@ ENV DGVPN_DIR=/home/claude/.dgvpn
 # LAVISH_AXI_HOST is deliberately NOT set here: it has to be the container's own
 # runtime IP, which the image cannot know. entrypoint.sh resolves it at boot, and
 # the WHY for why loopback and 0.0.0.0 are both wrong lives there.
-ENV LAVISH_AXI_PORT=4387
+ENV LAVISH_AXI_PORT=7682
 ENV LAVISH_AXI_NO_OPEN=1
 
 # Switch to claude user before installing
@@ -318,7 +331,7 @@ WORKDIR /workspace
 # documentation only (it publishes nothing); the actual mappings live in
 # pocket-dev.xml and docker-compose.yml, and lavish.test.js asserts all three agree.
 EXPOSE 7681
-EXPOSE 4387
+EXPOSE 7682
 
 # Set entrypoint to fix permissions on startup
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
