@@ -180,6 +180,89 @@ function pendingUserInput(message) {
   return content.some(b => b && b.type === 'tool_use' && USER_INPUT_TOOLS.has(b.name));
 }
 
+// The notice Claude Code writes when the Remote Control bridge is closed
+// because the conversation was archived or ended from ANOTHER device: the
+// desktop app, the phone, or claude.ai/code. It is the only signal pocket-dev
+// gets that the user is finished with a tab somewhere else, and it is already
+// on disk, so no new watcher is needed to see it.
+//
+// Shape, measured against Claude Code 2.1.259 on 2026-09-03 (23 real instances
+// across the container's transcripts). The bridge closes 4090 with reason
+// `session_not_active`, appends this record, and then carries on as a purely
+// local session, so the process does NOT exit and nothing else marks the event:
+//
+//   {"type":"system","subtype":"informational","level":"warning",
+//    "content":"Remote Control disconnected \u2014 this session was ended or
+//               archived from another device or app (code 4090)", "uuid":"..."}
+//
+// MATCH THE RECORD, NEVER THE RAW TAIL. A bare `line.includes(...)` scan is
+// wrong, and measured wrong on this very transcript: a `type:"user"` record
+// carries the sentence verbatim whenever anyone QUOTES the message, which is
+// exactly what happened when this feature was requested and again when a shell
+// probe printed it into a tool result. Both would have closed a live tab.
+// Requiring type/subtype is what separates the notice from talk about it, and
+// there is no other kind of record the notice can arrive as.
+//
+// The other 4090 reasons are deliberately NOT matched, because only this one
+// means a human is done with the conversation:
+//
+//   superseded_by_worker  another worker took the session over and this one
+//                         "is standing down" - the conversation is alive
+//   session_not_found     "may have been deleted", which reads the same way as
+//                         the server having simply lost the registration
+//   epoch_stale           the worker registration went stale
+//
+// `Remote Control disconnected \u2014 /login` is the same record shape once
+// more and only means the account signed out. Every one of these was present in
+// the sample, so a match on "(code 4090)" alone is not a discriminator.
+//
+// Written as escapes rather than a literal em dash so the exact character is
+// visible in source and cannot be normalised away by an editor or a merge.
+const ARCHIVED_HEAD = 'Remote Control disconnected';
+const ARCHIVED_BODY = 'ended or archived from another device';
+
+function isArchivedNotice(record) {
+  if (!record || record.type !== 'system' || record.subtype !== 'informational') return false;
+  const { content } = record;
+  return typeof content === 'string'
+    && content.startsWith(ARCHIVED_HEAD)
+    && content.includes(ARCHIVED_BODY);
+}
+
+// The uuid of the most recent archive notice in the tail, or null for none.
+//
+// A uuid rather than a boolean, because the caller has to tell "archived since
+// I adopted this tab" from "archived at some point in a conversation I am
+// holding open", and acting on the second throws away a live tmux pane. The
+// conversation itself survives either way, since nothing here writes to
+// ~/.claude/projects and the resume picker reads exactly these files. The
+// notice sits at EOF in
+// the case that matters, but it stays in the tail window while the conversation
+// carries on, and it does carry on: of 23 real archive events, 4 were followed
+// by more work, two of them by roughly 1450 further turns. A boolean would
+// close those tabs again on every restart.
+//
+// A notice with no uuid answers null, which reads as "nothing archived" and so
+// fails CLOSED, which is the safe direction when the alternative is killing a
+// pane on a guess. It must not fall through to an older notice: the older one
+// is precisely what the caller already has recorded.
+function findArchivedNotice(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    // Cheap reject before parsing. The notice is rare next to the message
+    // records it is interleaved with, same shape as inspectTranscript's filter.
+    if (!lines[i].includes(ARCHIVED_BODY)) continue;
+    let record;
+    try {
+      record = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (!isArchivedNotice(record)) continue;
+    return typeof record.uuid === 'string' ? record.uuid : null;
+  }
+  return null;
+}
+
 // Longest title / preview we will hand to a caller. These strings come off disk
 // and end up in JSON and in the DOM, so they get a hard ceiling rather than a
 // trusting pass-through. A preview is one line by construction: newlines are
@@ -201,6 +284,7 @@ function cleanOneLine(value, max) {
 //               tell a new turn from one it has already accounted for
 //   title       Claude's own `aiTitle`, the name its resume picker shows
 //   lastPrompt  the user's most recent message, for a preview line
+//   archivedId  uuid of the newest Remote Control archive notice, or null
 //
 // Claude appends a fresh `ai-title` and `last-prompt` record on roughly every
 // turn (98 of each in a single 11 MB transcript, measured 2026-07-24), so the
@@ -233,7 +317,9 @@ function inspectTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
   }
 
   const { status, turnId } = decide(lines);
-  return { status, turnId, title, lastPrompt };
+  // Same `lines`, so the archive scan costs a walk of already-read strings
+  // behind a substring reject, not a second read of a half-megabyte tail.
+  return { status, turnId, title, lastPrompt, archivedId: findArchivedNotice(lines) };
 }
 
 // Every status this module can emit, and the ones that mean a human has to do
@@ -245,6 +331,24 @@ function inspectTranscript(file, { tailBytes = TAIL_BYTES } = {}) {
 const STATUSES    = Object.freeze(['idle', 'asking', 'busy', 'unknown']);
 const WANTS_USER  = Object.freeze(new Set(['idle', 'asking']));
 
+// The statuses that mean nothing is in flight: the turn is over and the next
+// move belongs to the user. A caller about to do something DESTRUCTIVE to a
+// session asks this, and it must ask POSITIVELY rather than testing for 'busy'.
+//
+// `!== 'busy'` is the version that looks equivalent and is not, because it
+// treats 'unknown' as safe. 'unknown' is the answer when the tail holds no
+// complete message record, and one way to get there is a single tool_result
+// larger than TAIL_BYTES: readTailLines drops the partial first line, so a
+// window containing one huge in-flight record and nothing else classifies as
+// unknown while the session is very much mid-turn. Reading it as safe kills a
+// session in the middle of the largest tool call it has ever made.
+//
+// Identical to WANTS_USER for today's four statuses and deliberately NOT the
+// same constant: that one means "a human needs to see this", this one means
+// "nothing is running". A fifth status could easily be one and not the other,
+// and the two readings are what would have to be untangled afterwards.
+const TURN_SETTLED = Object.freeze(new Set(['idle', 'asking']));
+
 // Deliberately NO uuid-level wrappers here. There were two (`statusOf` and
 // `inspect`, each uuid -> findTranscript -> read) and the server stopped using
 // both: it holds the resolved path in its own memo cache, keyed on mtime and
@@ -253,5 +357,5 @@ const WANTS_USER  = Object.freeze(new Set(['idle', 'asking']));
 // reads as API.
 module.exports = {
   findTranscript, classifyTranscript, inspectTranscript,
-  USER_INPUT_TOOLS, STATUSES, WANTS_USER,
+  USER_INPUT_TOOLS, STATUSES, WANTS_USER, TURN_SETTLED,
 };

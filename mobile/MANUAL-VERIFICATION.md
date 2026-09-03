@@ -45,6 +45,15 @@ General:
 - [ ] Kill a tab, restart the container: it stays killed, and its conversation is not resumed into a new tab.
 - [ ] `docker stop` + `docker rm` + `docker run` (a recreate) with the `Session State` volume mounted: tabs still come back. Without the mount they do not — expected, and the reason the volume exists.
 
+## Archived-elsewhere close (no automated test can reach this: it needs a real bridged conversation and a real archive action in another app)
+- [ ] Open a fresh tab, send Claude one message so the conversation exists, and confirm the tab appears in the Remote Control list on the phone or at claude.ai/code.
+- [ ] Let the turn FINISH (the tab must not be mid-work), then archive that conversation from the Claude Code desktop app.
+- [ ] Within one poll (a few seconds, with the browser open) the tab disappears from the strip and the session list. No dead pane is left behind, and the pane you were on does not go blank: `4404` makes the browser re-read the roster instead of retrying.
+- [ ] `docker logs pocket-dev` carries one line naming it: `[main-N] archived from another device, closing the tab`. That line is the artifact; there is no pane left to read.
+- [ ] Open a new tab and run `/resume`: the archived conversation is still in the picker. Closing the tab must never cost the conversation, only its pane.
+- [ ] Now archive a conversation while its tab is MID-TURN. The tab stays until the turn ends, then closes on the next poll. A tab killed mid-tool-call is the one failure mode with no record of what was lost.
+- [ ] `docker restart pocket-dev` with an archived-then-continued conversation open (archive it, then send it another message so work follows the notice). It comes back and STAYS open: the notice is seeded at adopt, so a restart is not a second archive. If restarting closes tabs, the seed regressed and every restart will keep eating them.
+
 ## Lavish Editor reachability (nothing in CI starts the real CLI, binds its socket, or crosses the published port — see "Lavish Editor" in CLAUDE.md)
 - [ ] In a session (NOT `docker exec` — that gets the image's env, not PID 1's, and binds loopback), run `lavish-axi` on a small HTML file. It prints JSON with `status: opened` and a URL whose host is `LAVISH_AXI_LINK_HOST`, not a `172.x` bridge address.
 - [ ] Open that URL on the phone: the artifact renders, elements can be annotated, and a Mermaid diagram opens as a whiteboard.

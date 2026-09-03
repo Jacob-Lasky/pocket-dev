@@ -874,11 +874,14 @@
           this.setStatus('disconnected');
           if (activeId === this.id) releaseWakeLock();
           if (!sessions.has(this.id)) return;
-          // 4404 means the server does not know this id. Reconnecting can never
-          // fix that, but the roster may simply have moved on without us (the
-          // container was recreated and lost its state, or another tab killed
-          // this session), so ask the server what it actually has instead of
-          // leaving a dead pane on screen forever.
+          // 4404 means the session is gone. Reconnecting can never fix that,
+          // but the roster may simply have moved on without us (the container
+          // was recreated and lost its state, another tab killed this session,
+          // its tmux session was killed by hand, or the server closed it
+          // because the conversation was archived from another device), so ask
+          // the server what it actually has instead of leaving a dead pane on
+          // screen forever. The server sends this code on every deliberate
+          // removal, not only when a WS arrives for an id it never had.
           if (ev.code === 4404) { scheduleResync(); return; }
           // Otherwise it's a transient hiccup — a network blip, or the server
           // being down for a restart. Keep retrying; when it comes back it will

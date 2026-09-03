@@ -109,8 +109,15 @@ The difference is a `clean-shutdown` marker written by the server's signal handl
 | `PD_RESUME_NUDGE` | `continue please` | What an interrupted session is asked after a deliberate restart. Empty string sends nothing |
 | `PD_CRASH_NUDGE` | a warning, see above | What it is told instead after an unexpected shutdown. Empty string sends nothing |
 | `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
+| `PD_ARCHIVE_CLOSE` | on | `0` keeps a tab open after its conversation is archived from another device |
 
 Resume applies only when pocket-dev owns the command line; setting `SHELL_CMD` turns it off, since an arbitrary command has no conversation to resume.
+
+### Archive a conversation elsewhere and its tab closes here
+
+Every tab also registers with Claude Code's Remote Control bridge, so the same conversation can be driven from the Claude desktop or mobile app. Archive it there and pocket-dev notices on its next poll (a few seconds, with the browser open) and closes the tab, instead of leaving it in the strip holding a conversation you have already finished with.
+
+It waits for the turn to end first — a tab that is mid-work is never killed under you — and it only ever costs the tmux pane and its scrollback. The conversation itself is untouched and still in `claude --resume`, so a tab closed by mistake is recovered by opening a new one and picking it. `PD_ARCHIVE_CLOSE=0` turns it off.
 
 ## Tests
 

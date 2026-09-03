@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { STATUSES, WANTS_USER, USER_INPUT_TOOLS } from '../../claudeSession.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { STATUSES, WANTS_USER, TURN_SETTLED, USER_INPUT_TOOLS } from '../../claudeSession.js';
+import { GONE_CODE } from '../../server.js';
 import { rowState, wantsUser, STATE_TEXT } from '../../public/js/attention.js';
 
 // The status vocabulary crosses a wire. `claudeSession.js` produces it (CJS,
@@ -69,5 +72,63 @@ describe('status vocabulary: server producer vs browser consumer', () => {
     for (const machineTool of ['Bash', 'Read', 'Edit', 'Write', 'WebFetch', 'Agent', 'Task', 'Skill']) {
       expect(USER_INPUT_TOOLS.has(machineTool), `${machineTool} is answered by the machine`).toBe(false);
     }
+  });
+});
+
+describe('TURN_SETTLED: the vocabulary a destructive action is allowed to act on', () => {
+  it('only ever names statuses the server can actually emit', () => {
+    for (const status of TURN_SETTLED) {
+      expect(STATUSES, `'${status}' is not a status this server emits`).toContain(status);
+    }
+  });
+
+  it('excludes busy AND unknown, which is the whole reason it is not a negation', () => {
+    // `status !== 'busy'` reads as equivalent and is not: 'unknown' is what a
+    // transcript answers when the tail holds no complete message record, and
+    // one way there is a single tool_result larger than the tail window, which
+    // happens precisely while a session is mid-tool-call. See TURN_SETTLED in
+    // claudeSession.js.
+    expect(TURN_SETTLED.has('busy')).toBe(false);
+    expect(TURN_SETTLED.has('unknown')).toBe(false);
+  });
+
+  it('is a strict answer to a different question than WANTS_USER', () => {
+    // The two agree on today's four statuses, which is exactly why they are
+    // separate constants: nothing would report a fifth status that needs a
+    // human but is NOT safe to destroy, and the reading that had to be
+    // untangled afterwards would be which of the two the shared name meant.
+    for (const status of TURN_SETTLED) {
+      expect(STATUSES).toContain(status);
+    }
+    expect([...TURN_SETTLED].every(s => !['busy', 'unknown'].includes(s))).toBe(true);
+  });
+});
+
+describe('the "session is gone" close code: server producer vs browser consumer', () => {
+  // Same problem as the status vocabulary, one layer down. The server sends
+  // this code on every deliberate removal; the browser's ws.onclose branches on
+  // it to stop reconnecting and re-read the roster. CJS server, inline ESM in
+  // index.html, a WebSocket close frame in between, so the number is written
+  // twice and nothing but this file connects the two copies.
+  //
+  // The failure it guards is a coordinated change: move the server constant and
+  // its own unit test together and every suite stays green, while every client
+  // treats a deliberate removal as a transient network blip and keeps a dead
+  // pane on screen forever.
+  const indexHtml = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
+
+  it('has the browser branching on exactly the code the server sends', () => {
+    const onclose = indexHtml.slice(indexHtml.indexOf('ws.onclose'), indexHtml.indexOf('ws.onerror'));
+    expect(onclose, 'index.html has no ws.onclose to read').toBeTruthy();
+    expect(onclose).toContain(`ev.code === ${GONE_CODE}`);
+    expect(onclose).toContain('scheduleResync()');
+  });
+
+  it('is in the private close-code range, so it cannot collide with a real one', () => {
+    // 1000-2999 are reserved by the WebSocket spec and its registry; 4000-4999
+    // are the application's. A code outside that range can arrive from the
+    // transport itself and would make a network event look like a removal.
+    expect(GONE_CODE).toBeGreaterThanOrEqual(4000);
+    expect(GONE_CODE).toBeLessThanOrEqual(4999);
   });
 });
