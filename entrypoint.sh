@@ -158,7 +158,15 @@ chmod 775 /workspace 2>/dev/null || true
 # 172.x bridge address no phone can open. See pocket-dev.xml.
 if [ -z "${LAVISH_AXI_HOST:-}" ]; then
   lavish_host=""
-  for addr in $(hostname -i 2>/dev/null || true); do
+  lavish_addrs=()
+  # `read -ra` and NOT `for addr in $(hostname -i)`. An unquoted command
+  # substitution in a for-list gets pathname expansion as well as word
+  # splitting, so a `*` in the output would be globbed against the working
+  # directory and a FILENAME could be selected as the bind address. `read -ra`
+  # splits on IFS and never globs. `|| true` because read returns nonzero at EOF
+  # with no delimiter, and `set -e` would take an empty result as a boot failure.
+  read -ra lavish_addrs < <(hostname -i 2>/dev/null) || true
+  for addr in "${lavish_addrs[@]}"; do
     case "$addr" in
       127.*|0.0.0.0|*:*) continue ;;
       *.*.*.*) lavish_host="$addr"; break ;;

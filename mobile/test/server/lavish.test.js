@@ -151,7 +151,7 @@ describe('Lavish Editor wiring', () => {
 // looks configured and is unreachable through the published port.
 describe('entrypoint.sh bind-address resolution, executed', () => {
   const SCRIPT = path.resolve(__dirname, '../../../entrypoint.sh');
-  let tmproot, home, skel, cache, bin;
+  let tmproot, home, skel, cache, bin, globdir;
 
   beforeEach(() => {
     tmproot = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lavish-'));
@@ -159,9 +159,11 @@ describe('entrypoint.sh bind-address resolution, executed', () => {
     skel = path.join(tmproot, 'skel');
     cache = path.join(tmproot, 'cache');
     bin = path.join(tmproot, 'bin');
-    fs.mkdirSync(home);
-    fs.mkdirSync(skel);
-    fs.mkdirSync(bin);
+    globdir = path.join(tmproot, 'cwd');
+    for (const d of [home, skel, bin, globdir]) fs.mkdirSync(d);
+    // A filename that WOULD satisfy the script's IPv4 shape check if the address
+    // list were ever glob-expanded against the working directory.
+    fs.writeFileSync(path.join(globdir, '10.9.9.9'), 'bait\n');
   });
 
   afterEach(() => {
@@ -172,14 +174,14 @@ describe('entrypoint.sh bind-address resolution, executed', () => {
   // what the script exported. The script execs its arguments, so the argument IS
   // the assertion surface: it prints the value the real server.js would inherit.
   function resolve(hostnameOutput, env = {}) {
-    fs.writeFileSync(
-      path.join(bin, 'hostname'),
-      `#!/bin/sh
-if [ "$1" = "-i" ]; then printf '%s\n' '${hostnameOutput}'; fi
-`,
-    );
-    fs.chmodSync(path.join(bin, 'hostname'), 0o755);
+    const stub = path.join(bin, 'hostname');
+    fs.writeFileSync(stub, ['#!/bin/sh', `[ "$1" = "-i" ] && printf '%s\\n' '${hostnameOutput}'`, ''].join('\n'));
+    fs.chmodSync(stub, 0o755);
+    // cwd is FIXED to a directory holding a file named like an IPv4 address, so the
+    // pathname-expansion case below is deterministic rather than dependent on
+    // whatever happens to sit in the repo when the suite runs.
     const res = spawnSync('bash', [SCRIPT, 'sh', '-c', 'printf "%s" "${LAVISH_AXI_HOST-UNSET}"'], {
+      cwd: globdir,
       env: spawnEnv({
         HOME: home,
         PD_SKEL_DIR: skel,
@@ -219,6 +221,16 @@ if [ "$1" = "-i" ]; then printf '%s\n' '${hostnameOutput}'; fi
     const { value, stderr } = resolve('0.0.0.0');
     expect(value).toBe('UNSET');
     expect(stderr).toMatch(/no non-loopback IPv4/);
+  });
+
+  it('does not glob the address list against the working directory', () => {
+    // `for addr in $(hostname -i)` gets PATHNAME EXPANSION as well as word
+    // splitting, so a `*` in that output is matched against the cwd and a filename
+    // can be selected as the bind address. The cwd here contains a file named
+    // 10.9.9.9, which satisfies the IPv4 shape arm exactly. The script uses
+    // `read -ra`, which splits on IFS and never globs, so `*` stays literal, fails
+    // the shape check, and the address is left unset.
+    expect(resolve('*').value).toBe('UNSET');
   });
 
   it('rejects a token that is not an address at all', () => {
