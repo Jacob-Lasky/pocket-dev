@@ -74,7 +74,7 @@ describe('Lavish Editor wiring', () => {
   });
 
   // Every place the port appears has to agree, so read it from the ENV and check
-  // the rest against that rather than hard-coding 4387 four more times here.
+  // the rest against that rather than repeating the number four more times here.
   const envPort = (dockerfile.match(/^ENV LAVISH_AXI_PORT=(\d+)\s*$/m) || [])[1];
   const webPort = (template.match(/<Config Name="WebUI Port" Target="(\d+)"/) || [])[1];
 
@@ -86,14 +86,25 @@ describe('Lavish Editor wiring', () => {
     expect(envPort).toBeTruthy();
   });
 
-  it('is the port lavish-axi itself defaults to', () => {
-    // An INDEPENDENT oracle, and the reason it is a literal rather than DRY-ed up
-    // against envPort: every other port assertion in this file is derived from
-    // this ENV, so changing the ENV moves both sides together and they all stay
-    // green on a wrong value. 4387 is what lavish-axi binds with LAVISH_AXI_PORT
-    // unset, so matching it keeps a session's bare `lavish-axi` and the published
-    // mapping agreeing even where this variable does not reach.
-    expect(envPort).toBe('4387');
+  it('is the web terminal port plus one', () => {
+    // An INDEPENDENT oracle, and the reason it is arithmetic rather than a second
+    // copy of 7682: every other port assertion here is derived from this ENV, so
+    // changing the ENV moves both sides together and they all stay green on a
+    // wrong value. The relationship IS the design ("one port to remember, the
+    // neighbour is the other one"), so it is the thing worth pinning.
+    expect(Number(envPort)).toBe(Number(webPort) + 1);
+  });
+
+  it('forwards the port to sessions, since it is not Lavish\'s own default', () => {
+    // The property given up by moving off 4387: at Lavish's built-in default, a
+    // process that never saw LAVISH_AXI_PORT still agreed with the published
+    // mapping by accident. Here it would bind 4387 and be unreachable, so the
+    // forwarding is load-bearing for the PORT and not only for the address.
+    // SESSION_ENV_PREFIX covers both, and this pins that it keeps covering both.
+    const args = buildTmuxSpawnArgs('main-1', 'cmd', {
+      envSource: { LAVISH_AXI_PORT: envPort, LAVISH_AXI_HOST: '172.17.0.9' },
+    });
+    expect(args).toContain(`LAVISH_AXI_PORT=${envPort}`);
   });
 
   it('EXPOSEs that same port', () => {
@@ -114,6 +125,19 @@ describe('Lavish Editor wiring', () => {
     expect(config[0]).toMatch(new RegExp(`Default="${envPort}"`));
     expect(config[0]).toMatch(/Mode="tcp"/);
     expect(config[0]).toMatch(/Type="Port"/);
+  });
+
+  it('docker-compose publishes that same port', () => {
+    // README calls compose a mirror of the UnRAID template, so a port in only one
+    // of them makes that sentence false and makes a local run behave differently
+    // from the deployed container with every other guard green.
+    //
+    // This assertion EXISTED, was deleted by accident, and shipped deleted: a
+    // slice-based rewrite of the neighbouring test spanned from one anchor to the
+    // next and swallowed whatever sat between them. The total count went up in the
+    // same change, so nothing looked missing. After rewriting a test by slicing,
+    // diff the list of test NAMES, not the count.
+    expect(compose).toMatch(new RegExp(`^\\s+- "${envPort}:${envPort}"$`, 'm'));
   });
 
   it('the docs quote that same port', () => {
@@ -371,18 +395,20 @@ describe('entrypoint.sh bind-address resolution, executed', () => {
 //
 // Live-verified 2026-09-03 on a container built from this branch: a session
 // created through POST /sessions ran `lavish-axi` and its server bound
-// 172.17.0.65:4387, the container's own address. That covers the case where node
+// the container's own address and the configured port. That covers the case where node
 // starts the tmux server. It does NOT cover a tmux server that was already
 // running without the variable, which inherits nothing from node, and these
 // assertions are what make that case impossible rather than unobserved.
 describe('LAVISH_ forwarding into the tmux session environment', () => {
   it('forwards every LAVISH_ variable the server process holds', () => {
     const args = buildTmuxSpawnArgs('main-1', 'cmd', {
-      envSource: { LAVISH_AXI_HOST: '172.17.0.9', LAVISH_AXI_PORT: '4387', HOME: '/home/claude' },
+      envSource: { LAVISH_AXI_HOST: '172.17.0.9', LAVISH_AXI_PORT: '9999', HOME: '/home/claude' },
     });
     expect(args).toContain('-e');
     expect(args).toContain('LAVISH_AXI_HOST=172.17.0.9');
-    expect(args).toContain('LAVISH_AXI_PORT=4387');
+    // 9999 is deliberately NOT the real port: this asserts the prefix rule carries
+    // whatever it is handed, and a reader must not mistake it for the value.
+    expect(args).toContain('LAVISH_AXI_PORT=9999');
   });
 
   it('forwards by PREFIX, not by a list of names', () => {

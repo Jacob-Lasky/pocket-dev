@@ -51,7 +51,7 @@ ssh tower 'docker logs --tail 30 pocket-dev'
 ssh tower 'docker inspect pocket-dev --format "{{.Image}}"'
 ssh tower 'docker images ghcr.io/jacob-lasky/pocket-dev --format "{{.ID}} {{.CreatedSince}}"'
 
-# Lavish Editor shipped, and its bind address resolved. DO NOT curl port 4387 as
+# Lavish Editor shipped, and its bind address resolved. DO NOT curl port 7682 as
 # a post-deploy health check: Lavish's server is spawned ON DEMAND by the first
 # `lavish-axi` call, so a perfectly healthy fresh container has nothing listening
 # there and would fail such a check. These two are what a deploy can actually
@@ -60,7 +60,7 @@ ssh tower 'docker exec pocket-dev lavish-axi --version'
 ssh tower 'docker exec pocket-dev sh -c "tr \"\\0\" \"\\n\" < /proc/1/environ | grep LAVISH_AXI_HOST"'
 ```
 
-Reaching port 4387 is only meaningful once a session has opened an artifact, so that probe belongs in the change that touches Lavish rather than in every deploy. The recipe, including why `docker exec` alone gets the wrong environment, is in `CLAUDE.md` under "Lavish Editor".
+Reaching port 7682 is only meaningful once a session has opened an artifact, so that probe belongs in the change that touches Lavish rather than in every deploy. The recipe, including why `docker exec` alone gets the wrong environment, is in `CLAUDE.md` under "Lavish Editor".
 
 For UI-touching changes, open `http://192.168.86.183:7681/` on the device that will actually use it (typically a phone) and exercise the affected flow. Mobile Safari and desktop Chromium can render the same CSS differently; the Playwright suite runs against chromium + firefox + webkit, but a real phone is still worth the 10 seconds before declaring the deploy good.
 

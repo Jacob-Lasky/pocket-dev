@@ -82,6 +82,39 @@ test('Copy button writes terminal output to clipboard with no trailing whitespac
   }
 });
 
+test('Copy on an empty screen flashes failure and leaves the clipboard alone', async ({ pdServer, page }) => {
+  // The product half of clipboardWrite's empty-write refusal. `writeText('')`
+  // resolves, so before the guard this path replaced whatever the user had
+  // copied with nothing AND flashed the success tick: the worst possible report
+  // of "I threw away your clipboard". Surfaced by a CI failure reading
+  // `Expected substring: "clipboard-test-marker" / Received string: ""` with the
+  // write already asserted to have resolved.
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await sendAndWaitForEcho(page, 'sentinel-must-survive');
+  await page.bringToFront();
+
+  // Put a known value in the clipboard the honest way, through the app.
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 })
+    .toContain('sentinel-must-survive');
+
+  // Now empty the screen and copy again.
+  await page.evaluate(() => window.term.clear());
+  await expect
+    .poll(() => page.evaluate(() => window.term.buffer.normal.getLine(0)?.translateToString(true) ?? ''),
+      { timeout: 5000 })
+    .toBe('');
+  await page.click('#copy-btn');
+
+  // The button says it failed, and it says so for at least a moment.
+  await expect(page.locator('#copy-btn')).toHaveText('✗', { timeout: 2000 });
+
+  // And the sentinel is still there. This is the assertion that matters: a guard
+  // that only changed the glyph would leave the clipboard destroyed.
+  expect(await readClipboard(page)).toContain('sentinel-must-survive');
+});
+
 test('drag-selecting in xterm.js auto-copies via onSelectionChange', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
