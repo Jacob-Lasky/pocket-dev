@@ -264,6 +264,51 @@ Two narrower alternatives were tried and measured, not assumed:
 
 **The directed consult was never observed to need the sandbox, which is NOT the same as it being unable to.** Its material arrives piped on stdin, so in every measured run it answered without executing anything. But `codex exec` is agentic and may choose to read files or run commands, so "the piped path is immune" is an observation about the runs so far, not a property of the tool. Do not lean on it as a fallback for a container where the sandbox is broken; fix the sandbox.
 
+## Lavish Editor — the review loop for HTML artifacts
+
+`lavish-axi` is a CLI that turns an HTML file a session generated into something a human can point at. The agent runs it, gets a URL back, and the human opens that URL to annotate specific elements, edit Mermaid diagrams as whiteboards, and send the notes back; the agent collects them with `poll`. It replaces "here is a screenshot, tell me what to change" with pointing at the thing.
+
+```sh
+lavish-axi /coding/dump/plan/plan.html      # prints JSON containing the review URL
+lavish-axi poll /coding/dump/plan/plan.html # long-poll until the human sends feedback
+lavish-axi end /coding/dump/plan/plan.html  # agent-initiated end; a plain reopen still works
+```
+
+Installed by `npm install -g lavish-axi` in the Dockerfile. Same `/usr/local` reasoning and the same two traps as codex: `/home/claude` is a bind mount that ships EMPTY so an image-owned binary under it is masked, and `~/bin` is EARLIER on `PATH` than `/usr/local/bin` so a copy left there shadows the image's own forever. Unpinned on purpose, with `lavish-axi --version` in the build log.
+
+**Being reachable is a five-link chain and every link fails silently.** `test/server/lavish.test.js` guards all of it, because none of it can be exercised by the cat-based E2E suite: it needs a detached server, a published port, and a human with a browser.
+
+1. **The port is defined once**, `ENV LAVISH_AXI_PORT` in the Dockerfile. `EXPOSE`, the `Lavish Editor Port` config in `pocket-dev.xml`, and `docker-compose.yml` all have to match it, and the test reads the ENV and checks the other three against it rather than repeating the number.
+2. **The port has to be published.** Unpublished, the review URL resolves only from inside the container, which is the one place nobody is holding a browser.
+3. **The bind address is resolved at boot by `entrypoint.sh`, and both obvious values are wrong.** Left unset, Lavish binds `127.0.0.1` only — its automatic Tailscale binding finds nothing here, because there is no `tailscale` CLI in this container (dgvpn is a userspace tsnet proxy, not a tailscale client), so `detectTailscale` returns null. And **`LAVISH_AXI_HOST=0.0.0.0` is refused**: Lavish coerces a wildcard back to loopback (`isWildcardHost` in its `paths.js`) and its listen helper closes any socket reporting an all-interfaces address, so setting the wildcard reads as configuring exposure while keeping exactly the loopback behaviour it was meant to fix. What works is the container's OWN address: Docker's published-port DNAT rewrites the destination to it, so a listener on `eth0` receives traffic arriving at the host port. Verified live on Tower 2026-09-03 — a container bound only to its `eth0` IP with `-p` answered from the host's loopback, its LAN address, and its Tailscale address. That address is assigned per container start, which is why this is a runtime `export` and not a Dockerfile `ENV`; an explicit `LAVISH_AXI_HOST` from the template always wins.
+4. **`LAVISH_AXI_LINK_HOST` is what makes the printed URL openable.** Lavish writes the link host into every session URL, and with none set it falls back to the bind address — a `172.x` bridge address that resolves nowhere outside the container. This is the failure that presents as "Lavish is broken" while Lavish is working perfectly. On Tower it is set to the host's Tailscale MagicDNS name, so the URL opens on the phone from anywhere on the tailnet.
+5. **The Host allowlist has to accept whatever name you typed.** Lavish's DNS-rebinding guard 403s any request whose `Host` header is not loopback, the bind address, or the link host, and answers with a page naming the URL that does work. `LAVISH_AXI_ALLOWED_HOSTS` (whitespace-separated) adds the other names you might type — LAN IP, short hostname, Tailscale IP. A lone `*` disables the guard and is only for a server behind separate authentication.
+
+**Publishing that port serves the artifact and its local assets with NO authentication**, to anything that can reach the host port. That is acceptable here for one reason only: 7681 next to it is an unauthenticated terminal in a container that mounts the docker socket, so 4387 adds no trust boundary that was not already gone. It is not a reason to publish it anywhere the terminal is not already published. To narrow it, bind the host side (`-p 100.x.y.z:4387:4387`) rather than loosening the allowlist.
+
+**`LAVISH_AXI_NO_OPEN=1` is set because there is no browser in here.** Not load-bearing — Lavish catches the failed launch and downgrades its status from `opened` to `ready` — but without it every open shells out to `xdg-open`, waits for it to fail, and reports a status that misdescribes what happened.
+
+**State lives in `~/.lavish-axi`**, which is inside the home mount, so sessions and queued feedback survive a recreate with no volume of their own. `~/.lavish-axi/server.log` is where the detached server's startup and crash output goes, and it is the first place to look when an open returns nothing. The server self-stops after `LAVISH_AXI_IDLE_TIMEOUT_MS` (default 30 minutes) with no browser and no poll attached, so a review left open overnight is gone in the morning unless a poll is holding it; `0` or `off` disables that.
+
+**The CLI being installed and the agent knowing to use it are separate facts.** The npm package carries its own Agent Skill at `/usr/local/lib/node_modules/lavish-axi/skills/lavish/SKILL.md`, and Claude Code does not read that path. Skills are discovered from `~/.claude/skills`, which here is a bind-mounted git checkout of Jake's config repo — the image must not write into it, so the skill is installed there separately and is not part of this image.
+
+**`docker exec` does NOT see the bind address, and that trap is in the diagnosis path rather than the product.** `export` in `entrypoint.sh` reaches PID 1 and everything descended from it, which is `server.js`, the tmux server it spawns, and therefore every session: that is the path that matters and it works. But `docker exec` builds its environment from the image's `Config.Env`, not from PID 1, so a `lavish-axi` run that way binds loopback and produces a URL nothing outside can open. Import PID 1's environment when probing from outside, so the probe tests what a session actually gets:
+
+```sh
+ssh tower "docker exec pocket-dev bash -c '
+  set -a; . <(tr \"\\0\" \"\\n\" < /proc/1/environ | grep \"^LAVISH_\"); set +a
+  printf \"<!doctype html><html><body style=background:#fff><h1>probe</h1></body></html>\" > /tmp/probe.html
+  lavish-axi /tmp/probe.html'"
+```
+
+That prints JSON containing the URL with the link host already resolved. Then, from the host, confirm the published port reaches the listener:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' "http://<link-host>:4387/"
+```
+
+`200` proves the whole chain. A `403` is the Host allowlist, not reachability, and its body names the URL that would have worked. A connection refused with the CLI having printed a URL means the server bound loopback, so check `LAVISH_AXI_HOST` in the session's environment rather than the port mapping.
+
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.

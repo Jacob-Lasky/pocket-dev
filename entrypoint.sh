@@ -119,5 +119,58 @@ fi
 
 chmod 775 /workspace 2>/dev/null || true
 
+# Lavish Editor binds exactly ONE concrete address, and both obvious choices are
+# wrong here, so resolve the container's own IPv4 and hand it that.
+#
+# WHY not the default. Unset, Lavish binds 127.0.0.1 (plus a Tailscale IPv4 when
+# a `tailscale` CLI answers, which there is none of in this container: dgvpn is a
+# userspace tsnet proxy, not a tailscale client, so detection returns null). A
+# loopback-only listener is unreachable through a published port, which is what
+# makes the review URL open on a phone.
+#
+# WHY not 0.0.0.0. Lavish REFUSES a wildcard: `LAVISH_AXI_HOST=0.0.0.0` is
+# coerced back to loopback (isWildcardHost in its paths.js), and its listen
+# helper closes any socket that reports an all-interfaces address. Setting the
+# wildcard therefore looks like configuring reachability while silently keeping
+# the loopback-only behaviour it was meant to fix.
+#
+# WHY the container IP works. Docker's published-port DNAT rewrites the
+# destination to the container's own address, so a listener on eth0 receives
+# traffic arriving at the host port. Verified live on Tower 2026-09-03: a
+# container bound only to its eth0 IP with `-p` answered from the host's
+# loopback, its LAN address, and its Tailscale address.
+#
+# This is deliberately NOT a Dockerfile ENV: the address is assigned per
+# container start and changes on every recreate, so the image cannot know it.
+# An explicit LAVISH_AXI_HOST from the template always wins.
+#
+# The export reaches PID 1 and everything descended from it, which is server.js,
+# the tmux server it spawns, and therefore every session. It does NOT reach
+# `docker exec`, which builds its environment from the image's Config.Env. A
+# probe from outside the container has to import PID 1's environment
+# (/proc/1/environ) or it will bind loopback and report a URL nothing can open.
+# See the Lavish Editor section of CLAUDE.md for that recipe.
+#
+# Reachability is only half of it. Lavish's DNS-rebinding guard 403s any request
+# whose Host header is not one it answers to, and it answers to loopback, this
+# bind address, and LAVISH_AXI_LINK_HOST. Set LAVISH_AXI_LINK_HOST to the
+# hostname you actually reach this container by, or the printed URL carries a
+# 172.x bridge address no phone can open. See pocket-dev.xml.
+if [ -z "${LAVISH_AXI_HOST:-}" ]; then
+  lavish_host=""
+  for addr in $(hostname -i 2>/dev/null || true); do
+    case "$addr" in
+      127.*|0.0.0.0|*:*) continue ;;
+      *.*.*.*) lavish_host="$addr"; break ;;
+    esac
+  done
+  if [ -n "$lavish_host" ]; then
+    export LAVISH_AXI_HOST="$lavish_host"
+  else
+    echo "pocket-dev: no non-loopback IPv4 found; Lavish Editor will bind" >&2
+    echo "pocket-dev: 127.0.0.1 only and will not be reachable from a phone." >&2
+  fi
+fi
+
 # Execute the main command
 exec "$@"

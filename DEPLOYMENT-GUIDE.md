@@ -50,6 +50,11 @@ ssh tower 'docker logs --tail 30 pocket-dev'
 # Image SHA matches what just shipped
 ssh tower 'docker inspect pocket-dev --format "{{.Image}}"'
 ssh tower 'docker images ghcr.io/jacob-lasky/pocket-dev --format "{{.ID}} {{.CreatedSince}}"'
+
+# Lavish Editor is reachable on its published port. entrypoint.sh binds it to the
+# container's own address, so a 200 here proves the whole chain: the CLI installed,
+# the bind address resolved, and the published port reaching that listener.
+curl -sf -o /dev/null -w "lavish %{http_code}\n" http://192.168.86.183:4387/
 ```
 
 For UI-touching changes, open `http://192.168.86.183:7681/` on the device that will actually use it (typically a phone) and exercise the affected flow. Mobile Safari and desktop Chromium can render the same CSS differently; the Playwright suite runs against chromium + firefox + webkit, but a real phone is still worth the 10 seconds before declaring the deploy good.

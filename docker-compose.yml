@@ -15,6 +15,14 @@ services:
       - PUID=99
       - PGID=100
 
+      # The hostname YOU reach this container by, written into the review URLs
+      # Lavish prints. Blank means the URL carries the container's own 172.x
+      # bridge address, which resolves nowhere outside the container. For a local
+      # compose run localhost is right; on a remote host use its LAN IP or
+      # Tailscale name, and add whatever other names you might type to
+      # LAVISH_AXI_ALLOWED_HOSTS so Lavish's Host allowlist does not 403 them.
+      - LAVISH_AXI_LINK_HOST=localhost
+
     volumes:
       - ./workspace:/workspace
 
@@ -44,6 +52,13 @@ services:
       # removed when the stack switched to a single node-pty server in 4548bf8,
       # so only 7681 is published now.
       - "7681:7681"
+
+      # Lavish Editor's review server. `lavish-axi <file.html>` inside the
+      # container prints a URL for a human to open; without this mapping that
+      # URL only resolves from inside. entrypoint.sh binds it to the container's
+      # own IP because Lavish refuses a wildcard bind, and Docker's published
+      # port DNATs to exactly that address. Unauthenticated, like 7681.
+      - "4387:4387"
 
     # Add to docker group to access socket
     # Unraid's docker group GID is 281
