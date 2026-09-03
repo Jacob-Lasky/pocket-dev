@@ -86,7 +86,7 @@ describe('Lavish Editor wiring', () => {
     expect(envPort).toBeTruthy();
   });
 
-  it('is Lavish\u2019s own documented default port', () => {
+  it('is the port lavish-axi itself defaults to', () => {
     // An INDEPENDENT oracle, and the reason it is a literal rather than DRY-ed up
     // against envPort: every other port assertion in this file is derived from
     // this ENV, so changing the ENV moves both sides together and they all stay

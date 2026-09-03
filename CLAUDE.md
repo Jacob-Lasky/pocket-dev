@@ -309,9 +309,17 @@ That prints JSON containing the URL with the link host already resolved. Then, f
 curl -s -o /dev/null -w '%{http_code}\n' "http://<link-host>:4387/"
 ```
 
-A `200` says something answered on that port and accepted that `Host`, which is the chain working end to end for that name; it is not proof that this image's CLI is what answered, so pair it with the title in the body (`<title><artifact> \u00b7 Lavish</title>`) rather than the status alone. A `403` is the Host allowlist rather than reachability, and its body names the URL that would have worked. A connection refused has several causes and loopback binding is only one: a wrong interface picked on a multi-network container, the server having idle-timed-out, no session ever opened, or the mapping absent. Check `LAVISH_AXI_HOST` in the session's environment and `/proc/net/tcp` in the container before blaming the port mapping.
+A `200` says something answered on that port and accepted that `Host`, which is the chain working end to end for that name; it is not proof that this image's CLI is what answered, so pair it with the title in the body (`<title><artifact name> · Lavish</title>`) rather than the status alone. A `403` is the Host allowlist rather than reachability, and its body names the URL that would have worked. A connection refused has several causes and loopback binding is only one: a wrong interface picked on a multi-network container, the server having idle-timed-out, no session ever opened, or the mapping absent. Check `LAVISH_AXI_HOST` in the session's environment and `/proc/net/tcp` in the container before blaming the port mapping.
 
-**Measured on a container built from this branch, 2026-09-03**, which is what the guard tests deliberately do not cover: `PID 1` carried `LAVISH_AXI_HOST=172.17.0.65` matching `eth0`; a session created through `POST /sessions` ran `lavish-axi` and returned `status: opened` with `http://tower.note-mountain.ts.net:4387/session/...`; `/proc/net/tcp` showed the listener on `410011AC:1123`, which is `172.17.0.65:4387` and neither loopback nor wildcard; fetching that URL from the host returned `200` and `<title>probe2 \u00b7 Lavish</title>`; the LAN and tailnet addresses each returned `200`; and a `Host: evil.example.com` returned `403`.
+**Measured on a container built from this code, 2026-09-03**, which is exactly what the guard tests deliberately do not cover:
+
+- `PID 1` carried `LAVISH_AXI_HOST=172.17.0.65`, matching the container's `eth0`.
+- A session created through `POST /sessions` saw the same value, which is the `new-session -e` forwarding working rather than inheritance happening to hold.
+- A hostile `~/bin/hostname` printing `10.6.6.6` was planted and the container restarted; the bind address stayed `172.17.0.65`, so the absolute-path call really does keep a writable `~/bin` out of it.
+- That session ran `lavish-axi` and got `status: opened` with `http://tower.note-mountain.ts.net:4387/session/...`.
+- `/proc/net/tcp` showed the listener on `410011AC:1123`, which is `172.17.0.65:4387`: neither loopback nor wildcard.
+- Fetching the printed URL from the host returned `200` and `<title>probe3 · Lavish</title>`; the LAN and tailnet addresses each returned `200`; a `Host: evil.example.com` returned `403`.
+- `dig @100.100.100.100 tower.note-mountain.ts.net` answers `100.103.123.19`, so a phone on the tailnet resolves the printed name. Tower itself cannot, because it runs `--accept-dns=false`. That is a Tower setting and says nothing about the phone, so do NOT read a failed `curl` from Tower as the link host being wrong.
 
 ## Common gotchas
 
