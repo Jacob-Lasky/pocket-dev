@@ -11,9 +11,19 @@ name: Auto-Document PR
 # forgeable-author / force-push / --output=file escape hatches a git-capable
 # agent would have are structurally absent.
 #
-# The push uses the job's GITHUB_TOKEN, and GITHUB_TOKEN pushes do not
-# trigger workflows: no self-retrigger loop, and no CI re-run on the
-# markdown-only docs commit.
+# The push uses the job's GITHUB_TOKEN. That prevents a self-retrigger LOOP,
+# and it does not prevent a run being CREATED. Measured on PR #48, 2026-09-03:
+# the docs commit produced `test` and `docker-publish` runs at its own sha,
+# both sitting in `action_required` with `triggering_actor: github-actions[bot]`
+# and neither executing until approved.
+#
+# The consequence is worth knowing before you merge: the last CI that actually
+# RAN is against the sha BEFORE the docs commit, so a PR that looks green is
+# green for the code and unverified for the head commit. Since this job only
+# ever writes markdown that is a fine risk to take, but approve the runs (or
+# re-run them) rather than reading the stale green as covering the head:
+#
+#   gh api -X POST repos/<owner>/<repo>/actions/runs/<id>/approve
 #
 # Runs once per PR lifecycle event (opened / ready_for_review / reopened),
 # not on every push. To refresh docs after later pushes, use "Re-run jobs":
