@@ -102,6 +102,44 @@ const AUTO_NAME = REMOTE_CONTROL
   && !process.env.SHELL_CMD
   && process.env.PD_AUTO_NAME !== '0';
 
+// Close a tab whose conversation the user archived from ANOTHER device: the
+// desktop app, the phone, or claude.ai/code. Archiving there closes the Remote
+// Control bridge 4090 and Claude Code records it in the transcript, but the
+// process carries on, so without this the tab sits in the strip forever holding
+// a conversation its owner has already declared finished. Measured on the live
+// container 2026-09-03: 6 of 11 open tabs were in exactly that state.
+//
+// It rides the metadata poll, like maybeAutoName, and is bounded the same way:
+// nothing polling means nothing closed. That is the right trade here too. The
+// user archives from somewhere else, so nobody is watching pocket-dev at that
+// moment, and the effect they want is that the tab is gone the next time they
+// look, which is a moment the browser is by definition open and polling.
+//
+// It depends on RESUME_ENABLED because of the DATA, not as a preference:
+// observe() answers NO_META without it, so there is no transcript to read and
+// nothing to detect. PD_ARCHIVE_CLOSE=0 turns just this off.
+//
+// WHAT A CLOSE ACTUALLY COSTS, because it is easy to overstate and was: the
+// tmux session and its scrollback, and the sid file that points this tab at its
+// conversation. It does NOT cost the conversation. Nothing here writes to
+// ~/.claude/projects, archiving is a state on the CLOUD side of the bridge
+// (every "archived" branch in the binary reads worker_status or
+// environment_kind, never the local transcript), and the transcript is what
+// `claude --resume` lists. So a wrongly closed tab is recovered with a new tab
+// and the resume picker.
+//
+// KNOWN AND ACCEPTED: this fires on something the user was still using about
+// once in six. Of 23 real archive events measured across the container's
+// transcripts, 19 were the last thing that ever happened in the conversation,
+// but 4 were followed by more work (at +1.3 min, +21 min, +129 min and +16 h),
+// two of them by roughly 1450 further turns. Jake chose the outright close on
+// 2026-09-03 knowing those numbers, and the resume path above is why that is a
+// cheap bet rather than a lossy one. DO NOT soften it into a grace period on
+// the strength of the same numbers: a delay cannot save the +129 min and +16 h
+// cases, so it would buy far less than it appears to while making the feature
+// stop doing the thing it was asked for.
+const ARCHIVE_CLOSE = RESUME_ENABLED && process.env.PD_ARCHIVE_CLOSE !== '0';
+
 // How long the session has to have been quiet, input-wise, before we type into
 // it. The rename fires just after the first turn, when the user is reading
 // rather than typing, so in practice this never waits; it exists for the case
@@ -286,9 +324,41 @@ function createApp({ sessionsApi } = {}) {
   return app;
 }
 
+// Kill a tmux session by name. The pty is only a CLIENT of it, so killing the
+// pty leaves the tmux session (and whatever is running in it) alive.
+//
+// INJECTABLE BECAUSE THE DEFAULT IS DESTRUCTIVE TO THINGS THE TESTS DO NOT OWN.
+// The server test suite creates sessions named from SESSION_BASE, which
+// defaults to 'main' when TMUX_SESSION is unset OR EMPTY, and pocket-dev's own
+// container sets it empty. So `api.destroy('main-1')` in a test used to run a
+// real `tmux kill-session -t main-1` against whatever tmux server the test
+// process could see, which inside pocket-dev is Jake's live one. It aborted
+// nothing and warned about nothing, because killing a session that happens not
+// to exist looks exactly like the same call killing one that does.
+//
+// It is also the only place that can tell us a kill FAILED, which matters: the
+// caller has already dropped the session from the roster and forgotten its
+// conversation by then, so a failure leaves the tmux session orphaned with
+// Claude still running in it and nothing pointing at it.
+function killTmuxSession(id, cb) {
+  execFile('tmux', ['kill-session', '-t', id], cb);
+}
+
+// Close code for "this session does not exist any more". The browser's
+// ws.onclose branches on it: 4404 means stop reconnecting and re-read the
+// roster, anything else means a transient hiccup worth retrying in two seconds.
+//
+// Every deliberate removal sends it, not just a WS that arrives for an unknown
+// id. Closing a session's clients with no code told them the opposite of the
+// truth, so a tab killed from another device (or closed by ARCHIVE_CLOSE, or
+// whose tmux session was killed by hand) left a dead pane on screen until the
+// retry earned itself a 4404 the long way round.
+const GONE_CODE = 4404;
+
 function createSessionsApi({
   store       = nullSessionStore,
   spawnPty    = spawnTmuxPty,
+  killSession = killTmuxSession,
   projectsDir = PROJECTS_DIR,
   logger      = console,
 } = {}) {
@@ -329,7 +399,12 @@ function createSessionsApi({
     // Where this session's conversation already stood before we adopted it.
     // Cheap: metaFor is memoised, and for a session with no recorded uuid (any
     // brand new tab) it answers without touching the disk.
-    const { status: initialStatus, turnId: initialTurnId, title: initialTitle } = observe(id);
+    const {
+      status: initialStatus,
+      turnId: initialTurnId,
+      title: initialTitle,
+      archivedId: initialArchivedId,
+    } = observe(id);
 
     const sidFile = store.sidPath(id);
     // The launcher decides whether a transcript exists and the server decides
@@ -400,6 +475,18 @@ function createSessionsApi({
       // from under a name the user chose on their phone. A brand new tab has no
       // title, so this is false and the first one to appear triggers the rename.
       autoNamed: !AUTO_NAME || initialTitle !== null,
+      // The newest Remote Control archive notice this session's conversation
+      // already carried when we adopted it. SEEDING IS THE MECHANISM, exactly
+      // as it is for status and turnId above: the notice stays in the tail
+      // window while a conversation carries on, and 4 of 23 measured archives
+      // were followed by more work, so a restart that compared against nothing
+      // would close the very tabs whose owner came back to them. Only a notice
+      // that appears AFTER this point is news.
+      archivedId: initialArchivedId,
+      // A notice seen while the session was mid-turn, waiting for it to settle.
+      // Memory-only ON PURPOSE: it must not survive a restart, or a tab that
+      // was archived and then worked in would close itself after every reboot.
+      archivePending: null,
     };
 
     ptyProc.onData(data => {
@@ -423,7 +510,7 @@ function createSessionsApi({
       store.clearSid(id);
       persist();
       for (const ws of state.clients) {
-        try { ws.close(); } catch {}
+        try { ws.close(GONE_CODE, 'session gone'); } catch {}
       }
     });
 
@@ -505,10 +592,15 @@ function createSessionsApi({
     store.clearSid(id);
     persist();
     for (const ws of state.clients) {
-      try { ws.close(); } catch {}
+      try { ws.close(GONE_CODE, 'session destroyed'); } catch {}
     }
     // Kill the tmux session (the pty is just the client; tmux server persists otherwise).
-    execFile('tmux', ['kill-session', '-t', id], () => {
+    killSession(id, (err) => {
+      // Reported, not swallowed. Everything above has already run, so pocket-dev
+      // has forgotten this session either way; if the kill failed, tmux is still
+      // running Claude in it and nothing left points at it. The log line is the
+      // only place that can say so.
+      if (err) logger.warn(`[${id}] tmux kill-session failed, session may be orphaned: ${err.message}`);
       try { state.pty.kill(); } catch {}
       if (cb) cb(true);
     });
@@ -552,7 +644,7 @@ function createSessionsApi({
   // Frozen because metaFor hands the SAME object to every caller that has
   // nothing to read; a caller that decided to annotate its copy would be
   // editing every other session's answer.
-  const NO_META = Object.freeze({ status: 'unknown', turnId: null, title: null, lastPrompt: null });
+  const NO_META = Object.freeze({ status: 'unknown', turnId: null, title: null, lastPrompt: null, archivedId: null });
 
   function metaFor(uuid) {
     if (!uuid) return NO_META;
@@ -647,6 +739,54 @@ function createSessionsApi({
     state.pty.write(`/rename ${meta.title}\r`);
   }
 
+  // Close a tab whose conversation was archived from another device.
+  //
+  // Returns whether it closed, because the caller must then stop touching the
+  // session: advancing an unread axis or renaming a bridge session that is on
+  // its way out is work on a corpse, and destroy() has already removed it from
+  // the map, so the row must not be reported either.
+  //
+  // Every condition is load-bearing:
+  //
+  //   ARCHIVE_CLOSE   the knob, and the data dependency behind it.
+  //   a NEW notice     different from the one this session was adopted with.
+  //                    See the seed in create(): without the comparison every
+  //                    restart re-closes tabs whose owner archived them and
+  //                    then came back, which is 4 of the 23 archives that have
+  //                    actually happened.
+  //   TURN_SETTLED     the turn is over. Killing tmux mid-turn destroys work in
+  //                    flight with nothing recording that it ever ran. Asked
+  //                    POSITIVELY, not as `!== 'busy'`: see TURN_SETTLED in
+  //                    claudeSession.js for why 'unknown' must not pass, which
+  //                    is the case where a tool_result bigger than the tail
+  //                    window is the only thing in it.
+  //
+  // THE NOTICE IS LATCHED THE MOMENT IT IS SEEN, before the settled check, and
+  // that is not tidiness. findArchivedNotice only sees the last TAIL_BYTES of
+  // the transcript, so a notice that arrives mid-turn can be pushed out of the
+  // window by the rest of that turn's output and never be seen again. Deferring
+  // on the status alone therefore loses the event outright, and silently: the
+  // tab just never closes. `archivePending` is memory-only, so it holds until
+  // the turn settles and is correctly forgotten on a restart, where the seed
+  // takes over.
+  //
+  // `archivedId` is advanced BEFORE the destroy, not after, so a kill that
+  // fails cannot leave this retrying on every poll for the life of the process.
+  function maybeArchiveClose(state, meta) {
+    if (!ARCHIVE_CLOSE) return false;
+    if (meta.archivedId && meta.archivedId !== state.archivedId) {
+      state.archivePending = meta.archivedId;
+    }
+    if (!state.archivePending) return false;
+    if (!claudeSession.TURN_SETTLED.has(meta.status)) return false;
+
+    state.archivedId     = state.archivePending;
+    state.archivePending = null;
+    logger.log(`[${state.id}] archived from another device, closing the tab`);
+    destroy(state.id);
+    return true;
+  }
+
   // What a session's conversation says right now. The one place that decides
   // whether we are allowed to look at all: with a custom SHELL_CMD there is no
   // conversation, and create/describe/markViewed must not each re-decide that.
@@ -676,11 +816,17 @@ function createSessionsApi({
   // nothing — nobody can be waiting on an answer that no browser has asked for
   // — and costs a wakeup per session forever.
   function describe() {
-    return [...sessions.values()].map(s => {
+    const rows = [];
+    // Snapshot first: maybeArchiveClose mutates `sessions`.
+    for (const s of [...sessions.values()]) {
       const meta = observe(s.id);
+      // Closing comes first and short-circuits the rest. A closed session is
+      // gone from the map, so reporting a row for it would tell the browser to
+      // keep a pane whose next reconnect gets a 4404.
+      if (maybeArchiveClose(s, meta)) continue;
       noteTurn(s, meta);
       maybeAutoName(s, meta);
-      return {
+      rows.push({
         id: s.id,
         cols: s.cols,
         rows: s.rows,
@@ -689,14 +835,15 @@ function createSessionsApi({
         status: meta.status,
         unread: s.attentionSeq > s.viewedSeq,
         lastOutputAt: s.lastOutputAt,
-      };
-    });
+      });
+    }
+    return rows;
   }
 
   function attachWs(ws, sessionId) {
     const state = sessions.get(sessionId);
     if (!state) {
-      try { ws.close(4404, 'session not found'); } catch {}
+      try { ws.close(GONE_CODE, 'session not found'); } catch {}
       return;
     }
     state.clients.add(ws);
@@ -732,6 +879,7 @@ function createSessionsApi({
 }
 
 module.exports = {
+  GONE_CODE,
   buildTmuxSpawnArgs,
   buildSessionCommand,
   createApp,

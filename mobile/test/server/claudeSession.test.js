@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { findTranscript, classifyTranscript, inspectTranscript } from '../../claudeSession.js';
+import { archivedNotice as archived, deletedNotice as deleted, supersededNotice as superseded, loggedOutNotice as loggedOut, NOTICE_TEXT } from '../fixtures/rc-notices.js';
 
 // Record shapes below are copied from real Claude Code transcripts (structure
 // only). They are the contract this classifier reads; if Claude changes them,
@@ -226,6 +227,7 @@ describe('inspectTranscript', () => {
       turnId: null,
       title: 'Restructure skills',
       lastPrompt: 'do the thing',
+      archivedId: null,
     });
   });
 
@@ -243,7 +245,7 @@ describe('inspectTranscript', () => {
   it('returns nulls rather than guessing when a conversation has no title yet', () => {
     // A session created seconds ago is the normal case here, not an error.
     expect(inspectTranscript(writeTranscript(UUID, [userPrompt]))).toEqual({
-      status: 'busy', turnId: null, title: null, lastPrompt: null,
+      status: 'busy', turnId: null, title: null, lastPrompt: null, archivedId: null,
     });
   });
 
@@ -282,3 +284,81 @@ describe('inspectTranscript', () => {
   });
 });
 
+// The Remote Control notices, copied verbatim from the live container's
+// transcripts on 2026-09-03 (Claude Code 2.1.259). All four shapes below were
+// present in the same sample of 30 informational records, which is why the
+// matcher cannot key on "(code 4090)" and cannot key on the phrase alone.
+const NOTICE_A = 'aaaa1111-1111-4111-8111-111111111111';
+const NOTICE_B = 'bbbb2222-2222-4222-8222-222222222222';
+
+describe('inspectTranscript archive notice', () => {
+  it('reports the notice uuid when a conversation was archived elsewhere', () => {
+    const file = writeTranscript(UUID, [userPrompt, assistantEndTurn, archived(NOTICE_A)]);
+    expect(inspectTranscript(file).archivedId).toBe(NOTICE_A);
+  });
+
+  it('takes the NEWEST notice, so a second archive is a new event', () => {
+    // A conversation can be archived, carried on with, and archived again. The
+    // caller compares this uuid against the one it holds, so returning the
+    // older notice would make the second archive invisible.
+    const file = writeTranscript(UUID, [archived(NOTICE_A), userPrompt, assistantEndTurn, archived(NOTICE_B)]);
+    expect(inspectTranscript(file).archivedId).toBe(NOTICE_B);
+  });
+
+  it('still reports it once the conversation has carried on past it', () => {
+    // Measured: 4 of 23 real archives were followed by more work. The notice
+    // does not stop being in the tail, which is exactly why the SERVER has to
+    // compare uuids rather than treat any sighting as news.
+    const file = writeTranscript(UUID, [archived(NOTICE_A), userPrompt, assistantEndTurn]);
+    expect(inspectTranscript(file).archivedId).toBe(NOTICE_A);
+  });
+
+  it('does NOT fire on a user or tool record that quotes the message', () => {
+    // This is the measured false positive, not a hypothetical one. The request
+    // that built this feature pasted the notice into a prompt, and a shell
+    // probe printed it into a tool result, so both shapes really are on disk in
+    // Jake's transcripts. A tail scan for the phrase closes a live tab on them.
+    //
+    // The uuids here are load-bearing: every real record carries one, and
+    // without them these fixtures get rejected for the wrong reason (no uuid to
+    // return) and the test passes even with the record-shape check deleted.
+    // Verified by deleting it: the case only goes red with the uuids present.
+    const quoted = { type: 'user', uuid: NOTICE_A, isSidechain: false, message: { role: 'user', content: [{ type: 'text', text:
+      `whenever i archive a conversation in claude code desktop, we get this message: ${NOTICE_TEXT}` }] } };
+    const toolOutput = { type: 'user', uuid: NOTICE_B, isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', content:
+      `grep hit: ${NOTICE_TEXT}` }] } };
+    // And a system record from a DIFFERENT subtype carrying the same text, which
+    // is what a /resume or slash-command echo of the message looks like.
+    const otherSubtype = { ...archived(NOTICE_A), subtype: 'local_command' };
+    for (const record of [quoted, toolOutput, otherSubtype]) {
+      expect(inspectTranscript(writeTranscript(UUID, [record, assistantEndTurn])).archivedId).toBeNull();
+    }
+  });
+
+  it('ignores the other 4090 reasons and the /login notice', () => {
+    // Only the archive reason means a human is finished with the conversation.
+    // superseded_by_worker means it is alive somewhere else, session_not_found
+    // reads the same as the server losing the registration, and /login is an
+    // auth problem. All three shipped in the same record shape.
+    for (const record of [deleted(NOTICE_A), superseded(NOTICE_A), loggedOut(NOTICE_A)]) {
+      expect(inspectTranscript(writeTranscript(UUID, [assistantEndTurn, record])).archivedId).toBeNull();
+    }
+  });
+
+  it('fails closed on a notice with no uuid', () => {
+    // Nothing to compare against means we cannot tell a new archive from the
+    // one already recorded, and the action is a kill. Answering null leaves the
+    // tab alone; it must NOT fall through to an older notice, which is the very
+    // one the caller already holds.
+    const noUuid = { ...archived(NOTICE_A) };
+    delete noUuid.uuid;
+    const file = writeTranscript(UUID, [archived(NOTICE_B), userPrompt, noUuid]);
+    expect(inspectTranscript(file).archivedId).toBeNull();
+  });
+
+  it('does not disturb the status it is read alongside', () => {
+    const file = writeTranscript(UUID, [userPrompt, assistantEndTurn, archived(NOTICE_A)]);
+    expect(inspectTranscript(file).status).toBe('idle');
+    expect(classifyTranscript(file)).toBe('idle');
+  });
+});

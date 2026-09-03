@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSessionsApi, buildSessionCommand, buildTmuxSpawnArgs } from '../../server.js';
 import { createSessionStore } from '../../sessionStore.js';
+import { archivedNotice as archived } from '../fixtures/rc-notices.js';
 
 // Restore is the whole point of the roster, and it cannot be reached from the
 // browser suite: the e2e fixture runs `cat`, which has no conversation to
@@ -13,13 +14,39 @@ import { createSessionStore } from '../../sessionStore.js';
 
 const UUID = '6d7657b2-2e36-4a45-a083-4c300969650d';
 
-// Re-evaluate server.js with env stubs in place. CMD, RESUME_ENABLED and
-// REMOTE_CONTROL are all read once at module level, so resetModules is the only
-// way to see a different configuration. Shared by the SHELL_CMD and the
-// Remote Control cases, which both need it.
+// Every knob server.js reads at module level. A test asking for one of these
+// must see ONLY the one it asked for.
+//
+// SCRUB, DO NOT JUST OVERLAY. vi.stubEnv changes are not undone between tests
+// by default (there is no unstubEnvs in vitest.config.js), so overlaying let
+// every earlier loadWith leak into every later one: the PD_AUTO_NAME=0 case ran
+// with SHELL_CMD=cat and PD_RESUME=0 still stubbed from two cases above it,
+// which switch AUTO_NAME off by themselves. It passed while proving nothing.
+// That is the fail-open shape the repo already guards against elsewhere, and it
+// gets worse with every knob added, so the list is scrubbed rather than
+// trusted. Same reasoning as test/server/pdEnv.js, one layer up.
+const MODULE_ENV = [
+  'SHELL_CMD', 'TMUX_SESSION',
+  'PD_RESUME', 'PD_RESUME_NUDGE', 'PD_CRASH_NUDGE', 'PD_REMOTE_CONTROL',
+  'PD_AUTO_NAME', 'PD_ARCHIVE_CLOSE', 'PD_STATE_DIR', 'PD_CLAUDE_PROJECTS_DIR',
+];
+
+// Assigned and restored by hand rather than through vi.stubEnv, because on
+// vitest 1.6 `vi.stubEnv(key, undefined)` does not delete the variable, it
+// assigns the STRING "undefined" - which is truthy, so `SHELL_CMD || DEFAULT`
+// resolves to a command literally named undefined. Deleting is the only way to
+// express "this knob is not set". (Vitest 2 changed this; we are on 1.6.1.)
+let envSnapshot;
+
+// Re-evaluate server.js with a known configuration. CMD, RESUME_ENABLED,
+// REMOTE_CONTROL and ARCHIVE_CLOSE are all read once at module level, so
+// resetModules is the only way to see a different one.
 async function loadWith(env) {
   vi.resetModules();
-  for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+  for (const key of MODULE_ENV) {
+    if (key in env) process.env[key] = env[key];
+    else delete process.env[key];
+  }
   return import('../../server.js');
 }
 
@@ -41,11 +68,25 @@ function fakePty() {
   return proc;
 }
 
-let dir, projectsDir, spawned, logger;
+let dir, projectsDir, spawned, logger, kills;
+
+// EVERY api built in this file must get this. The real killSession runs
+// `tmux kill-session -t main-N` against whatever tmux server the test process
+// can see, and inside pocket-dev (TMUX_SESSION set but EMPTY, so SESSION_BASE
+// falls back to 'main') those are the developer's own live session names. The
+// call is silent either way, so a suite that destroys sessions was quietly
+// firing real kills at Jake's tabs and nothing said so.
+//
+// Recording it also turns the kill into something assertable, which it was not
+// before: every test could pass with the tmux kill deleted outright.
+function fakeKill() {
+  return (id, cb) => { kills.push(id); cb(null); };
+}
 
 function makeApi() {
   const store = createSessionStore({ dir, logger });
   const api = createSessionsApi({
+    killSession: fakeKill(),
     store,
     projectsDir,
     logger,
@@ -81,15 +122,25 @@ const midTurn  = (uuid) => ({ type: 'assistant', uuid, message: { role: 'assista
 const question = (uuid) => ({ type: 'assistant', uuid, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion' }] } });
 
 beforeEach(() => {
+  envSnapshot = Object.fromEntries(MODULE_ENV.map(key => [key, process.env[key]]));
   dir         = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-state-'));
   projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-projects-'));
   spawned     = [];
+  kills       = [];
   logger      = { log: vi.fn(), warn: vi.fn() };
 });
 
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(projectsDir, { recursive: true, force: true });
+  // Neither of these is undone on its own, and both reach the tests that
+  // follow: a leftover knob changes what the next loadWith compiles, and a fake
+  // clock changes what the auto-name quiet window compares against.
+  for (const [key, value] of Object.entries(envSnapshot)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  vi.useRealTimers();
 });
 
 describe('roster persistence', () => {
@@ -169,6 +220,7 @@ describe('restore', () => {
     const store = createSessionStore({ dir, logger });
     let call = 0;
     const api = createSessionsApi({
+      killSession: fakeKill(),
       store, projectsDir, logger,
       spawnPty: () => {
         if (call++ === 0) throw new Error('tmux exploded');
@@ -457,6 +509,7 @@ describe('unread counts turns, not output', () => {
       clearSid: (sid) => { calls.push(`clearSid:${sid}`); return real.clearSid(sid); },
     };
     const api = createSessionsApi({
+      killSession: fakeKill(),
       store, projectsDir, logger,
       spawnPty: (opts) => { const proc = fakePty(); spawned.push({ ...opts, proc }); return proc; },
     });
@@ -799,6 +852,7 @@ describe('naming a new tab for Remote Control', () => {
     const mod = await loadWith({ PD_AUTO_NAME: '0' });
     const store = createSessionStore({ dir, logger });
     const api = mod.createSessionsApi({
+      killSession: fakeKill(),
       store,
       projectsDir,
       spawnPty: () => { const proc = fakePty(); spawned.push({ proc }); return proc; },
@@ -813,5 +867,248 @@ describe('naming a new tab for Remote Control', () => {
     api.describe();
     expect(renames(lastSpawn())).toEqual([]);
     expect(mod.buildSessionCommand()).toContain('--rc');
+  });
+});
+
+describe('closing a tab archived from another device', () => {
+  const NOTICE_A = 'aaaa1111-1111-4111-8111-111111111111';
+  const NOTICE_B = 'bbbb2222-2222-4222-8222-222222222222';
+  // Padding, so a rewritten transcript changes size as well as content and the
+  // mtime cache actually misses. Same trick as the title test above.
+  const pad = (n) => ({ type: 'ai-title', aiTitle: 'x'.repeat(n) });
+  // A tool_result bigger than claudeSession's 512 KB tail window. readTailLines
+  // drops the partial first line, so the window ends up holding the notice and
+  // no complete message record at all, which classifies as 'unknown' while the
+  // session is mid-tool-call. This is the shape that makes `!== 'busy'` unsafe.
+  const hugeToolResult = { type: 'user', uuid: 'cccc3333-3333-4333-8333-333333333333',
+    message: { role: 'user', content: [{ type: 'tool_result', content: 'y'.repeat(600 * 1024) }] } };
+
+  // A session adopted BEFORE its transcript says anything, which is the shape
+  // of a tab that is running when the archive happens.
+  function adoptThenWrite(records) {
+    const { api, store } = makeApi();
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, records);
+    return { api, store, id: state.id };
+  }
+
+  // A session adopted from a transcript that ALREADY carries the notice, which
+  // is the shape of every restore after an archive.
+  function writeThenAdopt(records) {
+    const { api, store } = makeApi();
+    const id = 'main-1';
+    fs.mkdirSync(path.dirname(store.sidPath(id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(id), UUID);
+    writeTranscript(UUID, records);
+    api.create(id);
+    return { api, store, id };
+  }
+
+  it('closes the tab on the first poll after the archive', () => {
+    const { api, id } = adoptThenWrite([...IDLE, archived(NOTICE_A)]);
+    expect(api.describe()).toEqual([]);
+    expect(api.get(id)).toBeUndefined();
+  });
+
+  it('drops it from the roster too, so a restart does not bring it back', () => {
+    const { api, store } = adoptThenWrite([...IDLE, archived(NOTICE_A)]);
+    api.describe();
+    expect(store.load()).toEqual([]);
+  });
+
+  it('says which session and why, because docker logs is the artifact', () => {
+    // Nothing about this is visible in a pane: the tab is gone. The log line is
+    // the only account of what happened, same as the restore lines.
+    const { api, id } = adoptThenWrite([...IDLE, archived(NOTICE_A)]);
+    api.describe();
+    const said = logger.log.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(said).toContain(id);
+    expect(said).toContain('archived from another device');
+  });
+
+  it('leaves a restored session alone when the notice was already there', () => {
+    // THE case this has to get right. The notice stays in the tail while a
+    // conversation carries on, and 4 of 23 real archives were followed by more
+    // work, so a restart that treats any sighting as news closes exactly the
+    // tabs whose owner came back to them - and does it again every restart.
+    const { api, id } = writeThenAdopt([...IDLE, archived(NOTICE_A)]);
+    expect(api.describe()).toHaveLength(1);
+    expect(api.get(id)).toBeDefined();
+  });
+
+  it('still closes on a SECOND archive of a session it restored', () => {
+    // The seed is a comparison, not a mute button: archiving a conversation
+    // that was already archived once is a fresh instruction.
+    const { api } = writeThenAdopt([...IDLE, archived(NOTICE_A)]);
+    expect(api.describe()).toHaveLength(1);
+    writeTranscript(UUID, [...IDLE, archived(NOTICE_A), pad(64), archived(NOTICE_B)]);
+    expect(api.describe()).toEqual([]);
+  });
+
+  it('waits while the session is mid-turn, then closes when the turn ends', () => {
+    // Killing tmux mid-turn destroys work in flight with nothing recording that
+    // it ever ran. The notice does not expire, so waiting costs one poll.
+    const { api } = adoptThenWrite([...BUSY, archived(NOTICE_A)]);
+    expect(api.describe()).toHaveLength(1);
+    expect(api.describe()[0].status).toBe('busy');
+
+    writeTranscript(UUID, [...BUSY, archived(NOTICE_A), pad(64), ...IDLE]);
+    expect(api.describe()).toEqual([]);
+  });
+
+  it('ignores a session with no conversation to read', () => {
+    // No sid file, so no transcript and no notice. Must not throw and must not
+    // decide anything about a tab it cannot see.
+    const { api } = makeApi();
+    api.create();
+    expect(api.describe()).toHaveLength(1);
+  });
+
+  it('tells the browser the session is GONE, not that the link hiccuped', async () => {
+    // The client retries a codeless close for two seconds before it learns the
+    // truth the long way round, which leaves a dead pane on screen. 4404 is the
+    // code it already reads as "stop reconnecting and re-read the roster".
+    const { api, id } = adoptThenWrite([...IDLE, archived(NOTICE_A)]);
+    const closes = [];
+    api.get(id).clients.add({ readyState: 1, close: (...args) => closes.push(args) });
+    api.describe();
+    expect(closes).toEqual([[4404, 'session destroyed']]);
+  });
+
+  it('does NOT close a session it cannot classify, however archived it looks', () => {
+    // The `!== busy` trap. One tool_result larger than the tail window leaves
+    // the notice as the only complete record in it, so the status reads
+    // 'unknown' while Claude is in the middle of the biggest tool call of the
+    // conversation. Treating unknown as safe kills it there.
+    const { api } = adoptThenWrite([...IDLE, hugeToolResult, archived(NOTICE_A)]);
+    expect(api.describe()[0].status).toBe('unknown');
+    expect(api.describe()).toHaveLength(1);
+    expect(kills).toEqual([]);
+  });
+
+  it('closes a session that is asking, because the archiver answered elsewhere', () => {
+    // 'asking' is settled: Claude is blocked on a human, and the human just
+    // said what they wanted by archiving the conversation.
+    const { api } = adoptThenWrite([question('dddd4444-4444-4444-8444-444444444444'), archived(NOTICE_A)]);
+    expect(api.describe()).toEqual([]);
+  });
+
+  it('remembers a mid-turn archive after the notice scrolls out of the tail', () => {
+    // The event is seen ONCE and then can vanish: the tail window is the last
+    // 512 KB, so a long turn following the notice pushes it out for good.
+    // Without a latch the tab simply never closes, and nothing reports why.
+    const { api } = adoptThenWrite([...BUSY, archived(NOTICE_A)]);
+    expect(api.describe()).toHaveLength(1);           // deferred, notice latched
+
+    // The turn finishes, and its output has buried the notice well past the window.
+    writeTranscript(UUID, [archived(NOTICE_A), pad(700 * 1024), ...IDLE]);
+    expect(api.describe()).toEqual([]);
+  });
+
+  it('kills the tmux session, not just the pty', () => {
+    // The pty is only a CLIENT of the tmux session. Dropping the roster entry
+    // without killing tmux leaves Claude running in a session nothing points at.
+    const { api, id } = adoptThenWrite([...IDLE, archived(NOTICE_A)]);
+    api.describe();
+    expect(kills).toEqual([id]);
+  });
+
+  it('says so when the kill fails, because the session is then orphaned', async () => {
+    const store = createSessionStore({ dir, logger });
+    const api = createSessionsApi({
+      store,
+      projectsDir,
+      logger,
+      killSession: (id, cb) => cb(new Error('cannot find session')),
+      spawnPty: () => { const proc = fakePty(); spawned.push({ proc }); return proc; },
+    });
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, [...IDLE, archived(NOTICE_A)]);
+
+    api.describe();
+    await new Promise(resolve => setImmediate(resolve));
+    const warned = logger.warn.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(warned).toContain('may be orphaned');
+    expect(warned).toContain(state.id);
+  });
+
+  it('closes only the archived session out of several, and keeps the rest in order', () => {
+    // describe() mutates the map it is walking, so the failure modes here are
+    // dropping the wrong row, skipping the row after the closed one, or
+    // returning nothing at all. One session cannot distinguish any of them.
+    const { api, store } = makeApi();
+    for (const id of ['main-1', 'main-2', 'main-3']) {
+      fs.mkdirSync(path.dirname(store.sidPath(id)), { recursive: true });
+      api.create(id);
+    }
+    // Only the MIDDLE one gets a conversation, and that conversation is archived.
+    fs.writeFileSync(store.sidPath('main-2'), UUID);
+    writeTranscript(UUID, [...IDLE, archived(NOTICE_A)]);
+
+    expect(api.describe().map(s => s.id)).toEqual(['main-1', 'main-3']);
+    expect(kills).toEqual(['main-2']);
+    expect(store.load().map(s => s.id)).toEqual(['main-1', 'main-3']);
+    expect(api.get('main-1')).toBeDefined();
+    expect(api.get('main-3')).toBeDefined();
+  });
+
+  it('hands every api in this file a fake kill, including ones added later', () => {
+    // The CLASS guard, not the instance. Injecting the fake at today's six
+    // construction sites fixes today's sites; a seventh added next month
+    // silently goes back to firing real `tmux kill-session` at whatever tmux
+    // server the test process can see. Source-level, same approach as
+    // tmuxConf.test.js, because there is no seam to observe this through.
+    const self = fs.readFileSync(new URL(import.meta.url), 'utf8');
+    const sites = self.split(/(?:mod\.)?createSessionsApi\(\{/).slice(1);
+    expect(sites.length).toBeGreaterThanOrEqual(6);   // fail on the instrument first
+    for (const [i, site] of sites.entries()) {
+      const options = site.slice(0, site.indexOf('});'));
+      expect(options, `createSessionsApi site ${i + 1} has no killSession`).toContain('killSession');
+    }
+  });
+
+  it('honours PD_ARCHIVE_CLOSE=0 while leaving resume itself on', async () => {
+    const mod = await loadWith({ PD_ARCHIVE_CLOSE: '0' });
+    const store = createSessionStore({ dir, logger });
+    const api = mod.createSessionsApi({
+      killSession: fakeKill(),
+      store,
+      projectsDir,
+      spawnPty: () => { const proc = fakePty(); spawned.push({ proc }); return proc; },
+      logger,
+    });
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, [...IDLE, archived(NOTICE_A)]);
+
+    expect(api.describe()).toHaveLength(1);
+    // Not off because resume is off: the tab still knows its conversation.
+    expect(mod.buildSessionCommand()).toContain('pd-claude-session');
+  });
+
+  it('is off when there is no conversation tracking to read it from', async () => {
+    // A custom SHELL_CMD is not necessarily Claude, so observe() answers
+    // NO_META and there is no notice to find. The knob is not what turns it off
+    // here, the missing data is.
+    const mod = await loadWith({ SHELL_CMD: 'cat' });
+    const store = createSessionStore({ dir, logger });
+    const api = mod.createSessionsApi({
+      killSession: fakeKill(),
+      store,
+      projectsDir,
+      spawnPty: () => { const proc = fakePty(); spawned.push({ proc }); return proc; },
+      logger,
+    });
+    const state = api.create();
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, [...IDLE, archived(NOTICE_A)]);
+
+    expect(api.describe()).toHaveLength(1);
   });
 });
