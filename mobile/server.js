@@ -136,13 +136,38 @@ const CRASH_PROMPT = process.env.PD_CRASH_NUDGE ?? (
   + 'and if it is, take a different approach rather than repeating it.'
 );
 
-function buildTmuxSpawnArgs(session, sessionCmd, { env = {} } = {}) {
+// Variables a session needs that may not be in the tmux SERVER's environment.
+//
+// LAVISH_AXI_HOST is resolved at boot by entrypoint.sh, so it is in this
+// process's environment and in a tmux server this process started. It is NOT in
+// one that was already running, and by the comment in buildTmuxSpawnArgs that is
+// the environment `new-session` actually inherits: a `docker exec tmux` before
+// the first web session is enough to produce a tmux server without it, after
+// which every session binds Lavish to loopback and its published port refuses
+// connections. Forwarding by PREFIX rather than by a list of names so that a
+// second runtime-resolved Lavish variable cannot reintroduce this by being
+// forgotten.
+const SESSION_ENV_PREFIX = 'LAVISH_';
+
+function sessionEnvForwards(source = process.env) {
+  const out = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key.startsWith(SESSION_ENV_PREFIX) && value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function buildTmuxSpawnArgs(session, sessionCmd, { env = {}, envSource = process.env } = {}) {
   // `-e KEY=value` sets the tmux SESSION environment. It has to go this way
   // round rather than through the pty's own env: tmux's server outlives any one
   // client and only forwards the variables named in `update-environment`, so a
   // custom var set on the client is dropped before the command ever runs.
+  //
+  // The caller's explicit `env` wins over a forwarded one: the PD_* values are
+  // computed per session, while the forwards are process-wide.
+  const merged = { ...sessionEnvForwards(envSource), ...env };
   const envArgs = [];
-  for (const [key, value] of Object.entries(env)) envArgs.push('-e', `${key}=${value}`);
+  for (const [key, value] of Object.entries(merged)) envArgs.push('-e', `${key}=${value}`);
   return [
     '-u',
     '-f', TMUX_CONF_PATH,

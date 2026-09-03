@@ -45,6 +45,13 @@ General:
 - [ ] Kill a tab, restart the container: it stays killed, and its conversation is not resumed into a new tab.
 - [ ] `docker stop` + `docker rm` + `docker run` (a recreate) with the `Session State` volume mounted: tabs still come back. Without the mount they do not — expected, and the reason the volume exists.
 
+## Lavish Editor reachability (nothing in CI starts the real CLI, binds its socket, or crosses the published port — see "Lavish Editor" in CLAUDE.md)
+- [ ] In a session (NOT `docker exec` — that gets the image's env, not PID 1's, and binds loopback), run `lavish-axi` on a small HTML file. It prints JSON with `status: opened` and a URL whose host is `LAVISH_AXI_LINK_HOST`, not a `172.x` bridge address.
+- [ ] Open that URL on the phone: the artifact renders, elements can be annotated, and a Mermaid diagram opens as a whiteboard.
+- [ ] `lavish-axi poll <file>` in the session returns the feedback that was sent from the phone.
+- [ ] Typing a host name that is NOT the link host gives Lavish's `403` page naming the URL that does work — that's the DNS-rebinding guard, not a broken mapping. Add the name to `LAVISH_AXI_ALLOWED_HOSTS` if you want it to work.
+- [ ] Check the bind address is the container's own: `LAVISH_AXI_HOST` in the session's environment matches `eth0`, and it is neither `127.0.0.1` nor a wildcard. On a container attached to several networks, `entrypoint.sh` warns on stderr which one it picked — read `docker logs` before assuming the port mapping is wrong.
+
 ## Focus events
 - [ ] Switch browser tab away from pocket-dev for 30 seconds, then back.
 - [ ] Claude Code's UI redraws cleanly (no stuck cursor, no stale spinner).

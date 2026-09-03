@@ -14,11 +14,23 @@
 // taken and three prompt tests failed locally while CI stayed green, because
 // GitHub Actions has none of these set.
 //
-// Scrub the whole PD_ prefix rather than naming the variables each script
-// happens to read today: a new knob must not be able to reintroduce this, and a
-// test should only ever see the PD_* values it asked for.
+// Scrub whole PREFIXES rather than naming the variables each script happens to
+// read today: a new knob must not be able to reintroduce this, and a test should
+// only ever see the values it asked for. Overrides are applied afterwards, so a
+// test that wants one of these sets it explicitly.
+//
+// LAVISH_ is here for the same reason and was added after the same bug: a real
+// tab exports LAVISH_AXI_HOST (entrypoint.sh resolves it at boot), so inheriting
+// it makes entrypoint.sh's resolution block skip entirely and every stubbed
+// `hostname` case in lavish.test.js compare the live container address against
+// what the test set up. Green in CI, red only inside pocket-dev, which is where
+// these tests get run at least as often.
+const SCRUBBED_PREFIXES = ['PD_', 'LAVISH_'];
+
 export function spawnEnv(overrides = {}) {
   const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith('PD_')) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (SCRUBBED_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
+  }
   return Object.assign(env, overrides);
 }

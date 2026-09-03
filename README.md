@@ -6,7 +6,7 @@ A browser-accessible terminal for [Claude Code](https://github.com/anthropics/cl
 
 - `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
 - `mobile/public/` — the client (xterm.js for the live terminal; the wrapped View renderer walks xterm's parsed buffer directly in `js/view.js`; a small toolbar; an iOS-friendly PWA manifest).
-- `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, and the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container.
+- `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container, and [Lavish Editor](https://github.com/kunchenguid/lavish-axi) so a session can hand a generated HTML artifact to a human to annotate.
 
 For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
 
@@ -18,6 +18,8 @@ For repo orientation — particularly the two-layers-of-alt-screen gotcha around
 4. Apply.
 
 The container exposes port 7681. Click the WebUI button or hit `http://<server>:7681/` from any device on your network. The mobile UI is the same as desktop; iOS users can "Add to Home Screen" for a PWA experience.
+
+Port 4387 is Lavish Editor's review server (see "Point at the thing" below). Set `LAVISH_AXI_LINK_HOST` to the hostname you reach this host by, or the review URLs it prints carry the container's internal bridge address and open nowhere.
 
 ## Run locally (development)
 
@@ -71,6 +73,21 @@ codex login --device-auth   # prints a URL and a code; open them on any other de
 ```
 
 The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
+
+## Point at the thing
+
+The image ships [Lavish Editor](https://github.com/kunchenguid/lavish-axi) at `/usr/local/bin/lavish-axi`. A session that has generated an HTML artifact (a plan, a comparison, a diagram, a report) opens it for review; you get a URL, open it on your phone, and annotate the actual elements instead of describing them.
+
+```sh
+lavish-axi /coding/dump/plan/plan.html       # prints JSON containing the review URL
+lavish-axi poll /coding/dump/plan/plan.html  # long-poll until you send feedback
+```
+
+**Two settings decide whether the URL is openable, and both fail quietly.** `LAVISH_AXI_LINK_HOST` is the hostname written into the URL: leave it blank and you get the address Lavish bound, which on the default bridge is a `172.x` address resolving nowhere outside the container, so the feature looks broken while working perfectly. `LAVISH_AXI_ALLOWED_HOSTS` adds the other names you might type for the same host (LAN IP, short hostname, Tailscale IP) to Lavish's DNS-rebinding allowlist, which otherwise answers `403` with a page naming the URL that would have worked.
+
+The bind address is handled for you: `entrypoint.sh` resolves the container's own address at boot, because Lavish refuses a wildcard bind (`0.0.0.0` is coerced back to loopback) and a loopback listener is unreachable through a published port. That holds on a bridge network, which is what the template declares; `--network host` ignores `-p` entirely and macvlan needs no mapping, so set `LAVISH_AXI_HOST` yourself there. `CLAUDE.md` has the measurement.
+
+**Port 4387 serves the artifact with no authentication**, and the Host allowlist is DNS-rebinding protection rather than a login: a direct client just sends an accepted `Host`. That is acceptable next to 7681, which is an unauthenticated terminal in a container holding the docker socket, so for anyone who can reach both it grants nothing new. It is still a second reachable server with its own file-read and feedback surface, and a firewall may treat the two ports differently, so publish 4387 exactly where 7681 already is and nowhere else. Sessions and queued feedback live in `~/.lavish-axi`, inside the home mount, so they survive a recreate.
 
 ## Sessions survive a restart
 

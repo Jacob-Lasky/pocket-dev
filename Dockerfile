@@ -124,6 +124,29 @@ RUN npm install -g --no-fund --no-audit @openai/codex \
     && npm cache clean --force \
     && codex --version
 
+# Lavish Editor, the review loop for HTML artifacts a session generates. The
+# agent runs `lavish-axi <file.html>` and gets back a URL; the human opens that
+# URL on a phone or desktop, annotates elements and edits Mermaid diagrams in
+# place, and the agent collects the feedback with `lavish-axi poll <file.html>`.
+# It replaces "here is a screenshot, tell me what to change" with pointing at
+# the thing.
+#
+# Same /usr/local reasoning as codex above, and the same two traps: /home/claude
+# ships EMPTY and is a bind mount, so an image-owned binary written under it is
+# masked; ~/bin is EARLIER on PATH than /usr/local/bin, so a copy left there
+# shadows the image's own forever. Also deliberately UNPINNED, matching codex,
+# `claude` and `gh`, with the version echoed into the build log so a build still
+# says what it shipped.
+#
+# The package also carries its own Agent Skill at
+# /usr/local/lib/node_modules/lavish-axi/skills/lavish/SKILL.md. Claude Code does
+# NOT read that path, so the skill is installed separately into ~/.claude/skills
+# (which is a bind-mounted git checkout the image must not write to). The CLI
+# working and the agent knowing to reach for it are two separate facts.
+RUN npm install -g --no-fund --no-audit lavish-axi \
+    && npm cache clean --force \
+    && lavish-axi --version
+
 # Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
 # to the newest model in its family at launch, by design (Jake wants these to
 # track latest automatically). DO NOT pin them back to claude-opus-X-Y / a dated
@@ -207,6 +230,23 @@ RUN sed -i 's/\r//' /usr/local/bin/dgvpn /usr/local/bin/dgvpn-up && \
 ENV DGVPN_PROXY_PORT=1055
 ENV DGVPN_DIR=/home/claude/.dgvpn
 
+# Lavish Editor's port, the single definition of it. The CLI, the detached server
+# it spawns, and the published port in pocket-dev.xml / docker-compose.yml all
+# have to agree, so it is set once here and read from the environment everywhere.
+#
+# LAVISH_AXI_NO_OPEN=1 because there is no browser in this container. Lavish
+# already catches the failed launch and downgrades its status from "opened" to
+# "ready", so this is not load-bearing, but without it every open shells out to
+# xdg-open, waits for it to fail, and reports a status that is a lie about what
+# happened. The reviewer's browser is on the phone, reached via the URL the CLI
+# prints (see LAVISH_AXI_LINK_HOST in pocket-dev.xml).
+#
+# LAVISH_AXI_HOST is deliberately NOT set here: it has to be the container's own
+# runtime IP, which the image cannot know. entrypoint.sh resolves it at boot, and
+# the WHY for why loopback and 0.0.0.0 are both wrong lives there.
+ENV LAVISH_AXI_PORT=4387
+ENV LAVISH_AXI_NO_OPEN=1
+
 # Switch to claude user before installing
 USER claude
 
@@ -274,8 +314,11 @@ ENV HOME="/home/claude"
 # Set working directory
 WORKDIR /workspace
 
-# Expose web terminal port
+# Expose web terminal port, plus Lavish Editor's review server. EXPOSE is
+# documentation only (it publishes nothing); the actual mappings live in
+# pocket-dev.xml and docker-compose.yml, and lavish.test.js asserts all three agree.
 EXPOSE 7681
+EXPOSE 4387
 
 # Set entrypoint to fix permissions on startup
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
