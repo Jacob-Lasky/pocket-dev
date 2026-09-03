@@ -134,49 +134,82 @@ chmod 775 /workspace 2>/dev/null || true
 # wildcard therefore looks like configuring reachability while silently keeping
 # the loopback-only behaviour it was meant to fix.
 #
-# WHY the container IP works. Docker's published-port DNAT rewrites the
-# destination to the container's own address, so a listener on eth0 receives
-# traffic arriving at the host port. Verified live on Tower 2026-09-03: a
-# container bound only to its eth0 IP with `-p` answered from the host's
-# loopback, its LAN address, and its Tailscale address.
+# WHY the container IP works, AND THE ASSUMPTION IT RESTS ON. On a bridge
+# network, Docker's published-port DNAT rewrites the destination to the
+# container's own address, so a listener on eth0 receives traffic arriving at the
+# host port. Verified live on Tower 2026-09-03: a container bound only to its
+# eth0 IP with `-p` answered from the host's loopback, its LAN address, and its
+# Tailscale address. That is the network pocket-dev.xml declares and the only one
+# this reasoning covers. Under `--network host` there is no DNAT and `-p` is
+# ignored, so binding one host interface is an arbitrary choice rather than the
+# right one; under macvlan or a routed network the container address is reachable
+# directly and no mapping is involved. Neither is a supported deployment here.
 #
 # This is deliberately NOT a Dockerfile ENV: the address is assigned per
-# container start and changes on every recreate, so the image cannot know it.
-# An explicit LAVISH_AXI_HOST from the template always wins.
+# container start and is not guaranteed to be stable across recreates (Docker
+# often reuses one, but nothing promises it), so the image cannot know it.
 #
-# The export reaches PID 1 and everything descended from it, which is server.js,
-# the tmux server it spawns, and therefore every session. It does NOT reach
-# `docker exec`, which builds its environment from the image's Config.Env. A
-# probe from outside the container has to import PID 1's environment
-# (/proc/1/environ) or it will bind loopback and report a URL nothing can open.
-# See the Lavish Editor section of CLAUDE.md for that recipe.
+# The export reaches PID 1 and everything descended from it. That is NOT by
+# itself enough to reach a session: tmux's server outlives its clients and
+# `new-session` inherits the SERVER's environment, so a tmux server that was
+# already running without this variable would hand sessions an environment
+# without it. server.js closes that by forwarding every LAVISH_ variable through
+# `new-session -e`; see buildTmuxSpawnArgs. It also does not reach `docker exec`,
+# which builds its environment from the image's Config.Env, so a probe from
+# outside has to import PID 1's environment (/proc/1/environ) or it will bind
+# loopback and report a URL nothing can open. See CLAUDE.md.
 #
 # Reachability is only half of it. Lavish's DNS-rebinding guard 403s any request
 # whose Host header is not one it answers to, and it answers to loopback, this
 # bind address, and LAVISH_AXI_LINK_HOST. Set LAVISH_AXI_LINK_HOST to the
-# hostname you actually reach this container by, or the printed URL carries a
-# 172.x bridge address no phone can open. See pocket-dev.xml.
+# hostname you actually reach this container by, or the printed URL carries the
+# bind address, which on the default bridge is a 172.x address no phone can open.
+# See pocket-dev.xml.
+#
+# An explicit LAVISH_AXI_HOST wins and is NOT filtered: an operator pinning one
+# interface must be honoured, including the values this block would reject. The
+# filtering below applies only to the guess.
 if [ -z "${LAVISH_AXI_HOST:-}" ]; then
-  lavish_host=""
+  # Absolute path, NOT a bare `hostname`. $PATH starts with $HOME/bin, which is
+  # inside the persistent home mount and writable by the uid this runs as, so a
+  # bare call lets any leftover `~/bin/hostname` decide the bind address, return
+  # nothing and force loopback, or hang the boot. PD_HOSTNAME_BIN is the test
+  # seam and nothing sets it in production.
+  lavish_hostname="${PD_HOSTNAME_BIN:-/usr/bin/hostname}"
   lavish_addrs=()
-  # `read -ra` and NOT `for addr in $(hostname -i)`. An unquoted command
-  # substitution in a for-list gets pathname expansion as well as word
-  # splitting, so a `*` in the output would be globbed against the working
-  # directory and a FILENAME could be selected as the bind address. `read -ra`
-  # splits on IFS and never globs. `|| true` because read returns nonzero at EOF
-  # with no delimiter, and `set -e` would take an empty result as a boot failure.
-  read -ra lavish_addrs < <(hostname -i 2>/dev/null) || true
+  # `read -ra` and NOT `for addr in $(...)`. An unquoted command substitution in
+  # a for-list gets pathname expansion as well as word splitting, so a `*` in the
+  # output would be globbed against the working directory and a FILENAME could be
+  # selected as the bind address. `read -ra` splits on IFS and never globs.
+  # `|| true` because read returns nonzero at EOF with no delimiter, and `set -e`
+  # would take an empty result as a boot failure.
+  read -ra lavish_addrs < <("$lavish_hostname" -i 2>/dev/null) || true
+
+  # Shape check, deliberately four dotted numbers rather than full validation:
+  # `999.999.999.999` still passes and Lavish then refuses to resolve it and says
+  # so, which is loud. What this DOES buy is that a hostname, an error string, a
+  # literal `*` or an IPv6 form can never become a bind address.
+  lavish_candidates=()
   for addr in "${lavish_addrs[@]}"; do
-    case "$addr" in
-      127.*|0.0.0.0|*:*) continue ;;
-      *.*.*.*) lavish_host="$addr"; break ;;
-    esac
+    case "$addr" in 127.*|0.0.0.0) continue ;; esac
+    [[ $addr =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || continue
+    lavish_candidates+=("$addr")
   done
-  if [ -n "$lavish_host" ]; then
-    export LAVISH_AXI_HOST="$lavish_host"
-  else
+
+  if [ "${#lavish_candidates[@]}" -eq 0 ]; then
     echo "pocket-dev: no non-loopback IPv4 found; Lavish Editor will bind" >&2
     echo "pocket-dev: 127.0.0.1 only and will not be reachable from a phone." >&2
+  else
+    export LAVISH_AXI_HOST="${lavish_candidates[0]}"
+    # More than one means the container is on several networks and nothing here
+    # can tell which one the published port forwards to, so the first is a guess.
+    # Say which was picked rather than letting a wrong pick present as a port
+    # that refuses connections; LAVISH_AXI_HOST in the template overrides it.
+    if [ "${#lavish_candidates[@]}" -gt 1 ]; then
+      echo "pocket-dev: several container IPv4 addresses (${lavish_candidates[*]});" >&2
+      echo "pocket-dev: Lavish Editor bound $LAVISH_AXI_HOST. If its port refuses" >&2
+      echo "pocket-dev: connections, set LAVISH_AXI_HOST to the right one." >&2
+    fi
   fi
 fi
 

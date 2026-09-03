@@ -56,8 +56,10 @@ services:
       # Lavish Editor's review server. `lavish-axi <file.html>` inside the
       # container prints a URL for a human to open; without this mapping that
       # URL only resolves from inside. entrypoint.sh binds it to the container's
-      # own IP because Lavish refuses a wildcard bind, and Docker's published
-      # port DNATs to exactly that address. Unauthenticated, like 7681.
+      # own IP because Lavish refuses a wildcard bind, and on a BRIDGE network
+      # Docker's published port DNATs to exactly that address. Under
+      # `--network host` there is no DNAT and this mapping is ignored, so set
+      # LAVISH_AXI_HOST yourself there. Unauthenticated, like 7681.
       - "4387:4387"
 
     # Add to docker group to access socket
