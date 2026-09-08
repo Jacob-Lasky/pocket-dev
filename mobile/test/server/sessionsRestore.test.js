@@ -148,7 +148,7 @@ describe('roster persistence', () => {
     const { api, store } = makeApi();
     const a = api.create();
     const b = api.create();
-    expect(store.load()).toEqual([{ id: a.id }, { id: b.id }]);
+    expect(store.load()).toEqual([{ id: a.id, provider: 'claude' }, { id: b.id, provider: 'claude' }]);
   });
 
   it('drops a session from the roster when it is killed', async () => {
@@ -230,7 +230,7 @@ describe('restore', () => {
     expect(api.restore()).toEqual(['main-2']);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('main-1'));
     // The roster is rewritten so the dead entry does not haunt the next boot.
-    expect(store.load()).toEqual([{ id: 'main-2' }]);
+    expect(store.load()).toEqual([{ id: 'main-2', provider: 'claude' }]);
   });
 
   it('reattaches rather than duplicating: the tmux args say new-session -A', () => {
