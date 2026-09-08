@@ -798,6 +798,20 @@ describe('the provider a session runs', () => {
     expect(spawn.command).not.toContain('pd-claude-session');
   });
 
+  it('hands the launcher env only to a session that runs the launcher', () => {
+    // PD_CLAUDE_PROJECTS_DIR, PD_SID_FILE and PD_RESUME_PROMPT are all
+    // pd-claude-session's contract. Setting them on a session that ignores them
+    // is harmless and misleading: `tmux show-environment` on such a tab would
+    // show it pointed at Claude's transcript directory and at a sid file
+    // nothing will ever write.
+    const { api } = makeApi();
+    api.create('main-1', { provider: 'codex' });
+    api.create('main-2', { provider: 'claude' });
+    expect(spawned[0].env).toEqual({});
+    expect(spawned[1].env.PD_CLAUDE_PROJECTS_DIR).toBe(projectsDir);
+    expect(spawned[1].env.PD_SID_FILE).toContain('main-2.uuid');
+  });
+
   it('lets SHELL_CMD outrank the provider, for every provider', async () => {
     // The escape hatch stays process-wide: two per-session command sources is
     // how you get a tab whose command line nobody can predict. Four e2e

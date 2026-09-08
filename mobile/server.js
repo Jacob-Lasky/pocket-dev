@@ -493,14 +493,23 @@ function createSessionsApi({
       archivedId: initialArchivedId,
     } = observe(id, caps);
 
-    const sidFile = store.sidPath(id);
+    // ALL THREE OF THESE ARE THE LAUNCHER'S CONTRACT, so they are only set for a
+    // session that runs it. Handing them to a harness that ignores them is
+    // harmless but misleading: `tmux show-environment` on a Codex tab would
+    // show it pointed at Claude's transcript directory and at a sid file
+    // nothing will ever write.
+    //
     // The launcher decides whether a transcript exists and the server decides
     // what state it was in, so they MUST agree on where transcripts live. Pass
     // the resolved directory rather than letting the shell script re-derive it
     // from $HOME, which would silently diverge under PD_CLAUDE_PROJECTS_DIR.
-    const env = { PD_CLAUDE_PROJECTS_DIR: projectsDir };
-    if (sidFile) env.PD_SID_FILE = sidFile;
-    if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
+    const env = {};
+    if (caps.resumeConversation) {
+      env.PD_CLAUDE_PROJECTS_DIR = projectsDir;
+      const sidFile = store.sidPath(id);
+      if (sidFile) env.PD_SID_FILE = sidFile;
+      if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
+    }
 
     const ptyProc = spawnPty({
       session: id,
