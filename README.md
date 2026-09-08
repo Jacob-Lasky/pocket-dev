@@ -80,6 +80,8 @@ codex login --device-auth   # prints a URL and a code; open them on any other de
 
 The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
 
+**Codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore losing your tabs; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
+
 ## Point at the thing
 
 The image ships [Lavish Editor](https://github.com/kunchenguid/lavish-axi) at `/usr/local/bin/lavish-axi`. A session that has generated an HTML artifact (a plan, a comparison, a diagram, a report) opens it for review; you get a URL, open it on your phone, and annotate the actual elements instead of describing them.

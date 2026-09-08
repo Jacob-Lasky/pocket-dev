@@ -9,9 +9,13 @@ Two GitHub Actions workflows run on every push:
 | Workflow | Trigger | Job |
 |---|---|---|
 | `test.yml` | push to `main`, every PR | vitest (unit + server) + Playwright e2e on Chromium + Firefox |
-| `docker-publish.yml` | push to `main`, tags `v*`, manual dispatch | builds `linux/amd64` + `linux/arm64`, pushes `ghcr.io/jacob-lasky/pocket-dev:latest` (plus PR / branch / version tags) |
+| `docker-publish.yml` | push to `main`, tags `v*`, manual dispatch, weekly `cron: '0 6 * * 1'` | builds `linux/amd64` + `linux/arm64`, pushes `ghcr.io/jacob-lasky/pocket-dev:latest` (plus PR / branch / version tags) |
 
 `test.yml` blocks merge on failure. `docker-publish.yml` only runs against `main` and tags — PRs build but don't push.
+
+**The weekly run exists to move the UNPINNED tools** (`claude` via install.sh, `codex` via `npm -g`, `gh` via apt stable), which otherwise only advance when someone merges something. It passes `no-cache` for the `schedule` event only: a layer's cache key comes from the Dockerfile instruction, not from what npm would resolve today, so a cached scheduled build would ship the same versions as last week. Push and PR builds keep the cache, which matters because this image compiles node-pty natively.
+
+It publishes `latest` and **does not deploy**. Taking a new image on Tower means recreating the container, which ends every tmux session, so the pickup is deliberately manual — or, for codex specifically, the `pocket-dev-codex-update` Tower user script, which reinstalls it as root inside the running container without touching the sessions. `CLAUDE.md` under "Codex, the second model in the container" has the reasoning.
 
 ## Shipping a change
 
