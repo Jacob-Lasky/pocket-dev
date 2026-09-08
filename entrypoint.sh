@@ -115,6 +115,72 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
+  # CODEX REMOTE CONTROL, so a Codex tab is drivable from the phone the way a
+  # Claude tab is. The two mechanisms are NOT alike, and that asymmetry is the
+  # whole reason this lives here instead of on a command line:
+  #
+  #   claude  a PER-SESSION flag. server.js puts --rc on each tab's command
+  #           line, so every tab is independently visible.
+  #   codex   a PER-CONTAINER DAEMON. `codex remote-control start` runs one
+  #           app-server that the TUI attaches to ("the shared local
+  #           app-server daemon", per `codex agents --help`). There is no
+  #           per-session flag to add, so it belongs here, once, at boot.
+  #
+  # THE STANDALONE INSTALL CANNOT BE BAKED INTO THE IMAGE, which is the
+  # non-obvious half. `codex remote-control start` refuses an npm -g install:
+  #   "managed standalone Codex install not found at
+  #    $HOME/.codex/packages/standalone/current/codex ... the daemon starts and
+  #    updates app-server from that fixed path"
+  # That path is inside /home/claude, which is a BIND MOUNT at runtime, so a
+  # build-time install there is MASKED the instant the container starts.
+  # Runtime is the only place it can go. Once there it persists across
+  # recreates and self-updates from that fixed path, which is also why this
+  # subsumes the npm copy for version freshness.
+  #
+  # CODEX_INSTALL_DIR is $HOME/bin and NOT the installer's default
+  # $HOME/.local/bin: per the comment above, .local is a symlink into the image
+  # skeleton, so a launcher there lives in the container layer and dies on the
+  # next recreate, while $HOME/bin is in the mount. Both resolve to the same
+  # payload; only one survives. Measured 2026-09-08: after a recreate the
+  # $HOME/bin launcher was still there and still pointed at a live payload.
+  #
+  # EVERY STEP HERE IS NON-FATAL. The image's /usr/local/bin/codex keeps
+  # working with no daemon, so a network blip at boot or an unauthenticated
+  # account must degrade to "no remote control" and never to "no terminal".
+  # That is the same rule sessionStore states for the state dir.
+  # PD_CODEX_RC=0 skips this whole block. It exists because the block is the
+  # only thing in this script that reaches the NETWORK, and several suites
+  # execute entrypoint.sh for real against a temp HOME. Without the skip they
+  # download and install Codex on every run. test/server/pdEnv.js defaults it
+  # to 0 for exactly that reason.
+  #
+  # EVERY MESSAGE BELOW GOES TO STDERR, like the other ten in this script.
+  # entrypoint.sh execs its arguments, so STDOUT belongs to the process it
+  # hands off to and lavish.test.js reads it as its assertion surface: an echo
+  # on stdout here made four unrelated bind-address tests compare a log line
+  # against an IP address.
+  CODEX_STANDALONE="$HOME/.codex/packages/standalone/current/bin/codex"
+  if [ "${PD_CODEX_RC:-1}" != "0" ] && [ ! -x "$CODEX_STANDALONE" ]; then
+    if CODEX_INSTALL_DIR="$HOME/bin" curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | sh >/dev/null 2>&1; then
+      echo "pocket-dev: installed the standalone codex (remote control needs it)" >&2
+    else
+      echo "pocket-dev: standalone codex install failed; remote control unavailable," >&2
+      echo "pocket-dev: /usr/local/bin/codex still works for everything else." >&2
+    fi
+  fi
+  if [ "${PD_CODEX_RC:-1}" != "0" ] && [ -x "$CODEX_STANDALONE" ]; then
+    # Enrollment reaches chatgpt.com and can legitimately refuse: it wants a
+    # logged-in account with MFA satisfied (measured 403 "Multi-factor
+    # authentication required" before MFA was enabled). A refusal must be a log
+    # line, not a boot failure.
+    if "$HOME/bin/codex" remote-control start >/dev/null 2>&1; then
+      echo "pocket-dev: codex remote-control daemon started" >&2
+    else
+      echo "pocket-dev: codex remote-control did not start (needs a codex login" >&2
+      echo "pocket-dev: with MFA satisfied); Codex tabs still run, just not from a phone." >&2
+    fi
+  fi
+
   # NO config.toml SEED FOR CODEX, ON PURPOSE. An earlier version of this block
   # wrote `model = "gpt-5.6-sol"` and `model_reasoning_effort = "high"` here to
   # match cachyos-desktop. Both reasons it was removed matter:

@@ -32,5 +32,11 @@ export function spawnEnv(overrides = {}) {
   for (const key of Object.keys(env)) {
     if (SCRUBBED_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
   }
-  return Object.assign(env, overrides);
+  // PD_CODEX_RC=0 by DEFAULT, because entrypoint.sh's codex remote-control
+  // block is the one part of these scripts that reaches the network: it curls
+  // and installs the standalone Codex when it is absent, which is always true
+  // of a temp HOME. Left on, every suite that spawns entrypoint.sh downloads
+  // Codex, and its log line lands where lavish.test.js reads stdout. Set it
+  // explicitly in a test that means to exercise the block.
+  return Object.assign(env, { PD_CODEX_RC: '0' }, overrides);
 }

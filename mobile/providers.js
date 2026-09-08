@@ -105,33 +105,46 @@ const PROVIDERS = new Map([
     // itself. This feature is what makes interactive codex a first-class case
     // here, so that premise no longer holds and is worth saying out loud.
     //
-    // -m IS PINNED, and the comment this replaces argued the opposite. That
-    // argument was that codex has no moving `latest` alias, so inheriting the
-    // account default TRACKS latest while a pin freezes. The premise is true
-    // and the conclusion was still wrong, because the default is not the thing
-    // the owner asked for. Measured 2026-09-08: the account default is
-    // `gpt-6-astra`, the standing preference is the newest Sol, and
-    // `gpt-6-sol` DOES NOT EXIST -- it returns the same 400 as a deliberately
-    // bogus model id, while `gpt-6-astra` returns "requires a newer version of
-    // Codex". So the newest Sol is 5.6, inheriting gives you a different model
-    // family, and there is no alias that means "newest Sol".
+    // codex-dg, NOT bare codex: these tabs bill Deepgram's API account by
+    // decision, 2026-09-08. `codex-dg` is the documented single entry point for
+    // that path (it injects DEEPGRAM_OPENAI_API_KEY from
+    // ~/.codex/deepgram-openai.env and layers ~/.codex/deepgram.config.toml,
+    // which sets model_provider). Bare `codex` uses the ChatGPT OAuth seat
+    // instead, which is a different account and a different bill.
     //
-    // DO NOT drop this flag back to "track the default" without re-reading
-    // ~/.claude/skills/second-opinion/SKILL.md <model_choice>, which carries
-    // the must-fail-control recipe for checking whether a newer Sol has
-    // shipped. The banner ECHOES any -m string without validating it, so
-    // `-m sol` and `-m gpt-sol` both print a plausible banner and neither is a
-    // model; a banner is not proof.
+    // IT ALSO DECIDES WHICH MODELS EXIST, and that is not obvious. Model
+    // availability is per-ACCOUNT, measured with a bogus id as the control:
     //
-    // It stays visible where a downgrade would be noticed: the interactive
-    // banner names the model, in the one place a tab's user is already looking.
+    //   on the ChatGPT seat   sol 400 "not supported"   astra 400   terra OK (default)
+    //   on the Deepgram API   sol OK                    astra OK    terra OK
+    //   bogus id, both paths  400 / "does not exist"  (so the control is live)
+    //
+    // So `-m gpt-5.6-sol` is only correct BECAUSE this line runs through
+    // codex-dg. An earlier version pinned Sol on bare `codex` and 400d every
+    // tab within the hour, on a seat that has no Sol. The pin and the wrapper
+    // are ONE decision: change either and re-run the probe in
+    // ~/.claude/skills/second-opinion/SKILL.md <model_choice> before believing
+    // the result. A candidate returning the same error as a bogus id does not
+    // exist on that account.
+    //
+    // codex-dg REFUSES -c/--config/-p/--profile (exit 2) because those outrank
+    // the profile and would silently move billing back. It passes everything
+    // else through, so the bypass flag and -m arrive intact.
+    //
+    // THE DEPENDENCY IS OUTSIDE THE IMAGE, state it rather than discover it:
+    // ~/bin/codex-dg and the key file live in the home BIND MOUNT, provisioned
+    // by ~/.claude/skills/second-opinion/codex-dg/install.sh, deliberately not
+    // in this repo and not in the image so the key never reaches GitHub. A
+    // Codex tab therefore fails closed on a host that has never been
+    // provisioned. That is the intended failure: a missing key must stop the
+    // tab, not silently run it on the wrong account.
     //
     // NO --skip-git-repo-check: measured against codex-cli 0.151.0, that flag
     // exists on `codex exec` ONLY and is not accepted by the interactive TUI, so
     // adding it here would stop the tab starting at all. The interactive trust
     // gate is answerable in the TUI, which is the right place for a tab a human
     // is sitting in.
-    command: 'codex --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
+    command: 'codex-dg --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
     remoteControlArgs: null,
     // EVERY CAPABILITY OFF, and that is a statement about the data, not a
     // preference. All six are reads of Claude's `<uuid>.jsonl`, which Codex does

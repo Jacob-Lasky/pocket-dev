@@ -697,7 +697,11 @@ describe('the provider a session runs', () => {
 
   it('gives each provider its own command line', () => {
     expect(buildSessionCommand('claude')).toContain('claude --dangerously-skip-permissions');
-    expect(buildSessionCommand('codex')).toContain('codex --dangerously-bypass-approvals-and-sandbox');
+    // codex-dg, not bare codex: the Codex tab bills the Deepgram API account,
+    // and the wrapper is what injects the key and the provider profile. It is
+    // also what makes the -m pin valid, since Sol exists on that account and
+    // not on the ChatGPT seat.
+    expect(buildSessionCommand('codex')).toContain('codex-dg --dangerously-bypass-approvals-and-sandbox');
   });
 
   it('defaults to Claude when nothing says otherwise', () => {
@@ -721,7 +725,7 @@ describe('the provider a session runs', () => {
 
   it('runs a provider that cannot resume in the plain restart loop', () => {
     const cmd = buildSessionCommand('codex');
-    expect(cmd).toContain('while true; do codex ');
+    expect(cmd).toContain('while true; do codex-dg ');
     expect(cmd).toContain('restarting...');
   });
 
