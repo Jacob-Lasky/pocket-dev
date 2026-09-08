@@ -47,11 +47,22 @@ describe('status vocabulary: server producer vs browser consumer', () => {
   });
 
   it('defers to the unread flag for a status it cannot classify', () => {
-    // 'unknown' is deliberately NOT in WANTS_USER — becoming unclassifiable is
-    // not news — but it has a SECOND news mechanism the others do not: the
-    // server counts raw pty output for it, because there is no conversation to
-    // read. So the browser must honour the unread flag here rather than take the
-    // status as the whole answer.
+    // 'unknown' is deliberately NOT in WANTS_USER, since becoming
+    // unclassifiable is not news, but it has a SECOND news mechanism the others
+    // do not: the server counts raw pty output for it. So the browser must
+    // honour the unread flag here rather than take the status as the whole
+    // answer.
+    //
+    // THAT SECOND MECHANISM IS NOW PER PROVIDER, so the reason this assertion
+    // holds is narrower than it used to be. Bytes count for a session on the
+    // 'bytes' axis (permanently, because no transcript will ever arrive) and
+    // for one on 'turns' while its status is still 'unknown' (the brand new
+    // Claude tab, a window that closes itself). They do NOT count on 'none',
+    // and such a session never reaches this branch at all: rowState returns
+    // 'opaque' before the status is read. So this case is about a session that
+    // HAS an axis and has not been classified yet, which is why keying the
+    // opaque branch off `status === 'unknown'` instead of off the provider
+    // would break it.
     expect(WANTS_USER.has('unknown')).toBe(false);
     expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: true },  'other')).toBe('waiting');
     expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: false }, 'other')).toBe('read');

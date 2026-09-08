@@ -870,6 +870,44 @@ describe('the six capabilities a provider does or does not have', () => {
     expect(api.describe()[0].unread).toBe(false);
   });
 
+  it('counts bytes for a brand new Claude tab, then STOPS once a transcript exists', () => {
+    // THE COMPOUND CONDITION, both halves, in the order they happen.
+    //
+    // First half: a brand new Claude tab is 'unknown' until its transcript
+    // appears, and noteTurn cannot cover that window because WANTS_USER is
+    // {idle, asking} and excludes 'unknown'. So the byte branch is the ONLY
+    // writer of attentionSeq for such a tab, and dropping it would delete the
+    // only unread mechanism a new Claude tab has.
+    //
+    // Second half, and this is what makes 'none' a different value rather than
+    // a stricter one: the window CLOSES ITSELF the moment a transcript exists.
+    // For a provider that never writes one, nothing ever closes it, which is
+    // how counting frames turns into a permanent false summons.
+    const { api, store } = makeApi();
+    const state = api.create('main-1');
+    const proc  = spawned[0].proc;
+
+    proc.emit('a frame');
+    expect(api.describe()[0].unread).toBe(true);
+    expect(api.describe()[0].status).toBe('unknown');
+
+    api.markViewed('main-1');
+    expect(api.describe()[0].unread).toBe(false);
+
+    // The transcript appears, so the session is classifiable from here on.
+    fs.mkdirSync(path.dirname(store.sidPath('main-1')), { recursive: true });
+    fs.writeFileSync(store.sidPath('main-1'), UUID);
+    writeTranscript(UUID, BUSY);
+    expect(api.describe()[0].status).toBe('busy');
+
+    // Bytes must no longer count: a mid-turn coder paints while it thinks, and
+    // this is the exact repaint that used to re-flag the session.
+    const before = state.attentionSeq;
+    for (let i = 0; i < 25; i++) proc.emit('a thinking frame');
+    expect(state.attentionSeq).toBe(before);
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
   it('still counts output for a session judged by its output alone', () => {
     // The control for the case above, and the reason the axis is an enum rather
     // than a boolean: a session with no transcript but real line output keeps

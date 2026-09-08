@@ -56,7 +56,15 @@ export function rowState(session, activeId) {
   // Strict on purpose, both halves:
   //
   //   === false   a row that predates the field, or a server that did not send
-  //               it, is undefined and must behave exactly as before.
+  //               it, is undefined and must behave exactly as before. Note
+  //               which way the strictness fails: every non-false falsy value
+  //               (undefined, null, '', 0) degrades to the four-state axis and
+  //               so, for a settled session, to "Read". That is FAIL-SAFE for
+  //               the badge, which stays quiet rather than summoning anyone,
+  //               and FAIL-WRONG for the label, which claims a tab was read
+  //               that nobody opened. The trade is deliberate in that
+  //               direction: a missing summons is recoverable by opening the
+  //               list, an invented one trains the user to ignore the badge.
   //   the FIELD   and never `claudeStatus === 'unknown'`, which is the
   //               natural-looking mistake. 'unknown' is also what a BRAND NEW
   //               Claude tab reads before its first turn is written, and that
@@ -128,21 +136,33 @@ export function pollDelay({ listOpen, sessions, activeId }) {
   return 8000;
 }
 
-// How the list summarises itself, in the same three tiers as the badge, for the
-// same reason: "all quiet" has to mean nothing needs you AND nothing is
-// running. Saying it over three grinding sessions would be a second version of
-// the defect this all exists to fix, just in words instead of a dot.
+// How the list summarises itself, in FOUR tiers now, for the reason the first
+// three existed: "all quiet" has to mean nothing needs you AND nothing is
+// running AND nothing is unreadable. Saying it over three grinding sessions
+// would be a second version of the defect this all exists to fix, just in words
+// instead of a dot.
+//
+// 'opaque' HAS ITS OWN TIER, and it needs one for exactly that reason. It is
+// neither needy nor working, so under the three-tier version it fell into the
+// "all quiet" branch by default and three grinding Codex tabs summarised as
+// "3 sessions · all quiet", which is the sentence this module's own header
+// forbids, produced by the module. The tier sits BELOW working, because
+// "something is running" is the more actionable fact, and ABOVE all quiet,
+// because a session nobody can see the state of is not evidence of quiet.
 export function summarise(sessions, activeId) {
   const total = sessions.length;
   let needy = 0;
   let working = 0;
+  let untracked = 0;
   for (const session of sessions) {
     const state = rowState(session, activeId);
     if (wantsUser(state)) needy++;
     else if (state === 'working') working++;
+    else if (state === 'opaque')  untracked++;
   }
   const count = `${total} session${total === 1 ? '' : 's'}`;
-  if (needy)   return `${count} · ${needy} need${needy === 1 ? 's' : ''} you`;
-  if (working) return `${count} · ${working} working`;
+  if (needy)     return `${count} · ${needy} need${needy === 1 ? 's' : ''} you`;
+  if (working)   return `${count} · ${working} working`;
+  if (untracked) return `${count} · ${untracked} not tracked`;
   return `${count} · all quiet`;
 }

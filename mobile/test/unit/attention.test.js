@@ -48,6 +48,17 @@ describe('rowState', () => {
   });
 });
 
+// A WARNING ABOUT WHAT THIS FILE CAN AND CANNOT PROVE, because it was nearly
+// the gap that shipped item 5 as a no-op. Every fixture here is an object
+// literal, so this suite tests rowState's LOGIC and says nothing whatever about
+// whether `statusTracked` reaches rowState in the running product. It does not:
+// rowState receives SessionState instances, and applySessionMeta copies named
+// fields one at a time, so a field added to the server's JSON and nowhere else
+// is dropped on the floor while every test here stays green. The delivery path
+// is covered in test/unit/sessionRow.test.js, which slices applySessionMeta out
+// of index.html and folds a real GET /sessions row through it. DO NOT take this
+// file's greenness as evidence about a new wire field.
+//
 // The fifth state, which is not a point on the attention axis but the absence
 // of one. It exists because a session whose harness writes no transcript does
 // not merely lack a status: without this it FALLS THROUGH to the unread axis
@@ -232,12 +243,30 @@ describe('summarise', () => {
     expect(summarise([session('a', 'idle'), session('b', 'idle')], 'a')).toBe('2 sessions · all quiet');
   });
 
-  it('counts a no-status session as a session, and as neither needy nor working', () => {
-    // It is a real tab and belongs in the total. What it must not do is inflate
-    // either of the two counts that would make someone open the list.
+  it('NEVER calls a list with an unreadable session quiet', () => {
+    // The defect this test previously CERTIFIED. 'opaque' is neither needy nor
+    // working, so with only three tiers it fell into the "all quiet" branch by
+    // default and three grinding Codex tabs summarised as "all quiet", which is
+    // the exact sentence this module's header forbids.
+    const opaqueSession = (id) => ({ id, claudeStatus: 'unknown', unread: true, statusTracked: false });
+    expect(summarise([opaqueSession('a'), opaqueSession('b'), opaqueSession('c')], 'z'))
+      .toBe('3 sessions · 3 not tracked');
+    expect(summarise([session('a', 'idle'), opaqueSession('b')], 'a')).toBe('2 sessions · 1 not tracked');
+  });
+
+  it('ranks the untracked tier below working and above quiet', () => {
+    // Below working because "something is running" is the more actionable fact;
+    // above quiet because a session nobody can see the state of is not evidence
+    // of quiet. And it never outranks a real summons.
     const opaqueSession = { id: 'b', claudeStatus: 'unknown', unread: true, statusTracked: false };
-    expect(summarise([session('a', 'idle'), opaqueSession], 'a')).toBe('2 sessions · all quiet');
+    expect(summarise([session('a', 'busy'), opaqueSession], 'z')).toBe('2 sessions · 1 working');
     expect(summarise([session('a', 'idle', true), opaqueSession], 'z')).toBe('2 sessions · 1 needs you');
+    expect(summarise([session('a', 'asking'), opaqueSession], 'z')).toBe('2 sessions · 1 needs you');
+  });
+
+  it('still says all quiet when every session is readable and settled', () => {
+    // The new tier must not steal the branch it sits above.
+    expect(summarise([session('a', 'idle'), session('b', 'idle')], 'z')).toBe('2 sessions · all quiet');
   });
 
   it('prefers the count that would make someone open the list', () => {

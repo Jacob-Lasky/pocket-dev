@@ -228,6 +228,35 @@ describe('the fold from the wire onto a row', () => {
   });
 });
 
+describe('the SessionState a row is rendered from', () => {
+  // Source-level, for the reason tmuxConf.test.js and dgvpn.test.js are: the
+  // constructor builds a real xterm Terminal, so standing one up here would
+  // mean stubbing the library this test is not about. What matters is only the
+  // initialiser, and it is readable.
+  const ctor = indexHtml.slice(
+    indexHtml.indexOf('class SessionState {'),
+    indexHtml.indexOf('this.connect();'),
+  );
+
+  it('initialises the provider fields alongside the ones they sit with', () => {
+    // Every other field the poll fills is initialised here, so a new one that
+    // is not looks like an oversight to the next reader even though undefined
+    // happens to be correct.
+    expect(ctor, 'no SessionState constructor found to read').toBeTruthy();
+    expect(ctor).toMatch(/this\.provider\s*=/);
+    expect(ctor).toMatch(/this\.providerLabel\s*=/);
+    expect(ctor).toMatch(/this\.statusTracked\s*=/);
+  });
+
+  it('does NOT seed statusTracked to false, which would open every pane opaque', () => {
+    // attention.js reads it with `=== false`, so false is a real answer and not
+    // an empty one. Seeded false, every pane including every Claude pane would
+    // render "Status not tracked" until its first poll landed.
+    expect(ctor).not.toMatch(/this\.statusTracked\s*=\s*false/);
+    expect(ctor).toMatch(/this\.statusTracked\s*=\s*undefined/);
+  });
+});
+
 describe('a Claude tab with no title yet', () => {
   it('keeps the existing fallback rather than gaining a provider prefix', () => {
     // Regression guard: the prefix is keyed off statusTracked, not off a

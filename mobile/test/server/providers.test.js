@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DEFAULT_PROVIDER, PROVIDERS, PROVIDER_IDS,
+  DEFAULT_PROVIDER, PROVIDERS, PROVIDER_IDS, SHELL_OVERRIDE_CAPABILITIES,
   isProvider, labelFor, commandFor, resolveCapabilities, statusTracked,
 } from '../../providers.js';
 import { SAFE_PROVIDER } from '../../safeId.js';
@@ -139,6 +139,36 @@ describe('capabilities: what pocket-dev is allowed to believe', () => {
     expect(resolveCapabilities('codex').unreadAxis).toBe('none');
     for (const id of PROVIDER_IDS) {
       expect(['turns', 'bytes', 'none']).toContain(resolveCapabilities(id).unreadAxis);
+    }
+  });
+
+  it('leaves no value of the axis enum without a real producer', () => {
+    // A capability value nothing produces is dead code from the day it ships,
+    // and the next reader has to reverse-engineer whether it was aspirational
+    // or forgotten. Each of the three is reachable from a configuration that
+    // actually occurs, so this enumerates them rather than trusting the shape.
+    const produced = new Set([
+      resolveCapabilities('claude').unreadAxis,                              // turns
+      resolveCapabilities('claude', { shellOverride: true }).unreadAxis,      // bytes, via SHELL_CMD
+      resolveCapabilities('claude', { resume: false }).unreadAxis,            // bytes, via PD_RESUME=0
+      resolveCapabilities('codex').unreadAxis,                               // none
+    ]);
+    expect([...produced].sort()).toEqual(['bytes', 'none', 'turns']);
+  });
+
+  it('names the override capability set, so bytes has a findable producer', () => {
+    // Named and exported rather than inlined in the collapse, and deliberately
+    // NOT a registry entry: a registry entry is a SELECTABLE provider, so its
+    // id would pass isProvider, POST /sessions would accept it, and the roster
+    // could persist a tab naming it that has nothing to run unless SHELL_CMD
+    // happens to be set. SHELL_CMD outranks the provider; it is not one of the
+    // things being chosen between.
+    expect(SHELL_OVERRIDE_CAPABILITIES.unreadAxis).toBe('bytes');
+    expect(isProvider('shell')).toBe(false);
+    expect(isProvider('custom')).toBe(false);
+    expect(PROVIDER_IDS).not.toContain('shell');
+    for (const id of PROVIDER_IDS) {
+      expect(resolveCapabilities(id, { shellOverride: true })).toBe(SHELL_OVERRIDE_CAPABILITIES);
     }
   });
 

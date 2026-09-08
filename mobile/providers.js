@@ -28,10 +28,25 @@
 // untouched case the degraded one.
 const DEFAULT_PROVIDER = 'claude';
 
-// A capability set with nothing granted. Named rather than inlined because it
-// is also the answer for a provider whose command line has been replaced out
-// from under it; see resolveCapabilities.
-const NO_CAPABILITIES = Object.freeze({
+// THE CAPABILITY SET OF THE PROCESS-WIDE OVERRIDE, which is what a session gets
+// when SHELL_CMD has replaced its command line. It is named and exported so the
+// 'bytes' axis has a findable producer rather than being a value a cold reader
+// has to reverse-engineer from a collapse rule.
+//
+// DELIBERATELY NOT A REGISTRY ENTRY, and that is not a shortcut. A registry
+// entry is a SELECTABLE provider: its id passes isProvider, so POST /sessions
+// would accept it and start a session whose command line exists only if
+// SHELL_CMD happens to be set, and the roster could persist a tab naming it
+// that has nothing to run after a restart. SHELL_CMD is an override that
+// OUTRANKS the provider, not one of the things being chosen between, and the
+// contract for this work says so explicitly. So it lives here, off to the side,
+// where it can be named and tested without becoming choosable.
+//
+// unreadAxis is 'bytes' and NOT off: the override's output is the only evidence
+// such a session has, and a plain shell's line output is real news. Collapsing
+// it to 'none' would turn every e2e fixture's row opaque and throw away the one
+// honest signal those sessions have.
+const SHELL_OVERRIDE_CAPABILITIES = Object.freeze({
   resumeConversation: false,
   transcriptStatus:   false,
   transcriptTitle:    false,
@@ -193,7 +208,7 @@ function resolveCapabilities(id, {
 } = {}) {
   const entry = PROVIDERS.get(id);
   if (!entry) throw new Error(`unknown provider: ${id}`);
-  if (shellOverride) return NO_CAPABILITIES;
+  if (shellOverride) return SHELL_OVERRIDE_CAPABILITIES;
 
   const caps = entry.capabilities;
   // One gate, because it is one question: is there a transcript to read? The
@@ -231,6 +246,7 @@ function statusTracked(caps) {
 
 module.exports = {
   DEFAULT_PROVIDER,
+  SHELL_OVERRIDE_CAPABILITIES,
   PROVIDERS,
   PROVIDER_IDS,
   isProvider,

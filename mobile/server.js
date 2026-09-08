@@ -593,20 +593,47 @@ function createSessionsApi({
 
     ptyProc.onData(data => {
       state.lastOutputAt = Date.now();
-      // Bytes move the unread axis ONLY for a session we cannot classify: no
-      // transcript (a brand new tab), or a custom SHELL_CMD that is not Claude
-      // at all. There, output is the only evidence of anything happening that
-      // exists. For a Claude session noteTurn owns this, so a repaint or a
-      // thinking frame cannot make the session claim it wants you.
+      // THE UNREAD AXIS, and which of its three values a session has decides
+      // whether raw output may claim the user's attention. Written out per value
+      // rather than as a negation, because the values are not interchangeable
+      // and one of them is a defect if it is guessed.
       //
-      // 'none' OPTS OUT ENTIRELY, and this is the defect the axis enum exists to
-      // prevent. A provider whose harness writes no transcript is 'unknown'
-      // forever, so without this gate every frame it painted while THINKING
-      // advanced the unread counter, and the row then read "Waiting on you" and
-      // lit the attention badge: the strongest signal the UI has, fired by a
-      // session doing the opposite of needing the user. A plain shell keeps
-      // 'bytes' because its line output really is news.
-      if (state.caps.unreadAxis !== 'none' && state.status === 'unknown') state.attentionSeq += 1;
+      //   'bytes'  output is the only evidence that exists, PERMANENTLY. That
+      //            is a session under a custom SHELL_CMD (the e2e fixture runs
+      //            `cat`) or with PD_RESUME=0: observe() answers NO_META
+      //            unconditionally, so no transcript will ever appear and this
+      //            is the only writer of attentionSeq there will ever be. Right
+      //            for a plain shell, whose line output really is news.
+      //
+      //   'turns'  noteTurn owns the axis, so a repaint or a thinking frame
+      //            cannot make the session claim it wants you. Bytes still
+      //            count WHILE THE STATUS IS 'unknown', and that clause is
+      //            load-bearing rather than a leftover: a brand new Claude tab
+      //            is 'unknown' until its transcript appears, and noteTurn
+      //            cannot cover the gap because WANTS_USER is {idle, asking}
+      //            and deliberately excludes 'unknown'. So line 499 is the ONLY
+      //            writer for such a tab. The window is transient and closes
+      //            itself the moment a transcript exists. Four named guards in
+      //            sessionsRestore.test.js depend on it, one of them the
+      //            same-millisecond guard that is why this counts rather than
+      //            compares clocks.
+      //
+      //   'none'   nothing counts, and this is the defect the enum exists to
+      //            prevent. A provider whose harness writes no transcript is
+      //            'unknown' FOREVER, so under 'turns' semantics every frame it
+      //            painted while THINKING would advance the counter with nothing
+      //            to ever close the guard. The row then reads "Waiting on you"
+      //            and lights the attention badge: the strongest signal the UI
+      //            has, fired by a session doing the opposite of needing the
+      //            user. The row says it has no status instead. Codex is 'none'
+      //            whether or not it repaints when idle, which is UNVERIFIED:
+      //            if it repaints this avoids a false summons, and if it is
+      //            silent then counting its bytes could only ever add noise.
+      //            See issue #53.
+      const axis = state.caps.unreadAxis;
+      if (axis === 'bytes' || (axis === 'turns' && state.status === 'unknown')) {
+        state.attentionSeq += 1;
+      }
       appendToReplay(state, data);
       for (const ws of state.clients) {
         if (ws.readyState === 1) ws.send(data);

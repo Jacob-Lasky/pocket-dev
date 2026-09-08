@@ -671,6 +671,16 @@
         // Server-authoritative, refreshed by every GET /sessions.
         this.unread = false;
         this.lastOutputAt = 0;
+        // Which harness this tab runs, from the same poll.
+        this.provider      = null;
+        this.providerLabel = null;
+        // DELIBERATELY undefined AND NOT false. attention.js reads this with
+        // `=== false`, so undefined is the "not answered yet" value and a pane
+        // behaves exactly as it did before providers existed until its first
+        // poll lands. Initialising it to false would render every pane as
+        // "Status not tracked" for the first few seconds of its life, including
+        // every Claude pane, which is the opposite of what the flag is for.
+        this.statusTracked = undefined;
 
         this.ws       = null;
         this.wsStatus = 'connecting';
