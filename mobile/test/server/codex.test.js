@@ -141,15 +141,33 @@ describe('Codex defaults in pocket-dev', () => {
     expect(entrypoint).toMatch(/mkdir -p .*"\$HOME\/\.codex"/);
   });
 
-  it('seeds config.toml with the Opus-equivalent tier and high effort', () => {
-    expect(entrypoint).toContain('model = "gpt-5.6-sol"');
-    expect(entrypoint).toContain('model_reasoning_effort = "high"');
-  });
+  it('does NOT seed a model into ~/.codex/config.toml', () => {
+    // This invariant is INVERTED from where it started, deliberately. The seed
+    // was written, shipped, and then removed once its target file was actually
+    // read: config.toml is the BASE that deepgram.config.toml layers on, and its
+    // own header says "DO NOT set model_provider, auth_mode, or a model here".
+    //
+    // It also bought nothing. /second-opinion -- the dominant codex consumer in
+    // this container -- pins `-m` and passes `-c model_reasoning_effort` on every
+    // invocation, so a base pin is redundant for the path that matters. Bare
+    // interactive `codex` is the desktop's case, not this one.
+    //
+    // Comments stripped for the same reason as the wrapper guard below: the file
+    // NAMES the removed setting while explaining its absence.
+    const code = (t) => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  it('seeds config.toml ONLY IF ABSENT, so a user edit survives a reboot', () => {
-    // That file also holds `codex login` trust levels and per-project entries.
-    // An unguarded write would discard them on every container start.
-    expect(entrypoint).toMatch(/if \[ ! -e "\$HOME\/\.codex\/config\.toml" \]; then/);
+    // Assert entrypoint.sh does not WRITE THAT FILE AT ALL, rather than pattern
+    // -matching the setting. The first version of this guard matched
+    // /model\s*=\s*"gpt-5\.6/ and the negative control SLIPPED PAST IT: a seed
+    // written inside a shell printf spells the quotes escaped (model = \"gpt-5.6
+    // -sol\"), which that pattern does not match. One spelling of one setting is
+    // the wrong invariant; "does not write config.toml" is the right one and
+    // cannot be spelled around.
+    expect(code(entrypoint)).not.toMatch(/\.codex\/config\.toml/);
+
+    // Belt and braces, quote-agnostic.
+    expect(code(entrypoint)).not.toMatch(/gpt-5\.6/);
+    expect(code(entrypoint)).not.toMatch(/model_reasoning_effort/);
   });
 
   it('does NOT ship a codex wrapper carrying the sandbox bypass', () => {
