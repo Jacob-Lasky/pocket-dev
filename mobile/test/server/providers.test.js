@@ -22,9 +22,9 @@ describe('the provider id set', () => {
   });
 
   it('defaults to claude, so the untouched case is the capable one', () => {
-    // Every roster entry predates the field, DEFAULT_CMD has always been Claude,
-    // and every capability below is Claude-only: a Codex default would make the
-    // default tab the degraded one.
+    // Every roster entry predates the field, the default command has always been
+    // Claude, and every capability here is Claude-only: a Codex default would
+    // make the default tab the degraded one.
     expect(DEFAULT_PROVIDER).toBe('claude');
     expect(isProvider(DEFAULT_PROVIDER)).toBe(true);
   });

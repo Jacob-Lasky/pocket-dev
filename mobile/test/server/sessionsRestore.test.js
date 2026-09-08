@@ -21,7 +21,8 @@ const UUID = '6d7657b2-2e36-4a45-a083-4c300969650d';
 // by default (there is no unstubEnvs in vitest.config.js), so overlaying let
 // every earlier loadWith leak into every later one: the PD_AUTO_NAME=0 case ran
 // with SHELL_CMD=cat and PD_RESUME=0 still stubbed from two cases above it,
-// which switch AUTO_NAME off by themselves. It passed while proving nothing.
+// which switch the auto-rename off by themselves. It passed while proving
+// nothing.
 // That is the fail-open shape the repo already guards against elsewhere, and it
 // gets worse with every knob added, so the list is scrubbed rather than
 // trusted. Same reasoning as test/server/pdEnv.js, one layer up.
@@ -38,8 +39,8 @@ const MODULE_ENV = [
 // express "this knob is not set". (Vitest 2 changed this; we are on 1.6.1.)
 let envSnapshot;
 
-// Re-evaluate server.js with a known configuration. CMD, RESUME_ENABLED,
-// REMOTE_CONTROL and ARCHIVE_CLOSE are all read once at module level, so
+// Re-evaluate server.js with a known configuration. SHELL_CMD, REMOTE_CONTROL
+// and the whole CAPABILITIES table are read once at module level, so
 // resetModules is the only way to see a different one.
 async function loadWith(env) {
   vi.resetModules();

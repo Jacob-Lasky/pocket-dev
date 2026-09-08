@@ -132,9 +132,9 @@ const AUTO_NAME_KNOB = process.env.PD_AUTO_NAME !== '0';
 // moment, and the effect they want is that the tab is gone the next time they
 // look, which is a moment the browser is by definition open and polling.
 //
-// It depends on RESUME_ENABLED because of the DATA, not as a preference:
-// observe() answers NO_META without it, so there is no transcript to read and
-// nothing to detect. PD_ARCHIVE_CLOSE=0 turns just this off.
+// It depends on the transcriptStatus capability because of the DATA, not as a
+// preference: observe() answers NO_META without it, so there is no transcript to
+// read and nothing to detect. PD_ARCHIVE_CLOSE=0 turns just this off.
 //
 // WHAT A CLOSE ACTUALLY COSTS, because it is easy to overstate and was: the
 // tmux session and its scrollback, and the sid file that points this tab at its
@@ -432,7 +432,7 @@ function killTmuxSession(id, cb) {
 //
 // Every deliberate removal sends it, not just a WS that arrives for an unknown
 // id. Closing a session's clients with no code told them the opposite of the
-// truth, so a tab killed from another device (or closed by ARCHIVE_CLOSE, or
+// truth, so a tab killed from another device (or closed by maybeArchiveClose, or
 // whose tmux session was killed by hand) left a dead pane on screen until the
 // retry earned itself a 4404 the long way round.
 const GONE_CODE = 4404;
@@ -820,7 +820,7 @@ function createSessionsApi({
   }
 
   // Push Claude's own conversation title to the Remote Control bridge, once, by
-  // typing `/rename` at it. See AUTO_NAME for why this is worth doing and why
+  // typing `/rename` at it. See AUTO_NAME_KNOB for why this is worth doing and why
   // the pty is the only way to do it.
   //
   // Every condition here is load-bearing:
@@ -867,7 +867,9 @@ function createSessionsApi({
   //
   // Every condition is load-bearing:
   //
-  //   ARCHIVE_CLOSE   the knob, and the data dependency behind it.
+  //   archiveClose    the capability, which folds together the knob and the
+  //                   data dependency: a provider with no transcript has no
+  //                   notice to find in the first place.
   //   a NEW notice     different from the one this session was adopted with.
   //                    See the seed in create(): without the comparison every
   //                    restart re-closes tabs whose owner archived them and

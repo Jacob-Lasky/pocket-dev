@@ -32,7 +32,7 @@ General:
 ## Alt-screen / scroll behavior
 - [ ] Run a real Claude Code session for 5+ minutes including long responses, tool calls, and exits.
 - [ ] Scroll back through the session (drag in Live): no duplicated chunks, reaches the top of Claude's transcript, returns cleanly to the bottom.
-- [ ] When Claude exits and restarts (the LOOP_CMD), prior plain-shell output stays in xterm scrollback (outer alternate-screen-off behavior).
+- [ ] When Claude exits and restarts (the per-session restart loop, `loopCommand` or `pd-claude-session`), prior plain-shell output stays in xterm scrollback (outer alternate-screen-off behavior).
 
 ## Session restore across a restart (needs a real Claude; the e2e fixture runs `cat` and has no conversation to resume)
 - [ ] Open two or three tabs. In one, ask Claude something long-running so it is mid-tool-call; in another, let it finish and sit waiting on you.
@@ -69,7 +69,8 @@ General:
 - [ ] From inside this checkout, run a consult whose prompt never mentions the rules and confirm codex reads `AGENTS.md`, follows it to `CLAUDE.md`, and obeys what it finds. CI only asserts the pointer file exists and stays a pointer; that codex FOLLOWS it is model behaviour, so re-check it after a codex major bump.
 
 ## Provider per session (the whole point is a second harness, and CI runs one binary: no test in this repo starts codex, logs into it, or renders its TUI)
-- [ ] Session list → **+ Codex** starts a tab, and it comes up in Codex's own TUI rather than an error or a bare shell. If it dies immediately, read the pane: an unrecognised flag means a Claude-only argument reached the Codex command line.
+- [ ] Session list → **+ Codex** starts a tab, and it comes up in Codex's own TUI rather than an error or a bare shell. If it dies immediately, read the pane: an unrecognised flag means a Claude-only argument reached the Codex command line. **Note `--skip-git-repo-check` is NOT on the tab's command line and must not be added**: measured against codex-cli 0.151.0 it exists on `codex exec` only, and bare `codex --skip-git-repo-check` exits with `unexpected argument`. A tab starts in `$HOME`, which is not a repo, so answer Codex's own trust gate in the TUI.
+- [ ] Read the model off the Codex tab's banner. Nothing pins it (PR #55 removed the `~/.codex/config.toml` seed and the command line passes no `-m`), so this is the only place a silent downgrade would show. If it is not the frontier tier, decide whether the tab should pin one, and pin it in the registry rather than in the base config that `codex login` also writes.
 - [ ] That tab's row reads **`Codex · main-N`** and **`Status not tracked`**, with a grey dot, no unread dot, and a relative time that still ticks. A bare `main-N` means the provider label is not reaching the row; `Waiting on you` means the opaque state is not being applied and the tab is lying about needing you.
 - [ ] Leave the Codex tab THINKING (give it a long task) and watch the session list from another tab for a minute. The Sessions badge must NOT light and the row must NOT flip to `Waiting on you`. This is the one that cannot be tested here: it needs a real TUI painting real frames.
 - [ ] Session list → **+ Claude** still starts Claude, still gets an AI-generated title after its first turn, and still shows `Working` / `Waiting on you` / `Read`. The Codex work must not have flattened the Claude row.

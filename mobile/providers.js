@@ -23,9 +23,9 @@
 // dependency on the server's environment to do that.
 
 // The default, and the reason is not "Claude is nicer": every existing roster
-// entry predates this field, DEFAULT_CMD has always been Claude, and every
-// capability below is Claude-only. A Codex default would make the untouched
-// case the degraded one.
+// entry predates this field, the default command has always been Claude, and
+// every capability below is Claude-only. A Codex default would make the
+// untouched case the degraded one.
 const DEFAULT_PROVIDER = 'claude';
 
 // A capability set with nothing granted. Named rather than inlined because it
@@ -84,8 +84,18 @@ const PROVIDERS = new Map([
     // seccomp=unconfined with the docker socket mounted, so the flag's own
     // "intended solely for externally sandboxed environments" is met.
     //
-    // NO -m: entrypoint.sh seeds ~/.codex/config.toml with the top-tier model,
-    // so a flag here would fight the file and freeze the choice in this repo.
+    // NO -m, and the reason is NOT that something else pins the model. Nothing
+    // does: PR #55 removed the ~/.codex/config.toml seed, on the argument that
+    // interactive codex is rare in this container and /second-opinion pins `-m`
+    // itself. This feature is what makes interactive codex a first-class case
+    // here, so that premise no longer holds and is worth saying out loud.
+    //
+    // Passing no -m is still right, for the reason Jake's own desktop wrapper
+    // gives: codex has no moving `latest` alias, its default is already the
+    // frontier model, so inheriting the default TRACKS latest while a pin
+    // freezes this repo at whatever was newest the day the line was written.
+    // The interactive banner names the model, which makes a silent downgrade
+    // visible in the one place a tab's user is already looking.
     //
     // NO --skip-git-repo-check: measured against codex-cli 0.151.0, that flag
     // exists on `codex exec` ONLY and is not accepted by the interactive TUI, so

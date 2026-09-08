@@ -4,7 +4,7 @@
 //
 // This runs on the pdServerClaudeStub fixture rather than the usual `cat` one,
 // because setting SHELL_CMD switches the whole conversation machinery off (see
-// RESUME_ENABLED in server.js). The stub shadows `claude` on PATH instead, so
+// CAPABILITIES in server.js). The stub shadows `claude` on PATH instead, so
 // the launcher, the sid-file handoff, and GET /sessions all run for real.
 
 import {
