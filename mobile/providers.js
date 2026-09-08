@@ -105,19 +105,33 @@ const PROVIDERS = new Map([
     // itself. This feature is what makes interactive codex a first-class case
     // here, so that premise no longer holds and is worth saying out loud.
     //
-    // Passing no -m is still right, for the reason Jake's own desktop wrapper
-    // gives: codex has no moving `latest` alias, its default is already the
-    // frontier model, so inheriting the default TRACKS latest while a pin
-    // freezes this repo at whatever was newest the day the line was written.
-    // The interactive banner names the model, which makes a silent downgrade
-    // visible in the one place a tab's user is already looking.
+    // -m IS PINNED, and the comment this replaces argued the opposite. That
+    // argument was that codex has no moving `latest` alias, so inheriting the
+    // account default TRACKS latest while a pin freezes. The premise is true
+    // and the conclusion was still wrong, because the default is not the thing
+    // the owner asked for. Measured 2026-09-08: the account default is
+    // `gpt-6-astra`, the standing preference is the newest Sol, and
+    // `gpt-6-sol` DOES NOT EXIST -- it returns the same 400 as a deliberately
+    // bogus model id, while `gpt-6-astra` returns "requires a newer version of
+    // Codex". So the newest Sol is 5.6, inheriting gives you a different model
+    // family, and there is no alias that means "newest Sol".
+    //
+    // DO NOT drop this flag back to "track the default" without re-reading
+    // ~/.claude/skills/second-opinion/SKILL.md <model_choice>, which carries
+    // the must-fail-control recipe for checking whether a newer Sol has
+    // shipped. The banner ECHOES any -m string without validating it, so
+    // `-m sol` and `-m gpt-sol` both print a plausible banner and neither is a
+    // model; a banner is not proof.
+    //
+    // It stays visible where a downgrade would be noticed: the interactive
+    // banner names the model, in the one place a tab's user is already looking.
     //
     // NO --skip-git-repo-check: measured against codex-cli 0.151.0, that flag
     // exists on `codex exec` ONLY and is not accepted by the interactive TUI, so
     // adding it here would stop the tab starting at all. The interactive trust
     // gate is answerable in the TUI, which is the right place for a tab a human
     // is sitting in.
-    command: 'codex --dangerously-bypass-approvals-and-sandbox',
+    command: 'codex --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
     remoteControlArgs: null,
     // EVERY CAPABILITY OFF, and that is a statement about the data, not a
     // preference. All six are reads of Claude's `<uuid>.jsonl`, which Codex does
