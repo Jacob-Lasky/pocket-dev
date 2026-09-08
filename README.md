@@ -37,7 +37,7 @@ docker compose up -d --build
 | Host path | Container path | Purpose |
 |---|---|---|
 | `/mnt/user/appdata/claude-code/workspace` | `/workspace` | Claude's working directory; persists files between container recreates |
-| `/mnt/user/appdata/claude-code/home` | `/home/claude` | **The entire home, and the only state mount you need.** Claude's config and per-tab conversation ids, the `gh` token, the dgvpn registration, `~/bin` tools a session installs for itself, and credentials for anything else that writes to `~` (`aws`, `kubectl`, `fly`, `docker`). Must be owned `99:100` on the host |
+| `/mnt/user/appdata/claude-code/home` | `/home/claude` | **The entire home, and the only state mount you need.** Claude's config and per-tab conversation ids, the `gh` token, the dgvpn registration, `~/bin` tools a session installs for itself, the standalone Codex install that Codex remote control needs, and credentials for anything else that writes to `~` (`aws`, `kubectl`, `fly`, `docker`). Must be owned `99:100` on the host |
 | `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Access to the host's docker daemon. **`:ro` does not make the API read-only** — it only marks the socket file read-only, and the daemon still honours `run` / `stop` / `rm`. Treat this mount as host root, and drop it or front it with a filtered `docker-socket-proxy` if that is not what you want |
 
 ### Why the home is one mount
@@ -68,7 +68,11 @@ Run it from inside a checkout. Codex refuses to start outside a git repo (`Not i
 
 A browser tab started on Codex is the one place pocket-dev picks a model for you, and it does it the same way: its command line carries `-m gpt-5.6-sol` rather than editing your config. The tab's startup banner names whatever it was given, so a change shows up there.
 
-There is no `codex` wrapper on `PATH`, and that is deliberate. `--dangerously-bypass-approvals-and-sandbox` overrides an explicit `-s read-only`, so a wrapper carrying it would quietly give every consult write access to the tree it is reviewing while the command still said read-only. If you alias `codex` on your desktop, do not copy that alias in here.
+**That tab runs `codex-dg`, not bare `codex`, because it bills a separate API account.** The wrapper injects the API key and layers the provider profile that goes with it; the model pin is only valid on that account, since `gpt-5.6-sol` is not available on the ChatGPT seat a bare `codex` uses. `codex-dg` and its key live in your home mount and are **not** part of this image (the key must not ship in a public image), so on a host that has never had them installed, starting a Codex tab fails rather than quietly running on the other account. `/second-opinion` and any `codex` you type yourself are unaffected — they still use the seat you logged in with.
+
+**Codex tabs can also be driven from the phone**, the same way Claude tabs can, but the mechanism is a single daemon rather than a per-tab flag: `entrypoint.sh` installs the standalone Codex (remote control refuses to run against the `npm` copy, and the path it demands is inside the home mount, so it can only be done at boot) and starts `codex remote-control start` once. Every step is best-effort — if the download fails, or your codex login has no MFA satisfied, you get a line in `docker logs` and a container that still works in every other way. `PD_CODEX_RC=0` skips it entirely. One side effect worth knowing: the standalone install puts a `codex` launcher in `~/bin`, which is earlier on `PATH` than the image's `/usr/local/bin/codex`, so that is what a bare `codex` runs afterwards.
+
+There is no wrapper named `codex` on `PATH`, and that is deliberate. `--dangerously-bypass-approvals-and-sandbox` overrides an explicit `-s read-only`, so a wrapper carrying it would quietly give every consult write access to the tree it is reviewing while the command still said read-only. If you alias `codex` on your desktop, do not copy that alias in here. (`codex-dg` above is a different name, reached only by the Codex tab, and the `~/bin/codex` launcher adds no flags of its own.)
 
 **The container runs with `--security-opt seccomp=unconfined`, and codex is why.** Codex sandboxes every command it spawns with bubblewrap, which needs an unprivileged user namespace; Docker's default seccomp profile denies that, so `codex exec review` died before reading a single file while still printing "No findings were identified" with the abort tucked into the second clause. A review that never ran and a review that found nothing looked identical. The flag is a real loosening, and it is defensible here only because this container already mounts the docker socket (host-root equivalent, see the volumes table), so seccomp was never the boundary protecting the host. It also cuts the other way: it is what allows codex's own read-only sandbox to engage.
 
@@ -80,7 +84,9 @@ codex login --device-auth   # prints a URL and a code; open them on any other de
 
 The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
 
-**Codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore losing your tabs; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
+**The image's codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore losing your tabs; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
+
+Note that both of those move `/usr/local/bin/codex`, which the standalone install above shadows once remote control has been set up. Run `codex --version` in a session if you want to know what you are actually calling.
 
 ## Point at the thing
 
@@ -118,12 +124,13 @@ The difference is a `clean-shutdown` marker written by the server's signal handl
 | `PD_CRASH_NUDGE` | a warning, see above | What it is told instead after an unexpected shutdown. Empty string sends nothing |
 | `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
 | `PD_ARCHIVE_CLOSE` | on | `0` keeps a tab open after its conversation is archived from another device |
+| `PD_CODEX_RC` | on | `0` skips the boot-time standalone Codex install and its remote-control daemon, so Codex tabs still run but cannot be driven from the phone |
 
 Resume applies only when pocket-dev owns the command line; setting `SHELL_CMD` turns it off, since an arbitrary command has no conversation to resume.
 
 ### Archive a conversation elsewhere and its tab closes here
 
-Every tab also registers with Claude Code's Remote Control bridge, so the same conversation can be driven from the Claude desktop or mobile app. Archive it there and pocket-dev notices on its next poll (a few seconds, with the browser open) and closes the tab, instead of leaving it in the strip holding a conversation you have already finished with.
+Every Claude tab also registers with Claude Code's Remote Control bridge, so the same conversation can be driven from the Claude desktop or mobile app. (Codex tabs get remote control too, through their own daemon — see "A second model in the box" — but nothing below applies to them: pocket-dev does not read Codex's state, so there is no archive notice to act on.) Archive a Claude conversation there and pocket-dev notices on its next poll (a few seconds, with the browser open) and closes the tab, instead of leaving it in the strip holding a conversation you have already finished with.
 
 It waits for the turn to end first — a tab that is mid-work is never killed under you — and it only ever costs the tmux pane and its scrollback. The conversation itself is untouched and still in `claude --resume`, so a tab closed by mistake is recovered by opening a new one and picking it. `PD_ARCHIVE_CLOSE=0` turns it off.
 

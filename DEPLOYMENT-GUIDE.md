@@ -17,6 +17,8 @@ Two GitHub Actions workflows run on every push:
 
 It publishes `latest` and **does not deploy**. Taking a new image on Tower means recreating the container, which ends every tmux session, so the pickup is deliberately manual — or, for codex specifically, the `pocket-dev-codex-update` Tower user script, which reinstalls it as root inside the running container without touching the sessions. `CLAUDE.md` under "Codex, the second model in the container" has the reasoning.
 
+Both of those move `/usr/local/bin/codex`, which is no longer what a session's bare `codex` resolves to: `entrypoint.sh` installs the standalone Codex (the one remote control requires) into the home mount at boot, and its `~/bin/codex` launcher sits earlier on `PATH`. Read `codex --version` inside a session rather than inferring the version from the image.
+
 ## Shipping a change
 
 1. Branch off `main`, commit, push, open PR.
@@ -62,6 +64,12 @@ ssh tower 'docker images ghcr.io/jacob-lasky/pocket-dev --format "{{.ID}} {{.Cre
 # assert, and they are the two that break silently.
 ssh tower 'docker exec pocket-dev lavish-axi --version'
 ssh tower 'docker exec pocket-dev sh -c "tr \"\\0\" \"\\n\" < /proc/1/environ | grep LAVISH_AXI_HOST"'
+
+# Codex remote control came up. Every step of that block is non-fatal, so a boot
+# log line is the only artifact: expect "codex remote-control daemon started",
+# and on a first boot "installed the standalone codex" ahead of it. A "did not
+# start" line means the codex login needs MFA, not that the deploy failed.
+ssh tower 'docker logs pocket-dev 2>&1 | grep -i "codex"'
 ```
 
 Reaching port 7682 is only meaningful once a session has opened an artifact, so that probe belongs in the change that touches Lavish rather than in every deploy. The recipe, including why `docker exec` alone gets the wrong environment, is in `CLAUDE.md` under "Lavish Editor".
