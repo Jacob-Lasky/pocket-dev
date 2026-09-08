@@ -112,8 +112,28 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # of their own — that is what retired the old /opt/pd prefix. DO NOT point
   # tool installs at ~/.local/bin instead: that is a symlink into the read-mostly
   # image skeleton, and writes there are lost on the next image update.
-  mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin"
-  chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" 2>/dev/null || true
+  mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
+  chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
+
+  # Codex model defaults, matching cachyos-desktop. SEEDED ONLY IF ABSENT: this
+  # file also holds `codex login` trust levels and per-project entries, so
+  # rewriting it every boot would discard them.
+  #
+  # gpt-5.6-sol is the top tier (Sol > Terra > Luna) and the Opus 5 analogue on
+  # both role and price. DO NOT read the tier off codex's own model metadata
+  # `description`, which calls Sol an "everyday workhorse" and reads mid-tier.
+  #
+  # DELIBERATELY NO --dangerously-bypass-approvals-and-sandbox ALIAS HERE, and
+  # that is the important half. Measured 2026-09-07: that flag OUTRANKS an
+  # explicit `-s read-only`, so a wrapper carrying it would silently hand every
+  # /second-opinion consult full disk access while the consult still asked for
+  # read-only. pocket-dev is where those consults run. The desktop wraps `codex`
+  # because it is an interactive daily driver; this container must not.
+  if [ ! -e "$HOME/.codex/config.toml" ]; then
+    printf 'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "high"\n' \
+      > "$HOME/.codex/config.toml"
+    chmod 664 "$HOME/.codex/config.toml" 2>/dev/null || true
+  fi
 
 fi
 

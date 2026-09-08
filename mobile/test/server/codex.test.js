@@ -125,3 +125,48 @@ describe('Codex CLI install', () => {
     expect(codexIdx).toBeLessThan(copyIdx);
   });
 });
+
+// Codex model defaults and, more importantly, the wrapper that must NOT exist.
+// Both fail silently: a missing config means consults run at whatever codex
+// defaults to that month, and a bypass wrapper means they run unsandboxed while
+// still printing the flags the caller asked for.
+describe('Codex defaults in pocket-dev', () => {
+  const root = path.resolve(__dirname, '../../..');
+  const entrypoint = fs.readFileSync(path.join(root, 'entrypoint.sh'), 'utf8');
+  const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+
+  it('creates ~/.codex in the mounted home', () => {
+    // The home ships EMPTY and is a bind mount, so a Dockerfile mkdir would be
+    // masked. Only entrypoint.sh can make this directory exist.
+    expect(entrypoint).toMatch(/mkdir -p .*"\$HOME\/\.codex"/);
+  });
+
+  it('seeds config.toml with the Opus-equivalent tier and high effort', () => {
+    expect(entrypoint).toContain('model = "gpt-5.6-sol"');
+    expect(entrypoint).toContain('model_reasoning_effort = "high"');
+  });
+
+  it('seeds config.toml ONLY IF ABSENT, so a user edit survives a reboot', () => {
+    // That file also holds `codex login` trust levels and per-project entries.
+    // An unguarded write would discard them on every container start.
+    expect(entrypoint).toMatch(/if \[ ! -e "\$HOME\/\.codex\/config\.toml" \]; then/);
+  });
+
+  it('does NOT ship a codex wrapper carrying the sandbox bypass', () => {
+    // THE LOAD-BEARING ONE. Measured 2026-09-07 on codex-cli 0.151.0:
+    // --dangerously-bypass-approvals-and-sandbox OUTRANKS an explicit
+    // `-s read-only`, so a wrapper here would hand every /second-opinion consult
+    // full disk access while the consult still asked for read-only, and the only
+    // place that shows is the `sandbox:` line of codex's own banner.
+    // pocket-dev is where those consults run. Jake's desktop wraps `codex`
+    // because it is an interactive daily driver; this container must not.
+    // Strip comment lines first. Both files EXPLAIN this invariant in prose, and
+    // a whole-file match would flag the comment describing the absence -- which
+    // is exactly what happened when this test was written.
+    const code = (t) =>
+      t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code(dockerfile)).not.toMatch(/dangerously-bypass-approvals-and-sandbox/);
+    expect(code(entrypoint)).not.toMatch(/dangerously-bypass-approvals-and-sandbox/);
+    expect(code(dockerfile)).not.toMatch(/\/usr\/local\/bin\/codex\b/);
+  });
+});
