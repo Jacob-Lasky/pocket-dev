@@ -8,6 +8,10 @@ const { exec, execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 const { SAFE_ID } = require('./safeId');
 const { createSessionStore, nullSessionStore } = require('./sessionStore');
+const {
+  PROVIDER_IDS, DEFAULT_PROVIDER, isProvider, labelFor,
+  commandFor: providerCommand, resolveCapabilities, statusTracked,
+} = require('./providers');
 const claudeSession = require('./claudeSession');
 
 const SESSION_BASE = process.env.TMUX_SESSION || 'main';
@@ -36,21 +40,25 @@ const SESSION_BASE = process.env.TMUX_SESSION || 'main';
 // does not involve editing the image.
 const REMOTE_CONTROL = process.env.PD_REMOTE_CONTROL !== '0';
 
-// Keep `--rc` in front of another flag. Its name argument is optional, so at
-// the end of the string it would swallow whatever pd-claude-session appends.
-const RC_ARGS = REMOTE_CONTROL
-  ? ' --rc --remote-control-session-name-prefix pocket-dev'
-  : '';
-
-const DEFAULT_CMD  = `claude --dangerously-skip-permissions --model "opus[1m]"${RC_ARGS}`;
-const CMD          = process.env.SHELL_CMD    || DEFAULT_CMD;
+// The one thing that OUTRANKS a session's provider, and it stays PROCESS-WIDE
+// on purpose: two per-session command sources is how you get a tab whose
+// command line nobody can predict. It exists because the e2e fixture needs a
+// deterministic command (`cat`), the UnRAID template exposes it as an advanced
+// operator knob, and it is documented as the escape hatch.
+//
+// THE CHECK IS `!SHELL_CMD`, NEVER `=== ''`. Measured 2026-09-07 against
+// `docker inspect pocket-dev`: the variable is NOT SET AT ALL on the live
+// container, zero matching rows. The template declares it with an empty default
+// and UnRAID omits an empty variable from the generated `docker run`, which is
+// where the plausible-but-wrong "set but empty" reading comes from. The real
+// states are `undefined` and a non-empty string.
+const SHELL_CMD    = process.env.SHELL_CMD;
 const PORT         = parseInt(process.env.PORT, 10) || 7681;
 const MAX_REPLAY_BYTES = 512 * 1024;
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
 
-const LOOP_CMD       = `bash -c 'while true; do ${CMD}; echo ; echo restarting...; sleep 1; done'`;
 const TMUX_CONF_PATH = path.join(__dirname, 'tmux.conf');
 const LAUNCHER_PATH  = path.join(__dirname, 'pd-claude-session');
 
@@ -69,7 +77,12 @@ const PROJECTS_DIR = process.env.PD_CLAUDE_PROJECTS_DIR || path.join(HOME, '.cla
 // A custom SHELL_CMD is not necessarily Claude (the e2e fixture runs `cat`),
 // and bolting --resume/--session-id onto an arbitrary command is nonsense.
 // PD_RESUME=0 turns it off outright.
-const RESUME_ENABLED = !process.env.SHELL_CMD && process.env.PD_RESUME !== '0';
+//
+// This is now only the KNOB. Whether a given session gets resume is a
+// per-provider question, because the transcript resume reads is Claude's: see
+// CAPABILITIES below, which folds this knob together with SHELL_CMD and the
+// provider's own declaration.
+const RESUME_KNOB = process.env.PD_RESUME !== '0';
 
 // Give a NEW tab's Remote Control session a real name once Claude has worked
 // out what the conversation is about.
@@ -98,9 +111,13 @@ const RESUME_ENABLED = !process.env.SHELL_CMD && process.env.PD_RESUME !== '0';
 // PD_AUTO_NAME=0 turns it off on its own, separately from PD_REMOTE_CONTROL,
 // because "bridge my sessions" and "type into my terminal for me" are different
 // amounts of trust and someone may reasonably want the first without the second.
-const AUTO_NAME = REMOTE_CONTROL
-  && !process.env.SHELL_CMD
-  && process.env.PD_AUTO_NAME !== '0';
+//
+// Like resume, this is now only the KNOB. It is also a SAFETY gate rather than
+// a feature flag once a second harness exists: maybeAutoName's only channel is
+// writing `/rename <title>\r` into the pty, which is a CLAUDE slash command, so
+// a provider that does not speak it must have this off in the registry and not
+// merely happen to have no title. See CAPABILITIES and providers.js.
+const AUTO_NAME_KNOB = process.env.PD_AUTO_NAME !== '0';
 
 // Close a tab whose conversation the user archived from ANOTHER device: the
 // desktop app, the phone, or claude.ai/code. Archiving there closes the Remote
@@ -138,7 +155,42 @@ const AUTO_NAME = REMOTE_CONTROL
 // the strength of the same numbers: a delay cannot save the +129 min and +16 h
 // cases, so it would buy far less than it appears to while making the feature
 // stop doing the thing it was asked for.
-const ARCHIVE_CLOSE = RESUME_ENABLED && process.env.PD_ARCHIVE_CLOSE !== '0';
+//
+// Knob only, as above; the data dependency is expressed per provider in
+// CAPABILITIES, since a provider with no transcript has no notice to find.
+const ARCHIVE_CLOSE_KNOB = process.env.PD_ARCHIVE_CLOSE !== '0';
+
+// What pocket-dev is allowed to believe about a session, resolved once per
+// provider at boot.
+//
+// This replaces three process-wide booleans (RESUME_ENABLED, AUTO_NAME,
+// ARCHIVE_CLOSE) that all keyed off SHELL_CMD. That coupling is what made "let
+// a tab run Codex" and "make the session layer provider-agnostic" the same
+// piece of work: shipping the first half alone would have switched conversation
+// resume, transcript status, the title, the unread axis and archive-close off
+// for EVERY tab, and would have left the auto-rename ON and typing at a TUI
+// that does not understand it.
+//
+// Resolved eagerly for every provider rather than lazily per session so that an
+// id which cannot be resolved is a startup error and not a runtime one.
+const CAPABILITIES = new Map(PROVIDER_IDS.map(id => [id, resolveCapabilities(id, {
+  shellOverride: Boolean(SHELL_CMD),
+  resume:        RESUME_KNOB,
+  remoteControl: REMOTE_CONTROL,
+  autoName:      AUTO_NAME_KNOB,
+  archiveClose:  ARCHIVE_CLOSE_KNOB,
+})]));
+
+// A provider id selects a COMMAND LINE, so an unrecognised one is REJECTED and
+// never defaulted through: a typo must not silently start the wrong harness.
+// Callers that take a provider from outside (POST /sessions) check isProvider
+// first and answer 400; reaching this throw means an internal caller invented
+// an id, which is a bug and should say so.
+function capsFor(provider) {
+  const caps = CAPABILITIES.get(provider);
+  if (!caps) throw new Error(`unknown provider: ${provider}`);
+  return caps;
+}
 
 // How long the session has to have been quiet, input-wise, before we type into
 // it. The rename fires just after the first turn, when the user is reading
@@ -215,14 +267,34 @@ function buildTmuxSpawnArgs(session, sessionCmd, { env = {}, envSource = process
   ];
 }
 
+// The non-resume fallback loop: restart the command forever, with no
+// resume-or-start-fresh decision to make.
+//
+// IT TAKES THE COMMAND RATHER THAN CLOSING OVER ONE. Baked at module load
+// (`LOOP_CMD`) it was process-wide, so with the provider per session a Codex
+// tab would have come up running Claude in a restart loop.
+function loopCommand(cmd) {
+  return `bash -c 'while true; do ${cmd}; echo ; echo restarting...; sleep 1; done'`;
+}
+
+// What a session of this provider actually runs. SHELL_CMD wins outright; see
+// its comment for why that stays process-wide.
+function commandForSession(provider) {
+  return SHELL_CMD || providerCommand(provider, { remoteControl: REMOTE_CONTROL });
+}
+
 // The command tmux runs for a session.
 //
 // With Claude (the default), pd-claude-session owns the restart loop, because
-// the resume-or-start-fresh decision has to be remade on every iteration of it
-// — see the contract comment in that script. With a custom SHELL_CMD we keep
-// the original inline loop untouched.
-function buildSessionCommand() {
-  return RESUME_ENABLED ? `'${LAUNCHER_PATH}' ${CMD}` : LOOP_CMD;
+// the resume-or-start-fresh decision has to be remade on every iteration of it.
+// See the contract comment in that script. A provider that cannot resume a
+// conversation, and any session under a custom SHELL_CMD, gets the plain inline
+// loop instead: pd-claude-session is Claude-only BY CONTRACT (its own header
+// says so), so pointing a Codex session at it would be a bug and not a
+// degradation.
+function buildSessionCommand(provider = DEFAULT_PROVIDER) {
+  const cmd = commandForSession(provider);
+  return capsFor(provider).resumeConversation ? `'${LAUNCHER_PATH}' ${cmd}` : loopCommand(cmd);
 }
 
 function spawnTmuxPty({ session, command, env, cols, rows }) {
@@ -263,8 +335,18 @@ function createApp({ sessionsApi } = {}) {
     });
 
     app.post('/sessions', (req, res) => {
-      const state = sessionsApi.create();
-      res.json({ id: state.id });
+      // The provider is OPTIONAL and an absent one takes the default, so a
+      // client that predates the picker keeps working. An id we do not
+      // recognise is a 400 and NEVER the default: the id selects a command
+      // line, and quietly starting the wrong harness on a mistyped one is worse
+      // than refusing.
+      const requested = req.body ? req.body.provider : undefined;
+      if (requested !== undefined && !isProvider(requested))
+        return res.status(400).json({ error: 'unknown provider' });
+      const state = requested === undefined
+        ? sessionsApi.create()
+        : sessionsApi.create(undefined, { provider: requested });
+      res.json({ id: state.id, provider: state.provider });
     });
 
     app.delete('/sessions/:id', (req, res) => {
@@ -392,8 +474,13 @@ function createSessionsApi({
 
   // `resumePrompt` is passed through to pd-claude-session, which appends it to
   // `claude --resume` when (and only when) it actually resumes a conversation.
-  function create(id = nextSessionId(), { resumePrompt = null } = {}) {
+  function create(id = nextSessionId(), { resumePrompt = null, provider = DEFAULT_PROVIDER } = {}) {
     if (sessions.has(id)) return sessions.get(id);
+    // Before anything else, and it THROWS rather than defaulting: the provider
+    // decides the command line, so an id nobody recognises must not become a
+    // running process. Both real callers have already screened it (the endpoint
+    // answers 400, the roster repairs), so reaching here is an internal bug.
+    const caps = capsFor(provider);
     noteId(id);
 
     // Where this session's conversation already stood before we adopted it.
@@ -404,7 +491,7 @@ function createSessionsApi({
       turnId: initialTurnId,
       title: initialTitle,
       archivedId: initialArchivedId,
-    } = observe(id);
+    } = observe(id, caps);
 
     const sidFile = store.sidPath(id);
     // The launcher decides whether a transcript exists and the server decides
@@ -417,7 +504,7 @@ function createSessionsApi({
 
     const ptyProc = spawnPty({
       session: id,
-      command: buildSessionCommand(),
+      command: buildSessionCommand(provider),
       env,
       cols:    DEFAULT_COLS,
       rows:    DEFAULT_ROWS,
@@ -425,6 +512,12 @@ function createSessionsApi({
 
     const state = {
       id,
+      // Which harness this tab runs, and what that lets us believe about it.
+      // Held per session rather than read per call so one lookup answers for
+      // the life of the tab, and so a capability cannot be re-derived
+      // differently by two call sites.
+      provider,
+      caps,
       pty: ptyProc,
       replayBuffer: '',
       clients: new Set(),
@@ -474,7 +567,7 @@ function createSessionsApi({
       // marking it done here means a long conversation can never be renamed out
       // from under a name the user chose on their phone. A brand new tab has no
       // title, so this is false and the first one to appear triggers the rename.
-      autoNamed: !AUTO_NAME || initialTitle !== null,
+      autoNamed: !caps.autoName || initialTitle !== null,
       // The newest Remote Control archive notice this session's conversation
       // already carried when we adopted it. SEEDING IS THE MECHANISM, exactly
       // as it is for status and turnId above: the notice stays in the tail
@@ -496,7 +589,15 @@ function createSessionsApi({
       // at all. There, output is the only evidence of anything happening that
       // exists. For a Claude session noteTurn owns this, so a repaint or a
       // thinking frame cannot make the session claim it wants you.
-      if (state.status === 'unknown') state.attentionSeq += 1;
+      //
+      // 'none' OPTS OUT ENTIRELY, and this is the defect the axis enum exists to
+      // prevent. A provider whose harness writes no transcript is 'unknown'
+      // forever, so without this gate every frame it painted while THINKING
+      // advanced the unread counter, and the row then read "Waiting on you" and
+      // lit the attention badge: the strongest signal the UI has, fired by a
+      // session doing the opposite of needing the user. A plain shell keeps
+      // 'bytes' because its line output really is news.
+      if (state.caps.unreadAxis !== 'none' && state.status === 'unknown') state.attentionSeq += 1;
       appendToReplay(state, data);
       for (const ws of state.clients) {
         if (ws.readyState === 1) ws.send(data);
@@ -545,7 +646,8 @@ function createSessionsApi({
         // Two independent reads could disagree if a turn landed between them,
         // and the session would then look newly-finished the first time anyone
         // opened the list after a restart.
-        const uuid   = RESUME_ENABLED ? store.readSid(entry.id) : null;
+        const caps   = capsFor(entry.provider);
+        const uuid   = caps.resumeConversation ? store.readSid(entry.id) : null;
         const status = metaFor(uuid).status;
 
         // 'unknown' never prompts — see claudeSession.js. Only a conversation
@@ -560,10 +662,16 @@ function createSessionsApi({
         const resumePrompt = status === 'busy'
           ? (autoContinue ? RESUME_PROMPT : CRASH_PROMPT)
           : null;
-        create(entry.id, { resumePrompt: resumePrompt || null });
+        create(entry.id, { resumePrompt: resumePrompt || null, provider: entry.provider });
         restored.push(entry.id);
 
-        if (status !== 'busy') {
+        // Say so when there is nothing to classify, because `docker logs` IS
+        // the artifact for restore (see the lines below) and silence there
+        // reads as a session that was skipped rather than one that has no
+        // conversation to have an opinion about.
+        if (!caps.transcriptStatus) {
+          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} session with no conversation tracking, restored as-is`);
+        } else if (status !== 'busy') {
           if (status === 'idle')   logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
           if (status === 'asking') logger.log(`session ${entry.id}: was waiting for an answer to a question, restored as-is`);
         } else if (autoContinue) {
@@ -623,13 +731,17 @@ function createSessionsApi({
   function markViewed(id) {
     const state = sessions.get(id);
     if (!state) return false;
-    noteTurn(state, observe(id));
+    noteTurn(state, observe(id, state.caps));
     state.viewedSeq = state.attentionSeq;
     return true;
   }
 
+  // Also what gets written to the roster, so the provider has to be in here or
+  // a restart forgets which harness every tab was running.
   function list() {
-    return [...sessions.values()].map(s => ({ id: s.id, cols: s.cols, rows: s.rows }));
+    return [...sessions.values()].map(s => ({
+      id: s.id, provider: s.provider, cols: s.cols, rows: s.rows,
+    }));
   }
 
   // Transcript metadata, memoised against the file's mtime and size.
@@ -730,6 +842,13 @@ function createSessionsApi({
   // the real TUI: the slash-command palette opens on `/` but does not swallow
   // the trailing carriage return, and the session renamed on the first try.
   function maybeAutoName(state, meta) {
+    // The provider gate, and it is a SAFETY gate. The write below is
+    // `/rename ...` INTO THE PTY, which is a Claude slash command, so for any
+    // other harness this is pocket-dev typing at a TUI that does not speak it.
+    // It is inert today for such a session only because meta.title is always
+    // null without a transcript, and that is protection by accident of the data
+    // path, not by a gate. DO NOT drop this on the strength of the null title.
+    if (!state.caps.autoName) return;
     if (state.autoNamed || !meta.title) return;
     if (meta.status === 'busy') return;
     if (Date.now() - state.lastInputAt < AUTO_NAME_QUIET_MS) return;
@@ -773,7 +892,7 @@ function createSessionsApi({
   // `archivedId` is advanced BEFORE the destroy, not after, so a kill that
   // fails cannot leave this retrying on every poll for the life of the process.
   function maybeArchiveClose(state, meta) {
-    if (!ARCHIVE_CLOSE) return false;
+    if (!state.caps.archiveClose) return false;
     if (meta.archivedId && meta.archivedId !== state.archivedId) {
       state.archivePending = meta.archivedId;
     }
@@ -788,10 +907,15 @@ function createSessionsApi({
   }
 
   // What a session's conversation says right now. The one place that decides
-  // whether we are allowed to look at all: with a custom SHELL_CMD there is no
-  // conversation, and create/describe/markViewed must not each re-decide that.
-  function observe(id) {
-    return RESUME_ENABLED ? metaFor(store.readSid(id)) : NO_META;
+  // whether we are allowed to look at all: with a custom SHELL_CMD, or a
+  // provider that writes no transcript, there is no conversation, and
+  // create/describe/markViewed must not each re-decide that.
+  //
+  // Takes the resolved capabilities rather than the provider id so that create()
+  // can call it before the session state exists, with the same answer every
+  // later caller gets.
+  function observe(id, caps) {
+    return caps.transcriptStatus ? metaFor(store.readSid(id)) : NO_META;
   }
 
   // Evict a dead session's memo entry. Called while the sid file still exists,
@@ -819,7 +943,7 @@ function createSessionsApi({
     const rows = [];
     // Snapshot first: maybeArchiveClose mutates `sessions`.
     for (const s of [...sessions.values()]) {
-      const meta = observe(s.id);
+      const meta = observe(s.id, s.caps);
       // Closing comes first and short-circuits the rest. A closed session is
       // gone from the map, so reporting a row for it would tell the browser to
       // keep a pane whose next reconnect gets a 4404.
@@ -835,6 +959,18 @@ function createSessionsApi({
         status: meta.status,
         unread: s.attentionSeq > s.viewedSeq,
         lastOutputAt: s.lastOutputAt,
+        provider: s.provider,
+        // The display name comes from the SERVER, not from a client-side map of
+        // ids to names. A label duplicated across a JSON boundary is exactly the
+        // drift test/unit/statusContract.test.js exists to stop, and this one
+        // would show up as a tab labelled with a raw id.
+        providerLabel: labelFor(s.provider),
+        // Whether the four attention states mean anything for this session at
+        // all. See statusTracked in providers.js: false is NOT "status unknown",
+        // it is "there is no axis on which a status could be known", and the
+        // browser renders a fifth row state for it that sits outside the
+        // attention axis entirely.
+        statusTracked: statusTracked(s.caps),
       });
     }
     return rows;
@@ -942,5 +1078,5 @@ function startServer() {
   });
 
   server.listen(PORT, '0.0.0.0', () =>
-    console.log(`pocket-dev on :${PORT}  (base session: ${SESSION_BASE}  cmd: ${CMD}  state: ${store.file})`));
+    console.log(`pocket-dev on :${PORT}  (base session: ${SESSION_BASE}  cmd: ${commandForSession(DEFAULT_PROVIDER)}  state: ${store.file})`));
 }

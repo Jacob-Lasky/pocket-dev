@@ -687,6 +687,252 @@ describe('with a custom SHELL_CMD', () => {
   });
 });
 
+// Everything below is the per-session provider: the command line it selects and
+// the six capabilities that used to be process-wide booleans keyed off
+// SHELL_CMD. The failure each one guards is the same shape: a Codex tab that is
+// handed a piece of Claude's machinery and either dies on it or lies with it.
+describe('the provider a session runs', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('gives each provider its own command line', () => {
+    expect(buildSessionCommand('claude')).toContain('claude --dangerously-skip-permissions');
+    expect(buildSessionCommand('codex')).toContain('codex --dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('defaults to Claude when nothing says otherwise', () => {
+    expect(buildSessionCommand()).toBe(buildSessionCommand('claude'));
+  });
+
+  it('keeps Claude-only Remote Control flags off the Codex command line', () => {
+    // RC_ARGS used to be baked into the process-wide CMD, so it reached every
+    // command. Codex spells its equivalent `remote-control` / `pair` and would
+    // exit on an unrecognised flag before painting a frame.
+    expect(buildSessionCommand('claude')).toContain('--rc ');
+    expect(buildSessionCommand('codex')).not.toContain('--rc');
+  });
+
+  it('does NOT point a Codex session at pd-claude-session', () => {
+    // The launcher is Claude-only BY CONTRACT, per its own header: it appends
+    // --resume/--session-id and reads Claude's transcript to decide whether to.
+    // Aiming Codex at it is a bug, not a degradation.
+    expect(buildSessionCommand('codex')).not.toContain('pd-claude-session');
+  });
+
+  it('runs a provider that cannot resume in the plain restart loop', () => {
+    const cmd = buildSessionCommand('codex');
+    expect(cmd).toContain('while true; do codex ');
+    expect(cmd).toContain('restarting...');
+  });
+
+  it('builds the LOOP from the session command, not from a baked-in one', () => {
+    // THE EASY MISS. LOOP_CMD closed over the process-wide CMD at module load,
+    // so with the provider per session a Codex tab would have come up running
+    // CLAUDE in a restart loop, which is the worst available failure: the tab
+    // works, and it is the wrong harness.
+    expect(buildSessionCommand('codex')).not.toContain('claude');
+  });
+
+  it('refuses to build a command for an id no registry knows', () => {
+    expect(() => buildSessionCommand('cursor')).toThrow(/unknown provider/);
+  });
+
+  it('spawns the session with its own provider command', () => {
+    const { api } = makeApi();
+    api.create('main-1', { provider: 'codex' });
+    expect(spawned[0].command).toBe(buildSessionCommand('codex'));
+    expect(spawned[0].command).not.toContain('pd-claude-session');
+  });
+
+  it('records the provider on the session and in the roster', () => {
+    const { api, store } = makeApi();
+    const state = api.create('main-1', { provider: 'codex' });
+    expect(state.provider).toBe('codex');
+    expect(store.load()).toEqual([{ id: 'main-1', provider: 'codex' }]);
+  });
+
+  it('throws rather than starting a process for an unknown provider', () => {
+    // create() is the last gate before a command line becomes a running
+    // process, so it must not default. Both real callers screen first (the
+    // endpoint answers 400, the roster repairs), which makes this an assertion.
+    const { api } = makeApi();
+    expect(() => api.create('main-1', { provider: 'cursor' })).toThrow(/unknown provider/);
+    expect(spawned).toHaveLength(0);
+  });
+
+  it('brings a restored session back on the harness it was running', () => {
+    const first = makeApi();
+    first.api.create('main-1', { provider: 'codex' });
+    const second = makeApi();
+    expect(second.api.restore()).toEqual(['main-1']);
+    expect(spawned[1].command).toBe(buildSessionCommand('codex'));
+  });
+
+  it('says in the log that a restored session has no conversation to classify', () => {
+    // docker logs IS the artifact for restore (see the restore lines above), so
+    // silence for such a session reads as one that was skipped rather than one
+    // with no opinion to have.
+    const first = makeApi();
+    first.api.create('main-1', { provider: 'codex' });
+    const second = makeApi();
+    second.api.restore();
+    const said = logger.log.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(said).toContain('Codex session with no conversation tracking');
+  });
+
+  it('does not resume a conversation for a provider that has none', () => {
+    // The sid file belongs to pd-claude-session. A Codex session must not be
+    // handed one, or a restart would aim `--resume` at a conversation that is
+    // not its own.
+    const first = makeApi();
+    const state = first.api.create('main-1', { provider: 'codex' });
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, BUSY);
+
+    const second = makeApi();
+    second.api.restore();
+    const spawn = spawned[spawned.length - 1];
+    expect(spawn.env.PD_RESUME_PROMPT).toBeUndefined();
+    expect(spawn.command).not.toContain('pd-claude-session');
+  });
+
+  it('lets SHELL_CMD outrank the provider, for every provider', async () => {
+    // The escape hatch stays process-wide: two per-session command sources is
+    // how you get a tab whose command line nobody can predict. Four e2e
+    // fixtures depend on this mechanism.
+    const mod = await loadWith({ SHELL_CMD: 'cat' });
+    for (const provider of ['claude', 'codex']) {
+      const cmd = mod.buildSessionCommand(provider);
+      expect(cmd).toContain('while true; do cat;');
+      expect(cmd).not.toContain('pd-claude-session');
+      expect(cmd).not.toContain('codex');
+    }
+  });
+});
+
+describe('the six capabilities a provider does or does not have', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  // A session of the given provider, with a conversation on disk that a Claude
+  // session would react to. The point of every case below is that a provider
+  // with no transcript must not react to it.
+  function withTranscript(provider, records) {
+    const { api, store } = makeApi();
+    const state = api.create('main-1', { provider });
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    writeTranscript(UUID, records);
+    return { api, store, state };
+  }
+
+  it('reads no transcript status for a provider that writes none', () => {
+    // Even with a real, readable, finished conversation sitting at the uuid
+    // this session's id points at. observe() must decline to look.
+    const { api } = withTranscript('codex', [...IDLE]);
+    const row = api.describe()[0];
+    expect(row.status).toBe('unknown');
+    expect(row.title).toBeNull();
+    expect(row.lastPrompt).toBeNull();
+  });
+
+  it('does the opposite for Claude, which is the control', () => {
+    const { api } = withTranscript('claude', [{ type: 'ai-title', aiTitle: 'A real title', sessionId: UUID }, ...IDLE]);
+    const row = api.describe()[0];
+    expect(row.status).toBe('idle');
+    expect(row.title).toBe('A real title');
+  });
+
+  it('NEVER lets output flag a no-axis session as wanting the user', () => {
+    // THE DEFECT THIS FEATURE WOULD OTHERWISE SHIP. A session with no
+    // transcript is 'unknown' forever, and the byte branch in ptyProc.onData
+    // then counts every frame it paints WHILE THINKING. The row reads "Waiting
+    // on you" and the attention badge lights: the strongest signal the UI has,
+    // fired by a session doing the opposite of needing the user.
+    const { api } = withTranscript('codex', [...BUSY]);
+    const proc = spawned[0].proc;
+    for (let i = 0; i < 50; i++) proc.emit('a thinking frame');
+    expect(api.describe()[0].unread).toBe(false);
+  });
+
+  it('still counts output for a session judged by its output alone', () => {
+    // The control for the case above, and the reason the axis is an enum rather
+    // than a boolean: a session with no transcript but real line output keeps
+    // the unread axis, because its output IS news. A brand new Claude tab is
+    // exactly that session until its first turn is written.
+    const { api } = makeApi();
+    api.create('main-1');
+    spawned[0].proc.emit('some real output\n');
+    expect(api.describe()[0].unread).toBe(true);
+  });
+
+  it('marks a no-transcript session as needing no rename, at create', () => {
+    // maybeAutoName's ONLY channel is writing `/rename <title>\r` into the pty,
+    // which is a CLAUDE slash command. This asserts the SEED rather than the
+    // absence of the write, and the distinction is the point: the write cannot
+    // happen for such a session anyway, because meta.title is null without a
+    // transcript. That makes "no /rename was written" pass whether the gate
+    // exists or not, which was measured, so it proves nothing on its own. The
+    // seed is observable and DOES move when the capability stops gating it.
+    const { api } = makeApi();
+    const codex  = api.create('main-1', { provider: 'codex' });
+    const claude = api.create('main-2', { provider: 'claude' });
+    expect(codex.provider).toBe('codex');
+    expect(codex.autoNamed).toBe(true);    // nothing to do, ever
+    expect(claude.autoNamed).toBe(false);  // a new tab, awaiting its first title
+    // Belt and braces on the behaviour itself, with a real title sitting at the
+    // uuid this session's id points at.
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath('main-1')), { recursive: true });
+    fs.writeFileSync(store.sidPath('main-1'), UUID);
+    writeTranscript(UUID, [{ type: 'ai-title', aiTitle: 'Tempting', sessionId: UUID }, ...IDLE]);
+    api.describe();
+    expect(spawned[0].proc.writes.filter(w => w.startsWith('/rename'))).toEqual([]);
+  });
+
+  it('does not archive-close a tab whose harness writes no notice', () => {
+    // Also belt and braces, and honestly labelled as such: observe() already
+    // starves this branch for a provider with no transcript, so removing the
+    // capability gate alone leaves this green (measured). What the gate buys is
+    // the FUTURE provider that has a transcript and no Remote Control archive
+    // notice in it, where the starvation would not save us. The gate that is
+    // load-bearing today is transcriptStatus, asserted above.
+    const { api } = withTranscript('codex', [...IDLE, archived('aaaa1111-1111-4111-8111-111111111111')]);
+    expect(api.describe()).toHaveLength(1);
+    expect(kills).toEqual([]);
+  });
+
+  it('tells the browser the row has no status axis at all', () => {
+    // Not the same as `status: 'unknown'`, and that difference is the whole
+    // point: 'unknown' means "we could not classify it", statusTracked false
+    // means "there is no axis on which it could be classified". The browser
+    // renders a fifth row state for the second one, OUTSIDE the attention axis.
+    const { api } = makeApi();
+    api.create('main-1', { provider: 'codex' });
+    api.create('main-2', { provider: 'claude' });
+    const rows = api.describe();
+    expect(rows[0]).toMatchObject({ provider: 'codex',  providerLabel: 'Codex',  statusTracked: false });
+    expect(rows[1]).toMatchObject({ provider: 'claude', providerLabel: 'Claude', statusTracked: true });
+  });
+
+  it('keeps a plain shell session honest rather than opaque', async () => {
+    // SHELL_CMD collapses every capability, but NOT the unread axis, so such a
+    // row keeps saying something true. Reporting it as untracked would throw
+    // away the one live signal it has, and would change what four e2e fixtures
+    // see for no reason: a shell's line output really is unread output.
+    const mod   = await loadWith({ SHELL_CMD: 'cat' });
+    const store = createSessionStore({ dir, logger });
+    const api   = mod.createSessionsApi({
+      killSession: fakeKill(), store, projectsDir, logger,
+      spawnPty: (opts) => { const proc = fakePty(); spawned.push({ ...opts, proc }); return proc; },
+    });
+    api.create('main-1');
+    expect(api.describe()[0].statusTracked).toBe(true);
+    spawned[0].proc.emit('hello\n');
+    expect(api.describe()[0].unread).toBe(true);
+  });
+});
+
 describe('describe(): what the browser is told about each session', () => {
   const title  = (t) => ({ type: 'ai-title', aiTitle: t, sessionId: UUID });
   const prompt = (p) => ({ type: 'last-prompt', lastPrompt: p, sessionId: UUID });
@@ -709,6 +955,9 @@ describe('describe(): what the browser is told about each session', () => {
       status: 'busy',
       unread: false,
       lastOutputAt: 0,
+      provider: 'claude',
+      providerLabel: 'Claude',
+      statusTracked: true,
     }]);
   });
 
@@ -728,8 +977,10 @@ describe('describe(): what the browser is told about each session', () => {
   it('keeps list() cheap and free of transcript reads', () => {
     // list() is what gets written to the roster on every create and destroy.
     // Pulling metadata in there would turn each persist into a pile of file IO.
+    // The provider is in here because the ROSTER needs it, and it costs nothing:
+    // it is a field on the session, not a read of anything.
     const { api } = withConversation([title('Something'), prompt('hi'), ...IDLE]);
-    expect(api.list()).toEqual([{ id: 'main-1', cols: 120, rows: 40 }]);
+    expect(api.list()).toEqual([{ id: 'main-1', provider: 'claude', cols: 120, rows: 40 }]);
   });
 
   it('re-reads only when the transcript actually changed', () => {

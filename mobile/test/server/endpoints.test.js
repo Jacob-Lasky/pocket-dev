@@ -36,15 +36,17 @@ describe('express endpoints (static + assets)', () => {
 // Build a stub sessionsApi that records calls. Lets us test the express
 // wiring without standing up real ptys/tmux.
 function stubSessionsApi() {
-  const fakeSession = (id) => ({
-    id, cols: 120, rows: 40,
+  const fakeSession = (id, provider) => ({
+    id, provider, cols: 120, rows: 40,
     pty: { write: vi.fn() },
   });
   const sessions = new Map();
   let seq = 1;
   return {
-    create:  vi.fn(() => {
-      const s = fakeSession(`sess-${seq++}`);
+    // Mirrors the real signature: an absent provider takes the default, which
+    // is what a client predating the picker sends.
+    create:  vi.fn((id, { provider = 'claude' } = {}) => {
+      const s = fakeSession(`sess-${seq++}`, provider);
       sessions.set(s.id, s);
       return s;
     }),
@@ -53,12 +55,16 @@ function stubSessionsApi() {
       cb && cb(had);
     }),
     get:  vi.fn((id) => sessions.get(id)),
-    list: vi.fn(() => [...sessions.values()].map(s => ({ id: s.id, cols: s.cols, rows: s.rows }))),
+    list: vi.fn(() => [...sessions.values()].map(s => ({
+      id: s.id, provider: s.provider, cols: s.cols, rows: s.rows,
+    }))),
     // GET /sessions serves describe(), not list(): the browser needs each
     // session's title and state, and list() stays cheap for the roster write.
     describe: vi.fn(() => [...sessions.values()].map(s => ({
       id: s.id, cols: s.cols, rows: s.rows, title: null, lastPrompt: null,
       status: 'unknown', unread: false, lastOutputAt: 0,
+      provider: s.provider, providerLabel: s.provider === 'codex' ? 'Codex' : 'Claude',
+      statusTracked: s.provider !== 'codex',
     }))),
     markViewed: vi.fn((id) => sessions.has(id)),
     // Part of the route contract: /send and /key report the keystroke so the
@@ -233,6 +239,55 @@ describe('session-aware endpoints', () => {
 
     const unknown = await request(app).post('/refresh').send({ session: 'nope-such' });
     expect(unknown.status).toBe(404);
+  });
+
+  it('POST /sessions starts the harness the body asked for', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const res = await request(app).post('/sessions').send({ provider: 'codex' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ provider: 'codex' });
+    expect(sessionsApi.create).toHaveBeenCalledWith(undefined, { provider: 'codex' });
+  });
+
+  it('POST /sessions takes the default when the body says nothing', async () => {
+    // A client that predates the picker sends no provider, and must keep
+    // working. Called with NO options at all rather than with an explicit
+    // default, so the server stays the single authority on what the default is.
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const res = await request(app).post('/sessions').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.provider).toBe('claude');
+    expect(sessionsApi.create).toHaveBeenCalledWith();
+  });
+
+  it('POST /sessions REJECTS an unknown provider instead of defaulting it', async () => {
+    // The load-bearing one. A provider id selects a command line, so a typo
+    // must not quietly start the other harness (or, with a default, the wrong
+    // one on the wrong billing account).
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    for (const bad of ['cursor', 'CLAUDE', 'claude ', '', 'claude;id', '__proto__', 42, null, ['codex']]) {
+      const res = await request(app).post('/sessions').send({ provider: bad });
+      expect(res.status, `provider ${JSON.stringify(bad)} should be rejected`).toBe(400);
+      expect(res.body.error).toBe('unknown provider');
+    }
+    expect(sessionsApi.create).not.toHaveBeenCalled();
+  });
+
+  it('GET /sessions rows say which harness a tab runs and whether it has a status', async () => {
+    // providerLabel comes from the server rather than a client-side id-to-name
+    // map, for the same reason the status vocabulary is contract-tested: a
+    // display name duplicated across the JSON boundary drifts, and it drifts
+    // into a tab labelled with a raw id.
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    await request(app).post('/sessions').send({ provider: 'codex' });
+    const res = await request(app).get('/sessions');
+    expect(res.body[0]).toMatchObject({
+      provider: 'codex', providerLabel: 'Codex', statusTracked: false,
+    });
   });
 
   it('rejects session ids with shell metacharacters across endpoints', async () => {
