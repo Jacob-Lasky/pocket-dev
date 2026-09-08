@@ -188,3 +188,33 @@ describe('Codex defaults in pocket-dev', () => {
     expect(code(dockerfile)).not.toMatch(/\/usr\/local\/bin\/codex\b/);
   });
 });
+
+// The repo-root AGENTS.md, which is how a Codex consult run inside this
+// checkout reaches this repo's invariants at all. Claude Code reads CLAUDE.md
+// and does not read AGENTS.md; Codex reads AGENTS.md and does not read
+// CLAUDE.md. Without this file a /second-opinion consult about the terminal is
+// run with none of the two-layer alt-screen rules, the serialize/ansi_up ban,
+// or the follow guard, which is exactly the material it needs in order not to
+// recommend something already tried and reverted.
+describe('repo-root AGENTS.md', () => {
+  const root = path.resolve(__dirname, '../../..');
+  const agentsPath = path.join(root, 'AGENTS.md');
+
+  it('exists at the repo root, where codex looks for it', () => {
+    expect(fs.existsSync(agentsPath)).toBe(true);
+  });
+
+  it('POINTS AT CLAUDE.md rather than restating the rules', () => {
+    // The whole design. Two harnesses need two filenames, but they must not
+    // need two BODIES: a second copy drifts, and catching the drift needs a
+    // check that then also has to be maintained. Asserting the pointer is what
+    // keeps someone from "helpfully" pasting the rules in here later.
+    const body = fs.readFileSync(agentsPath, 'utf8');
+    expect(body).toMatch(/CLAUDE\.md/);
+
+    // Strip the HTML comment before measuring length, since the explanation of
+    // WHY this is a pointer is legitimately long and is not rules content.
+    const prose = body.replace(/<!--[\s\S]*?-->/g, '').trim();
+    expect(prose.length).toBeLessThan(400);
+  });
+});
