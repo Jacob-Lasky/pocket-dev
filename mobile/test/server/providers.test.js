@@ -213,3 +213,32 @@ describe('statusTracked: whether the four attention states mean anything', () =>
     expect(statusTracked(resolveCapabilities('codex'))).toBe(false);
   });
 });
+describe('the registry is what the picker is built from', () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
+
+  // Same problem as the status vocabulary one layer down: the picker's provider
+  // ids are written in an HTML attribute, the registry is written here, and
+  // nothing but this file connects the two copies. A provider added to the
+  // registry with no button is undiscoverable; a button naming an id the
+  // registry does not have is a 400 on tap.
+  const picked = [...indexHtml.matchAll(/newSessionFromList\(\s*'([^']*)'\s*\)/g)].map(m => m[1]);
+
+  it('offers every provider in the registry as its own button', () => {
+    expect([...picked].sort()).toEqual([...PROVIDER_IDS].sort());
+  });
+
+  it('names no provider the server would reject', () => {
+    for (const id of picked) expect(isProvider(id), `picker offers unknown provider '${id}'`).toBe(true);
+  });
+
+  it('labels each button with the provider name the registry gives it', () => {
+    // Two explicit buttons rather than a cycling chip: a chip carries hidden
+    // state a phone user must read before tapping, and a mis-tap starts the
+    // wrong harness. The harness name has to be in the label.
+    const bar = indexHtml.slice(indexHtml.indexOf('id="sl-bar"'), indexHtml.indexOf('id="sl-rows"'));
+    for (const id of PROVIDER_IDS) {
+      expect(bar).toContain(`newSessionFromList('${id}')`);
+      expect(bar).toContain(`+ ${PROVIDERS.get(id).label}`);
+    }
+  });
+});

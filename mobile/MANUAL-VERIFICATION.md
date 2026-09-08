@@ -68,6 +68,18 @@ General:
 - [ ] `command -v codex` is `/usr/local/bin/codex` and nothing shadows it from `~/bin`; a consult's banner says `sandbox: read-only`, which is the only visible proof no bypass wrapper crept in.
 - [ ] From inside this checkout, run a consult whose prompt never mentions the rules and confirm codex reads `AGENTS.md`, follows it to `CLAUDE.md`, and obeys what it finds. CI only asserts the pointer file exists and stays a pointer; that codex FOLLOWS it is model behaviour, so re-check it after a codex major bump.
 
+## Provider per session (the whole point is a second harness, and CI runs one binary: no test in this repo starts codex, logs into it, or renders its TUI)
+- [ ] Session list → **+ Codex** starts a tab, and it comes up in Codex's own TUI rather than an error or a bare shell. If it dies immediately, read the pane: an unrecognised flag means a Claude-only argument reached the Codex command line.
+- [ ] That tab's row reads **`Codex · main-N`** and **`Status not tracked`**, with a grey dot, no unread dot, and a relative time that still ticks. A bare `main-N` means the provider label is not reaching the row; `Waiting on you` means the opaque state is not being applied and the tab is lying about needing you.
+- [ ] Leave the Codex tab THINKING (give it a long task) and watch the session list from another tab for a minute. The Sessions badge must NOT light and the row must NOT flip to `Waiting on you`. This is the one that cannot be tested here: it needs a real TUI painting real frames.
+- [ ] Session list → **+ Claude** still starts Claude, still gets an AI-generated title after its first turn, and still shows `Working` / `Waiting on you` / `Read`. The Codex work must not have flattened the Claude row.
+- [ ] `Ctrl-B c` and the keyboard path start a **Claude** tab (the default), silently and by design.
+- [ ] `curl -X POST -H 'Content-Type: application/json' -d '{"provider":"cursor"}' localhost:7681/sessions` returns **400 `unknown provider`** and creates nothing. A 200 means an unrecognised id is being defaulted through, which is a typo starting the wrong harness.
+- [ ] `docker restart pocket-dev` with one Claude tab and one Codex tab open. Both come back on their OWN harness: `docker logs pocket-dev` names the Codex one as having no conversation tracking, and the Codex pane is Codex and not Claude. A Codex tab that comes back running Claude means the restart loop is baking a process-wide command again.
+- [ ] `cat $PD_STATE_DIR/sessions.json` shows `"version": 2` and a `provider` on every entry.
+- [ ] Kill the Codex tab, then hand-edit `sessions.json` to name a provider that does not exist (`"provider": "gemini"`) and restart. The tab comes back as **Claude** with one warning in the log, rather than the server refusing to boot or dropping the tab.
+- [ ] Confirm `/second-opinion` still works from inside a Claude session, and that its banner still says `sandbox: read-only`. The Codex tab's command line carries the sandbox bypass, and the thing that must remain true is that nothing on `PATH` was shadowed, so a consult is unaffected.
+
 ## Focus events
 - [ ] Switch browser tab away from pocket-dev for 30 seconds, then back.
 - [ ] Claude Code's UI redraws cleanly (no stuck cursor, no stale spinner).
