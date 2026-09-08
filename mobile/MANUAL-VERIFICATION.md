@@ -61,10 +61,10 @@ General:
 - [ ] Typing a host name that is NOT the link host gives Lavish's `403` page naming the URL that does work — that's the DNS-rebinding guard, not a broken mapping. Add the name to `LAVISH_AXI_ALLOWED_HOSTS` if you want it to work.
 - [ ] Check the bind address is the container's own: `LAVISH_AXI_HOST` in the session's environment matches `eth0`, and it is neither `127.0.0.1` nor a wildcard. On a container attached to several networks, `entrypoint.sh` warns on stderr which one it picked — read `docker logs` before assuming the port mapping is wrong.
 
-## Codex defaults (CI only reads `entrypoint.sh`'s source; whether the file lands, and lands writable, is a live fact — see "Codex" in CLAUDE.md)
-- [ ] After a fresh container start, `cat ~/.codex/config.toml` in a session shows `model = "gpt-5.6-sol"` and `model_reasoning_effort = "high"`, and the file is writable by the session's uid.
-- [ ] `codex` reports that model in its banner (`codex --skip-git-repo-check` on a trivial prompt), so the file is being read and not just present.
-- [ ] Append a line to `~/.codex/config.toml`, restart the container, and confirm the line is still there — the seed must be skipped when the file exists, or `codex login` trust levels get discarded on every boot.
+## Codex defaults (CI only reads `entrypoint.sh`'s source; what lands in the home is a live fact — see "Codex" in CLAUDE.md)
+- [ ] Start a container against a home with NO `~/.codex/config.toml` (the fresh-home case the removed seed would have fired on) and confirm the file is still absent afterwards, while `~/.codex` itself exists and is writable by the session's uid.
+- [ ] Append a line to an existing `~/.codex/config.toml`, restart the container, and confirm the line is still there — nothing in this image may rewrite that file, or `codex login` trust levels get discarded on every boot.
+- [ ] A `/second-opinion` consult reports the model it passed with `-m` in codex's banner, so the flag is what decides the model and no base pin is needed.
 - [ ] `command -v codex` is `/usr/local/bin/codex` and nothing shadows it from `~/bin`; a consult's banner says `sandbox: read-only`, which is the only visible proof no bypass wrapper crept in.
 
 ## Focus events

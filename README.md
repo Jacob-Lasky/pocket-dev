@@ -64,7 +64,7 @@ Two things about that invocation are load-bearing rather than stylistic. `-s rea
 
 Run it from inside a checkout. Codex refuses to start outside a git repo (`Not inside a trusted directory`), and a session's starting directory is `$HOME`, which is not one. For a question with no diff attached, pass `--skip-git-repo-check`.
 
-**The model defaults are set for you.** On boot the container writes `~/.codex/config.toml` with `model = "gpt-5.6-sol"` (the top tier, and the Opus-equivalent one) and `model_reasoning_effort = "high"`, so a consult here answers like one run on a desktop with the same settings. It is written **only if the file is absent**, because that file also holds your `codex login` trust levels and per-project entries — so your own edits survive a restart, and a container that already has the file keeps whatever is in it.
+**The container does not pick a model for you.** `~/.codex/config.toml` is yours: nothing on boot writes it, so whatever you put there — or leave out — is what codex uses. An earlier build seeded a model and reasoning effort into it and that was removed, because the thing that actually runs consults here (`/second-opinion`) passes `-m` and `-c model_reasoning_effort` on every invocation anyway, and a base config that quietly pins a model gets in the way of layering one on top. Set options on the command line, as the example above does.
 
 There is no `codex` wrapper on `PATH`, and that is deliberate. `--dangerously-bypass-approvals-and-sandbox` overrides an explicit `-s read-only`, so a wrapper carrying it would quietly give every consult write access to the tree it is reviewing while the command still said read-only. If you alias `codex` on your desktop, do not copy that alias in here.
 

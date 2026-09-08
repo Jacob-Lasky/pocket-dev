@@ -115,25 +115,27 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
-  # Codex model defaults, matching cachyos-desktop. SEEDED ONLY IF ABSENT: this
-  # file also holds `codex login` trust levels and per-project entries, so
-  # rewriting it every boot would discard them.
+  # NO config.toml SEED FOR CODEX, ON PURPOSE. An earlier version of this block
+  # wrote `model = "gpt-5.6-sol"` and `model_reasoning_effort = "high"` here to
+  # match cachyos-desktop. Both reasons it was removed matter:
   #
-  # gpt-5.6-sol is the top tier (Sol > Terra > Luna) and the Opus 5 analogue on
-  # both role and price. DO NOT read the tier off codex's own model metadata
-  # `description`, which calls Sol an "everyday workhorse" and reads mid-tier.
+  # 1. IT BUYS NOTHING HERE. The dominant codex consumer in this container is
+  #    /second-opinion, which pins `-m` and passes `-c model_reasoning_effort`
+  #    on every single invocation. Interactive `codex` is rare, because the
+  #    browser terminal runs claude rather than a shell. The desktop is the
+  #    opposite case -- bare `codex` typed daily -- which is why the pin is
+  #    correct THERE and pointless here.
   #
-  # DELIBERATELY NO --dangerously-bypass-approvals-and-sandbox ALIAS HERE, and
-  # that is the important half. Measured 2026-09-07: that flag OUTRANKS an
-  # explicit `-s read-only`, so a wrapper carrying it would silently hand every
-  # /second-opinion consult full disk access while the consult still asked for
-  # read-only. pocket-dev is where those consults run. The desktop wraps `codex`
-  # because it is an interactive daily driver; this container must not.
-  if [ ! -e "$HOME/.codex/config.toml" ]; then
-    printf 'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "high"\n' \
-      > "$HOME/.codex/config.toml"
-    chmod 664 "$HOME/.codex/config.toml" 2>/dev/null || true
-  fi
+  # 2. ~/.codex/config.toml CARRIES A DO-NOT THAT FORBIDS IT. That file is the
+  #    BASE that ~/.codex/deepgram.config.toml layers on top of, and its own
+  #    header says: "DO NOT set model_provider, auth_mode, or a model here."
+  #    The Deepgram-billed path is entered only via the `codex-dg` wrapper, and
+  #    keeping the base minimal is what makes that split reasonable about.
+  #
+  # The seed was guarded `if [ ! -e ]`, so on Jake's existing home it correctly
+  # did nothing -- the defect was latent and would only have fired on a fresh
+  # home. DO NOT re-add it; set codex options on the command line, or in the
+  # config by hand where the DO-NOT has been reconsidered.
 
 fi
 
