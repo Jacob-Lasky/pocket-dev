@@ -66,6 +66,7 @@ General:
 - [ ] Append a line to an existing `~/.codex/config.toml`, restart the container, and confirm the line is still there — nothing in this image may rewrite that file, or `codex login` trust levels get discarded on every boot.
 - [ ] A `/second-opinion` consult reports the model it passed with `-m` in codex's banner, so the flag is what decides the model and no base pin is needed.
 - [ ] `command -v codex` is `/usr/local/bin/codex` and nothing shadows it from `~/bin`; a consult's banner says `sandbox: read-only`, which is the only visible proof no bypass wrapper crept in.
+- [ ] From inside this checkout, run a consult whose prompt never mentions the rules and confirm codex reads `AGENTS.md`, follows it to `CLAUDE.md`, and obeys what it finds. CI only asserts the pointer file exists and stays a pointer; that codex FOLLOWS it is model behaviour, so re-check it after a codex major bump.
 
 ## Focus events
 - [ ] Switch browser tab away from pocket-dev for 30 seconds, then back.
