@@ -7,6 +7,17 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  # Weekly refresh, because three tools in this image are installed UNPINNED on
+  # purpose (claude via install.sh, codex via npm -g, gh via apt stable) and
+  # therefore only move when a build runs. Without this they freeze at whatever
+  # was current the last time someone merged something, which is exactly what
+  # happened: the running container sat on codex 0.153.0 while upstream was on
+  # 0.153.4.
+  #
+  # Monday 06:00 UTC. Deliberately NOT paired with an automatic deploy: see the
+  # no-cache note below and the Tower user script `pocket-dev-codex-update`.
+  schedule:
+    - cron: '0 6 * * 1'
 
 env:
   REGISTRY: ghcr.io
@@ -57,6 +68,19 @@ jobs:
           # Go compile + node-pty native build) for a target nothing runs.
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
+          # THE SCHEDULED BUILD MUST IGNORE THE LAYER CACHE, or it is decorative.
+          #
+          # `cache-from: type=gha` below is what makes ordinary builds fast, and
+          # it is also what would defeat the whole point of the weekly run: a
+          # layer's cache key is derived from the Dockerfile instruction and the
+          # layers before it, NOT from what `npm install -g @openai/codex` would
+          # resolve to today. So an unchanged Dockerfile means that RUN is a
+          # cache HIT and the "unpinned so it tracks upstream" comment in the
+          # Dockerfile quietly stops being true.
+          #
+          # Only the scheduled event pays for this. Push and PR builds keep the
+          # cache, which matters because this image compiles node-pty natively.
+          no-cache: ${{ github.event_name == 'schedule' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

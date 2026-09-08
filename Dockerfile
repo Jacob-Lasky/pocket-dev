@@ -107,10 +107,28 @@ RUN mkdir -p /etc/apt/keyrings \
 # there would permanently shadow the image's own and never update again.
 #
 # Deliberately UNPINNED, the same call already made for `claude` (install.sh)
-# and `gh` (apt stable): every image build takes the current release, so the
-# tool tracks upstream instead of freezing at whatever was newest the day this
-# line was written. `codex --version` at the end puts the resolved version in
-# the build log, so a build is still self-documenting about what it shipped.
+# and `gh` (apt stable), so the tool tracks upstream instead of freezing at
+# whatever was newest the day this line was written. `codex --version` at the
+# end puts the resolved version in the build log, so a build is still
+# self-documenting about what it shipped.
+#
+# BUT UNPINNED IS NOT THE SAME AS UP TO DATE, and an earlier version of this
+# comment claimed "every image build takes the current release" without
+# qualification. That is false under layer caching: `cache-from: type=gha` in
+# docker-publish.yml means this RUN's cache key comes from the instruction and
+# the layers above it, NOT from what npm would resolve today, so an unchanged
+# Dockerfile makes this a cache HIT and the version does not move. Observed:
+# the running container sat on 0.153.0 while upstream was 0.153.4.
+#
+# Two things now make the claim true, and BOTH are needed:
+#   1. A weekly `schedule:` build in docker-publish.yml that passes
+#      `no-cache: true` for that event only, so this layer actually re-resolves.
+#   2. `pocket-dev-codex-update`, a Tower user script that runs
+#      `npm install -g` as root INSIDE the running container, because codex has
+#      no self-update of its own and a recreate would end the tmux sessions.
+# Claude needs neither: install.sh puts it in a uid-99-writable prefix with its
+# own updater, so it self-updates at runtime. Codex cannot, since this npm -g
+# lands in root-owned /usr/local while the container runs as uid 99.
 #
 # Roughly 300 MB, nearly all of it two Rust binaries (258 MB codex, 50 MB
 # codex-code-mode-host; measured on 0.147.0). npm resolves only the linux-x64

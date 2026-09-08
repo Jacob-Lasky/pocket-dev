@@ -1,6 +1,6 @@
 # pocket-dev
 
-Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) hosts N independent tmux sessions — each its own pty, each surfaced as its own xterm.js instance in a single browser tab. The `+New / Next / Last / Kill` toolbar row switches between them; only one is visible at a time, but each retains its own main-buffer scrollback so browser scroll (wheel + touch) never shows the wrong session's history. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main.
+Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) hosts N independent tmux sessions — each its own pty, each surfaced as its own xterm.js instance in a single browser tab. The `+New / Next / Last / Kill` toolbar row switches between them; only one is visible at a time, but each retains its own main-buffer scrollback so browser scroll (wheel + touch) never shows the wrong session's history. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main and on a weekly schedule.
 
 ## Per-session model — why it exists
 
@@ -226,7 +226,7 @@ Guard tests: `mobile/test/server/homeMount.test.js` covers all three files (Dock
 
 ## Deploy
 
-- CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags).
+- CI: `.github/workflows/test.yml` (vitest + playwright on PRs), `.github/workflows/docker-publish.yml` (push to GHCR on main / tags, plus a weekly `schedule:` refresh that builds with `no-cache` so the unpinned tools actually re-resolve — see "Codex, the second model in the container").
 - Tower: `ssh tower`, `docker pull ghcr.io/jacob-lasky/pocket-dev:latest`, stop/rm/run with the canonical args. The UnRAID template at `/boot/config/plugins/dockerMan/templates-user/my-pocket-dev.xml` is the source of truth for volumes / env / `--group-add 281`.
 - The package manager is **pnpm**, pinned by `packageManager` in `mobile/package.json` and read from that one place by both corepack (in the Dockerfile) and `pnpm/action-setup` (via `package_json_file` in CI). Do not repeat the version anywhere else.
 - pnpm settings live in `mobile/pnpm-workspace.yaml`, NOT the `pnpm` field of `package.json`, which pnpm 11 stopped reading. The load-bearing key is **`allowBuilds`**: pnpm blocks dependency build scripts by default and node-pty ships no linux-x64 prebuild, so without it every server suite fails with "Cannot find module ./prebuilds/linux-x64//pty.node". `onlyBuiltDependencies` is pnpm 10's spelling and 11.17.0 ignores it silently — the file records the measurement.
@@ -256,7 +256,14 @@ dgvpn gh repo view ...                                            # public egres
 
 **It goes in `/usr/local`, and both alternatives are traps.** `/home/claude` is a bind mount that ships EMPTY, so an image-owned binary written under it is masked the moment the mount lands. `~/bin` is worse: it is the prefix for CLIs a SESSION installs for itself, it sits EARLIER on `PATH` than `/usr/local/bin`, and a copy left there would shadow the image's own on every future update, silently, forever. `test/server/codex.test.js` guards both, plus the build-cache ordering (the install is ~300 MB of Rust binary and belongs above `COPY mobile/`, not below it).
 
-**Unpinned on purpose**, the same call already made for `claude` and `gh`: each build takes the current release and `codex --version` puts the resolved one in the build log. The `/second-opinion` skill records CLI traps measured against a specific version and says to re-verify after a major bump, which is a per-major job, not a per-build one.
+**Unpinned on purpose**, the same call already made for `claude` and `gh`, so the tool tracks upstream instead of freezing at whatever was newest the day the line was written. `codex --version` at the end of the build puts the resolved version in the build log, so a build is self-documenting about what it shipped. The `/second-opinion` skill records CLI traps measured against a specific version and says to re-verify after a major bump, which is a per-major job, not a per-build one.
+
+**UNPINNED IS NOT THE SAME AS UP TO DATE, and believing otherwise is what let the version rot.** `cache-from: type=gha` in `docker-publish.yml` derives this RUN's cache key from the instruction and the layers above it, NOT from what `npm install -g @openai/codex` would resolve today, so an unchanged Dockerfile makes it a cache HIT and the version does not move. Measured: the running container sat on codex 0.153.0 while upstream was on 0.153.4. Two things make the claim true and BOTH are needed:
+
+1. **A weekly `schedule:` build** (Monday 06:00 UTC) in `docker-publish.yml` that passes `no-cache: ${{ github.event_name == 'schedule' }}` — cache-busting ONLY that event, because push and PR builds still want the cache for the native node-pty compile. A scheduled build that kept the cache would be decorative: same key, same hit, same codex.
+2. **`pocket-dev-codex-update`**, a Tower user script that runs `npm install -g @openai/codex` as root INSIDE the running container. That step exists because a new image on GHCR is not a new codex in the tab: taking it the normal way means a recreate, which ends every tmux session. The scheduled build is deliberately NOT paired with an automatic deploy for the same reason.
+
+**Claude needs neither, and the asymmetry is about where the binary lands.** `install.sh` puts `claude` in a uid-99-writable prefix with its own updater, so it self-updates at runtime. This `npm install -g` lands in root-owned `/usr/local` while the container runs as uid 99, so codex cannot update itself in place — hence the root-run script.
 
 **Auth lives in `~/.codex/auth.json`, inside the home mount, so it survives image updates on its own.** There is no browser in the container, so the login is the device-code flow:
 
@@ -327,7 +334,7 @@ lavish-axi poll /coding/dump/plan/plan.html # long-poll until the human sends fe
 lavish-axi end /coding/dump/plan/plan.html  # agent-initiated end; a plain reopen still works
 ```
 
-Installed by `npm install -g lavish-axi` in the Dockerfile. Same `/usr/local` reasoning and the same two traps as codex: `/home/claude` is a bind mount that ships EMPTY so an image-owned binary under it is masked, and `~/bin` is EARLIER on `PATH` than `/usr/local/bin` so a copy left there shadows the image's own forever. Unpinned on purpose, with `lavish-axi --version` in the build log.
+Installed by `npm install -g lavish-axi` in the Dockerfile. Same `/usr/local` reasoning and the same two traps as codex: `/home/claude` is a bind mount that ships EMPTY so an image-owned binary under it is masked, and `~/bin` is EARLIER on `PATH` than `/usr/local/bin` so a copy left there shadows the image's own forever. Unpinned on purpose, with `lavish-axi --version` in the build log — and subject to the same cache-hit freeze as codex, which the weekly `no-cache` build in `docker-publish.yml` is what thaws.
 
 **Being reachable is a five-link chain and every link fails silently.** `test/server/lavish.test.js` guards the WIRING of all five, and deliberately not the service: nothing in it starts the real CLI, inspects the socket it actually binds, or reaches it through a published port, because none of that is available to the cat-based E2E suite. Those are covered by a live pass, recorded at the end of this section, and the split is the same one `MANUAL-VERIFICATION.md` exists for. `test/server/pdEnv.js` scrubs the whole `LAVISH_` prefix (alongside `PD_`) out of the environment it hands spawned scripts, for a bug it had already been bitten by once: inside a real pocket-dev tab `LAVISH_AXI_HOST` is exported, so an inherited one makes `entrypoint.sh`'s resolution block skip entirely and every stubbed-`hostname` case compares the live container's address against what the test set up. Green in CI, red only inside pocket-dev, which is where these tests get run at least as often.
 
