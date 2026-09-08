@@ -87,6 +87,12 @@ describe('the command line a provider selects', () => {
     // any -m string without validating it, so `-m sol` prints a plausible
     // banner and is not a model. The must-fail-control recipe is in
     // ~/.claude/skills/second-opinion/SKILL.md <model_choice>.
+    // The wrapper and the pin are ONE decision: Sol exists on the Deepgram API
+    // account and does NOT exist on the ChatGPT seat, so pinning it is only
+    // correct while the command routes through codex-dg. Asserting both here is
+    // what stops someone "simplifying" the wrapper away and leaving a pin that
+    // 400s every tab, which is exactly what happened once.
+    expect(commandFor('codex')).toMatch(/^codex-dg\b/);
     expect(commandFor('codex')).toContain('-m gpt-5.6-sol');
   });
 
