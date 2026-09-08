@@ -68,15 +68,34 @@ describe('the command line a provider selects', () => {
     expect(commandFor('claude', { remoteControl: false })).toContain('claude --dangerously-skip-permissions');
   });
 
+  it('PINS the model to the newest Sol rather than inheriting the account default', () => {
+    // The tab must run the tier the owner asked for, and inheriting does not
+    // give it. Measured 2026-09-08: the account default is `gpt-6-astra`, which
+    // is the Fable-tier model (confirmed by Jake), while the standing
+    // preference is Sol, the Opus-tier one. Those are different rungs, so
+    // "no -m tracks latest" was true and still produced the wrong model.
+    //
+    // 5.6 is the newest Sol that EXISTS: `gpt-6-sol` returns the same 400 as a
+    // deliberately bogus model id, so there is no gpt-6 Sol to move up to.
+    //
+    // An earlier version of this suite asserted the OPPOSITE -- that no -m is
+    // passed -- justified by "it would fight the model seeded into
+    // ~/.codex/config.toml". That seed was removed in #55, so the reason had
+    // already expired when this was written; the assertion outlived it.
+    //
+    // Re-check before bumping, and do NOT trust the startup banner: it echoes
+    // any -m string without validating it, so `-m sol` prints a plausible
+    // banner and is not a model. The must-fail-control recipe is in
+    // ~/.claude/skills/second-opinion/SKILL.md <model_choice>.
+    expect(commandFor('codex')).toContain('-m gpt-5.6-sol');
+  });
+
   it('runs codex, and does NOT pass a flag the interactive CLI rejects', () => {
     // Measured against codex-cli 0.151.0: --skip-git-repo-check exists on
     // `codex exec` ONLY, so passing it to the TUI stops the tab starting.
-    // Passing -m would fight the model seeded into ~/.codex/config.toml.
     const cmd = commandFor('codex');
     expect(cmd).toMatch(/^codex\b/);
     expect(cmd).not.toContain('--skip-git-repo-check');
-    expect(cmd).not.toMatch(/(^|\s)-m(\s|$)/);
-    expect(cmd).not.toContain('--model');
     // The inner alt-screen is load-bearing for the terminal (invariant 1), and
     // this flag turns it off.
     expect(cmd).not.toContain('--no-alt-screen');
