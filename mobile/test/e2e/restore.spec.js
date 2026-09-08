@@ -12,7 +12,7 @@
 //     `new-session -A` spawn reattaches to the live sessions, scrollback intact.
 //
 // Note the fixture sets SHELL_CMD=cat, which disables the Claude conversation
-// resume path (see RESUME_ENABLED in server.js). What is proven here is the
+// resume path (see CAPABILITIES in server.js). What is proven here is the
 // roster half; the resume half is proven in test/server/sessionLauncher.test.js
 // and test/server/sessionsRestore.test.js, since `cat` has no conversation.
 

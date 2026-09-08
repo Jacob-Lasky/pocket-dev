@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSessionStore, nullSessionStore } from '../../sessionStore.js';
+import { createSessionStore, nullSessionStore, ROSTER_VERSION } from '../../sessionStore.js';
 
 let dir;
 
@@ -20,7 +20,8 @@ describe('session roster', () => {
   it('round-trips the session ids', () => {
     const store = createSessionStore({ dir });
     store.save([{ id: 'main-1' }, { id: 'main-2' }]);
-    expect(createSessionStore({ dir }).load()).toEqual([{ id: 'main-1' }, { id: 'main-2' }]);
+    expect(createSessionStore({ dir }).load())
+      .toEqual([{ id: 'main-1', provider: 'claude' }, { id: 'main-2', provider: 'claude' }]);
   });
 
   it('returns an empty roster on first boot (no file yet)', () => {
@@ -30,7 +31,7 @@ describe('session roster', () => {
   it('creates the state dir on demand', () => {
     const nested = path.join(dir, 'deep', 'deeper');
     createSessionStore({ dir: nested }).save([{ id: 'main-1' }]);
-    expect(createSessionStore({ dir: nested }).load()).toEqual([{ id: 'main-1' }]);
+    expect(createSessionStore({ dir: nested }).load()).toEqual([{ id: 'main-1', provider: 'claude' }]);
   });
 
   it('survives a corrupt roster instead of throwing', () => {
@@ -64,7 +65,7 @@ describe('session roster', () => {
         { id: 'main-9' },
       ],
     }));
-    expect(store.load()).toEqual([{ id: 'main-9' }]);
+    expect(store.load()).toEqual([{ id: 'main-9', provider: 'claude' }]);
   });
 
   it('de-duplicates repeated ids', () => {
@@ -73,7 +74,7 @@ describe('session roster', () => {
       version: 1,
       sessions: [{ id: 'main-1' }, { id: 'main-1' }],
     }));
-    expect(store.load()).toEqual([{ id: 'main-1' }]);
+    expect(store.load()).toEqual([{ id: 'main-1', provider: 'claude' }]);
   });
 
   it('leaves the previous roster intact when a write fails', () => {
@@ -84,7 +85,7 @@ describe('session roster', () => {
     });
     expect(() => store.save([{ id: 'main-2' }])).not.toThrow();
     spy.mockRestore();
-    expect(createSessionStore({ dir }).load()).toEqual([{ id: 'main-1' }]);
+    expect(createSessionStore({ dir }).load()).toEqual([{ id: 'main-1', provider: 'claude' }]);
   });
 
   it('disables itself quietly after a write failure instead of crashing the server', () => {
@@ -180,7 +181,133 @@ describe('clean-shutdown marker', () => {
     const store = createSessionStore({ dir });
     store.save([{ id: 'main-1' }]);
     expect(store.consumeCleanShutdown()).toBe(false);
-    expect(store.load()).toEqual([{ id: 'main-1' }]);
+    expect(store.load()).toEqual([{ id: 'main-1', provider: 'claude' }]);
+  });
+});
+
+describe('the provider each session runs, carried by the roster', () => {
+  // The roster went to version 2 to hold this. What makes the migration cheap
+  // is that BOTH directions are the same code path: per-entry validation with a
+  // default, and no read of parsed.version anywhere in load().
+
+  it('round-trips a provider that is not the default', () => {
+    const store = createSessionStore({ dir });
+    store.save([{ id: 'main-1', provider: 'codex' }, { id: 'main-2', provider: 'claude' }]);
+    expect(createSessionStore({ dir }).load()).toEqual([
+      { id: 'main-1', provider: 'codex' },
+      { id: 'main-2', provider: 'claude' },
+    ]);
+  });
+
+  it('writes version 2', () => {
+    const store = createSessionStore({ dir });
+    store.save([{ id: 'main-1', provider: 'codex' }]);
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'sessions.json'), 'utf8'));
+    expect(raw.version).toBe(2);
+    expect(ROSTER_VERSION).toBe(2);
+  });
+
+  it('reads a version 1 roster and gives every entry the default provider', () => {
+    // The upgrade case, and the whole reason no version switch is needed: an
+    // entry with no provider field is indistinguishable from an entry whose
+    // provider failed validation, and both want the same answer.
+    const store = createSessionStore({ dir, logger: quietLogger });
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({
+      version: 1,
+      sessions: [{ id: 'main-1' }, { id: 'main-2' }],
+    }));
+    expect(store.load()).toEqual([
+      { id: 'main-1', provider: 'claude' },
+      { id: 'main-2', provider: 'claude' },
+    ]);
+  });
+
+  it('LOADS a roster from a newer pocket-dev instead of refusing it', () => {
+    // Regression guard for the version gate nobody should add. A gate here
+    // loses every tab on a downgrade, and this module's contract is that a
+    // terminal which loses its tabs is degraded while one that will not start
+    // is broken. The unknown provider is repaired, the unknown field ignored,
+    // and the tabs come back.
+    const logger = { warn: vi.fn(), log: vi.fn() };
+    const store  = createSessionStore({ dir, logger });
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({
+      version: 99,
+      sessions: [
+        { id: 'main-1', provider: 'gemini', someFutureField: true },
+        { id: 'main-2', provider: 'codex' },
+      ],
+    }));
+    expect(store.load()).toEqual([
+      { id: 'main-1', provider: 'claude' },
+      { id: 'main-2', provider: 'codex' },
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('roster version 99'));
+  });
+
+  it('mentions a newer roster once per process, not once per read', () => {
+    // Same reasoning as disable(): the roster is read at boot but the store is
+    // long-lived, and a notice that scrolls is a notice nobody reads.
+    const logger = { warn: vi.fn(), log: vi.fn() };
+    const store  = createSessionStore({ dir, logger });
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({
+      version: 99, sessions: [{ id: 'main-1' }],
+    }));
+    store.load(); store.load(); store.load();
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  it('says nothing about the version when it is the one we write', () => {
+    const logger = { warn: vi.fn(), log: vi.fn() };
+    const store  = createSessionStore({ dir, logger });
+    store.save([{ id: 'main-1', provider: 'codex' }]);
+    expect(store.load()).toEqual([{ id: 'main-1', provider: 'codex' }]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('repairs an unrecognised or malformed provider rather than dropping the tab', () => {
+    // The asymmetry with the id gate above is deliberate. A bad id has no safe
+    // interpretation, so it is dropped; a bad provider has an obvious one, and
+    // the tab is worth more than the field. What must NOT happen is the value
+    // reaching a command line: every one of these would otherwise be a shell
+    // string or an object index.
+    const store = createSessionStore({ dir, logger: quietLogger });
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({
+      version: 2,
+      sessions: [
+        { id: 'a', provider: 'Claude' },
+        { id: 'b', provider: 'claude; rm -rf /' },
+        { id: 'c', provider: '../../etc/passwd' },
+        { id: 'd', provider: '' },
+        { id: 'e', provider: 42 },
+        { id: 'f', provider: null },
+        { id: 'g', provider: '__proto__' },
+        { id: 'h', provider: 'constructor' },
+        { id: 'i', provider: 'cursor' },
+        { id: 'j', provider: 'codex' },
+      ],
+    }));
+    expect(store.load()).toEqual([
+      { id: 'a', provider: 'claude' },
+      { id: 'b', provider: 'claude' },
+      { id: 'c', provider: 'claude' },
+      { id: 'd', provider: 'claude' },
+      { id: 'e', provider: 'claude' },
+      { id: 'f', provider: 'claude' },
+      { id: 'g', provider: 'claude' },
+      { id: 'h', provider: 'claude' },
+      { id: 'i', provider: 'claude' },
+      { id: 'j', provider: 'codex' },
+    ]);
+  });
+
+  it('defaults on the way OUT too, so a stale caller cannot write a bad entry', () => {
+    const store = createSessionStore({ dir });
+    store.save([{ id: 'main-1' }, { id: 'main-2', provider: 'nope' }]);
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'sessions.json'), 'utf8'));
+    expect(raw.sessions).toEqual([
+      { id: 'main-1', provider: 'claude' },
+      { id: 'main-2', provider: 'claude' },
+    ]);
   });
 });
 

@@ -340,6 +340,13 @@
     .sl-status[data-state="asking"] .d    { background: #56d364; box-shadow: 0 0 6px #56d36499; }
     .sl-status[data-state="read"]         { color: #6e7681; }
     .sl-status[data-state="read"] .d      { background: #6e7681; }
+    /* No status axis at all. NEUTRAL GREY AND NOT AN ERROR COLOUR: running a
+       harness pocket-dev cannot read is a supported configuration, not a fault,
+       and a red row would send the user looking for a break that is not there.
+       Dimmer than 'read' so the two are still distinguishable, since "done, and
+       you saw it" and "there is nothing to know" are different facts. */
+    .sl-status[data-state="opaque"]       { color: #6e7681; }
+    .sl-status[data-state="opaque"] .d    { background: #484f58; }
 
     @keyframes sl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
     @media (prefers-reduced-motion: reduce) {
@@ -476,9 +483,17 @@
   <!-- Session list: the primary way to move between sessions. Overlays the app
        so the terminal panes underneath keep their layout. -->
   <div id="session-list">
+    <!-- TWO EXPLICIT BUTTONS, NOT A CYCLING CHIP. A chip carries hidden state
+         the user has to read before tapping, and on a phone a mis-tap starts
+         the wrong harness on the wrong billing account. Two buttons make the
+         choice and the action the same tap and put the harness name in the
+         label. The provider ids here are checked against the registry by
+         test/server/providers.test.js, so a button naming an id the server
+         would 400 cannot ship. -->
     <div id="sl-bar">
       <span id="sl-count">–</span>
-      <button class="action-btn tmux-btn" onclick="newSessionFromList()" title="Start a new session">+ New</button>
+      <button class="action-btn tmux-btn" onclick="newSessionFromList('claude')" title="Start a new Claude session">+ Claude</button>
+      <button class="action-btn tmux-btn" onclick="newSessionFromList('codex')" title="Start a new Codex session">+ Codex</button>
     </div>
     <ul id="sl-rows"></ul>
   </div>
@@ -570,6 +585,7 @@
       const k = e.key.toLowerCase();
       if (k === 'n') { cycleActive(+1); return true; }
       if (k === 'p') { cycleActive(-1); return true; }
+      // Ctrl-B c starts a tab on the DEFAULT provider; see tmuxNew.
       if (k === 'c') { tmuxNew();      return true; }
       if (k === 'l') { tmuxLast();     return true; }
       // Deliberately NOT killPressed(): the two-tap arm exists because the ✕
@@ -655,6 +671,16 @@
         // Server-authoritative, refreshed by every GET /sessions.
         this.unread = false;
         this.lastOutputAt = 0;
+        // Which harness this tab runs, from the same poll.
+        this.provider      = null;
+        this.providerLabel = null;
+        // DELIBERATELY undefined AND NOT false. attention.js reads this with
+        // `=== false`, so undefined is the "not answered yet" value and a pane
+        // behaves exactly as it did before providers existed until its first
+        // poll lands. Initialising it to false would render every pane as
+        // "Status not tracked" for the first few seconds of its life, including
+        // every Claude pane, which is the opposite of what the flag is for.
+        this.statusTracked = undefined;
 
         this.ws       = null;
         this.wsStatus = 'connecting';
@@ -994,6 +1020,13 @@
         s.claudeStatus = entry.status ?? 'unknown';
         s.unread       = entry.unread === true;
         s.lastOutputAt = entry.lastOutputAt || 0;
+        s.provider      = entry.provider ?? null;
+        s.providerLabel = entry.providerLabel ?? null;
+        // Copied through UNNORMALISED, and `=== false` in attention.js is what
+        // reads it. A server that does not send the field leaves this undefined
+        // and every row behaves exactly as it did before providers existed;
+        // coercing it to a boolean here would make that case opaque.
+        s.statusTracked = entry.statusTracked;
       }
       updateSessionLabel();
       updateDocumentTitle();
@@ -1038,11 +1071,23 @@
       return r.json();
     }
 
-    async function createSession() {
-      const r = await fetch('/sessions', { method: 'POST' });
+    // `provider` picks the harness. Omitted, the SERVER chooses the default:
+    // this deliberately does not name one, so the default lives in exactly one
+    // place. An id the server does not recognise comes back 400 and throws
+    // here, rather than quietly starting the other harness.
+    async function createSession(provider) {
+      const r = await fetch('/sessions', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(provider ? { provider } : {}),
+      });
       if (!r.ok) throw new Error(`/sessions POST ${r.status}`);
-      const { id } = await r.json();
+      const { id, provider: started } = await r.json();
       const s = addSession(id);
+      // Seeded from the response so the row is labelled correctly before the
+      // first metadata poll arrives. The label and statusTracked come from
+      // describe(), so they land a moment later.
+      s.provider = started ?? null;
       setActive(id);
       return s;
     }
@@ -1189,7 +1234,19 @@
         }
         const { row, title, time, status, statusText, prev } = refs;
 
-        const titleText = s.title || (id === activeId ? 'Current session' : id);
+        // A session whose harness writes no transcript has no AI-generated
+        // title to show and never will, so it is named for what it IS. This is
+        // the highest-value line in the provider feature: it turns a bare
+        // `main-3` into `Codex · main-3` and makes the tab legible. Claude rows
+        // keep their conversation title, and a Claude tab too new to have one
+        // keeps the existing fallback, so nothing regresses.
+        //
+        // Keyed off statusTracked rather than the provider id, for the same
+        // reason the label comes from the server: the client holds no table of
+        // which providers write transcripts.
+        const titleText = s.title
+          || (s.statusTracked === false && s.providerLabel ? `${s.providerLabel} · ${id}` : null)
+          || (id === activeId ? 'Current session' : id);
         setText(title, titleText);
         setText(time, ago(s.lastOutputAt));
         setText(statusText, STATE_TEXT[state]);
@@ -1197,7 +1254,7 @@
         const unread = String(unreadFlag(s));
         if (row.dataset.unread !== unread) row.dataset.unread = unread;
         if (status.dataset.state !== state) status.dataset.state = state;
-        const label = `${s.title || id}. ${STATE_TEXT[state]}.`;
+        const label = `${titleText}. ${STATE_TEXT[state]}.`;
         if (row.getAttribute('aria-label') !== label) row.setAttribute('aria-label', label);
 
         // Put the row in the right place only if it is not already there, so a
@@ -1260,8 +1317,13 @@
       scheduleMetaPoll();
     };
 
-    window.newSessionFromList = async function() {
-      await createSession();
+    // Takes the provider as an argument straight from the onclick attribute.
+    // onclick-coverage.test.js captures the bare identifier before the paren,
+    // so an argument in the attribute is fine and this stays exposed via the
+    // `window.` assignment. A NEW handler name would have to be added to the
+    // Object.assign block at the bottom in the same change.
+    window.newSessionFromList = async function(provider) {
+      await createSession(provider);
       closeSessionList();
     };
 
@@ -1593,6 +1655,13 @@
     });
 
     // ── Session-switch row (was: tmux row) ─────────────────────────────────
+    // TAKES THE DEFAULT PROVIDER, deliberately and by omission. This is one of
+    // two new-tab paths with no UI (the other is the Ctrl-B c prefix binding
+    // that calls it), so there is nowhere to put a picker: a keyboard chord has
+    // no room for a choice and inventing a second chord per provider would
+    // scale with the registry. Said out loud here because a silent default on a
+    // keyboard path is how the second harness becomes undiscoverable; the
+    // discoverable path is the two buttons in the session list.
     async function tmuxNew() {
       await createSession();
     }

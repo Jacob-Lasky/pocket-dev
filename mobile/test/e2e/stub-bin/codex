@@ -1,0 +1,44 @@
+#!/bin/bash
+# A stand-in for the real `codex`, so the e2e suite can run a session on a
+# provider whose harness pocket-dev cannot read.
+#
+# IT REPAINTS UNBIDDEN, and that is the whole point. A tab on a provider with no
+# transcript reads as status 'unknown' forever, so before the unreadAxis enum
+# every frame it painted WHILE THINKING advanced the server's unread counter
+# with nothing to ever close the guard. The row then read "Waiting on you" and
+# lit the attention badge, which is the strongest signal the UI has, fired by a
+# session doing the opposite of needing the user. Nothing in the suite could
+# produce that state before a provider was selectable: `cat` only speaks when
+# spoken to.
+#
+# DELIBERATELY NOT AN ATTEMPT TO BE REAL CODEX, and do not "improve" it into
+# one. Measured 2026-09-07 against codex-cli 0.151.0 driven from a bare pty: it
+# emits 613 bytes of terminal capability queries and then BLOCKS FOREVER waiting
+# for replies a dumb pty never sends:
+#
+#   \e[>4;0m  \e[>7u  \e]10;?\e\\  \e]11;?\e\\
+#
+# (kitty-keyboard support, then foreground and background colour). xterm.js
+# answers those, which is why real codex works in pocket-dev at all, but a
+# fixture harness does not, so wiring the real binary in here would hang at
+# startup and read as a broken test. This is a plain frame emitter for the same
+# reason stub-bin/claude is a plain script.
+#
+# It ignores its argv, including --dangerously-bypass-approvals-and-sandbox,
+# which the real command line carries.
+#
+# NOTE what this stub does NOT claim: whether real Codex actually emits bytes
+# while thinking is UNVERIFIED. 'none' is right either way. If it repaints, this
+# is the false summons avoided; if it is silent, counting its bytes could only
+# ever have added noise, and the row still says "not tracked".
+
+printf 'CODEX-STUB-READY\r\n'
+
+# Repaint on a timer, the way a TUI redraws while it works. Cursor-addressed and
+# in place, so this is a repaint rather than accumulating output.
+n=0
+while true; do
+  n=$((n + 1))
+  printf '\033[HFrame %d\033[K\r\n' "$n"
+  sleep 0.2
+done

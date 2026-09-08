@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STATUSES, WANTS_USER, TURN_SETTLED, USER_INPUT_TOOLS } from '../../claudeSession.js';
 import { GONE_CODE } from '../../server.js';
+import { PROVIDER_IDS, resolveCapabilities, statusTracked } from '../../providers.js';
 import { rowState, wantsUser, STATE_TEXT } from '../../public/js/attention.js';
 
 // The status vocabulary crosses a wire. `claudeSession.js` produces it (CJS,
@@ -46,11 +47,22 @@ describe('status vocabulary: server producer vs browser consumer', () => {
   });
 
   it('defers to the unread flag for a status it cannot classify', () => {
-    // 'unknown' is deliberately NOT in WANTS_USER — becoming unclassifiable is
-    // not news — but it has a SECOND news mechanism the others do not: the
-    // server counts raw pty output for it, because there is no conversation to
-    // read. So the browser must honour the unread flag here rather than take the
-    // status as the whole answer.
+    // 'unknown' is deliberately NOT in WANTS_USER, since becoming
+    // unclassifiable is not news, but it has a SECOND news mechanism the others
+    // do not: the server counts raw pty output for it. So the browser must
+    // honour the unread flag here rather than take the status as the whole
+    // answer.
+    //
+    // THAT SECOND MECHANISM IS NOW PER PROVIDER, so the reason this assertion
+    // holds is narrower than it used to be. Bytes count for a session on the
+    // 'bytes' axis (permanently, because no transcript will ever arrive) and
+    // for one on 'turns' while its status is still 'unknown' (the brand new
+    // Claude tab, a window that closes itself). They do NOT count on 'none',
+    // and such a session never reaches this branch at all: rowState returns
+    // 'opaque' before the status is read. So this case is about a session that
+    // HAS an axis and has not been classified yet, which is why keying the
+    // opaque branch off `status === 'unknown'` instead of off the provider
+    // would break it.
     expect(WANTS_USER.has('unknown')).toBe(false);
     expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: true },  'other')).toBe('waiting');
     expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: false }, 'other')).toBe('read');
@@ -72,6 +84,69 @@ describe('status vocabulary: server producer vs browser consumer', () => {
     for (const machineTool of ['Bash', 'Read', 'Edit', 'Write', 'WebFetch', 'Agent', 'Task', 'Skill']) {
       expect(USER_INPUT_TOOLS.has(machineTool), `${machineTool} is answered by the machine`).toBe(false);
     }
+  });
+});
+
+// The same problem as the status vocabulary, for the flag that decides whether
+// the status vocabulary applies at all. providers.js computes statusTracked
+// (CJS, server), attention.js reads it (ESM, browser), and JSON in between means
+// the two halves are necessarily written twice.
+//
+// The half-change this stops: the server starts reporting a provider as
+// untracked and the browser keeps guessing from the unread axis, so a session
+// that is thinking says "Waiting on you" and lights the attention badge. Or the
+// reverse, the browser goes strict on a flag no server sends, and every row
+// goes opaque.
+describe('statusTracked: server producer vs browser consumer', () => {
+  it('gives every provider a row state with a real label', () => {
+    for (const id of PROVIDER_IDS) {
+      const tracked = statusTracked(resolveCapabilities(id));
+      const state   = rowState({ id: 'a', claudeStatus: 'unknown', unread: true, statusTracked: tracked }, 'other');
+      expect(STATE_TEXT[state], `no label for provider '${id}'`).toBeTruthy();
+    }
+  });
+
+  it('renders exactly the providers the server calls untracked as opaque', () => {
+    // Both directions, so neither side can go strict or lax on its own.
+    for (const id of PROVIDER_IDS) {
+      const tracked = statusTracked(resolveCapabilities(id));
+      const state   = rowState({ id: 'a', claudeStatus: 'unknown', unread: true, statusTracked: tracked }, 'other');
+      expect(state === 'opaque', `provider '${id}' tracked=${tracked} rendered as '${state}'`).toBe(!tracked);
+      // And an untracked provider must never claim the user.
+      if (!tracked) expect(wantsUser(state)).toBe(false);
+    }
+  });
+
+  it('keeps a plain shell session ON the attention axis', () => {
+    // SHELL_CMD collapses every capability, and this is the one that must NOT
+    // collapse: a shell has no conversation and its line output is still real
+    // news, so its row keeps saying something true. Turning it opaque would
+    // change what four e2e fixtures see for no reason.
+    for (const id of PROVIDER_IDS) {
+      const caps = resolveCapabilities(id, { shellOverride: true });
+      // A provider with no meaningful output axis of its own stays untracked
+      // even here, because replacing a command line does not create a signal.
+      if (resolveCapabilities(id).unreadAxis === 'none') continue;
+      expect(statusTracked(caps), `'${id}' under SHELL_CMD`).toBe(true);
+    }
+  });
+
+  it('is a ROW state and not a transcript status, so the server cannot emit it', () => {
+    // 'opaque' answers "is there an axis", which is not a thing a transcript
+    // can say. Adding it to claudeSession's STATUSES would put it on the wrong
+    // side of the boundary and give it a second, contradictory producer.
+    expect(STATUSES).not.toContain('opaque');
+    expect(WANTS_USER.has('opaque')).toBe(false);
+    expect(TURN_SETTLED.has('opaque')).toBe(false);
+  });
+
+  it('does NOT key off status === unknown, which is the natural-looking mistake', () => {
+    // A brand new Claude tab reads 'unknown' before its first turn is written
+    // and DOES have an axis: its own output. The case pinned above at
+    // "defers to the unread flag" is that tab, and it must keep passing for the
+    // right reason rather than by accident of a status-keyed branch.
+    expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: true,  statusTracked: true }, 'other')).toBe('waiting');
+    expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: false, statusTracked: true }, 'other')).toBe('read');
   });
 });
 

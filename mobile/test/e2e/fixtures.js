@@ -291,10 +291,22 @@ async function waitForActiveChange(page, previous) {
   }, { timeout: 10000 }).toBe(true);
 }
 
+// Start a tab on the DEFAULT provider. The button is labelled by harness now,
+// not `+ New`: the picker is two explicit buttons so the choice and the action
+// are the same tap and the harness name is in the label. Twenty-eight calls
+// across nine specs come through here, so this selector is the single place
+// that has to track that label. DO NOT inline `page.click` on the picker in a
+// spec; go through one of these two.
 export async function newSession(page) {
+  return newSessionWithProvider(page, 'Claude');
+}
+
+// Start a tab on a named provider. `label` is the provider's display label as
+// the server supplies it, which is what the button carries.
+export async function newSessionWithProvider(page, label) {
   const before = await activeSessionId(page);
   await openSessionList(page);
-  await page.click('#sl-bar >> text=+ New');
+  await page.click(`#sl-bar >> text=+ ${label}`);
   await waitForActiveChange(page, before);
 }
 

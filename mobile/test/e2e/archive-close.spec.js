@@ -2,7 +2,7 @@
 //
 // This runs on the pdServerClaudeStub fixture, NOT the usual `cat` one, for the
 // same reason titles.spec.js does: setting SHELL_CMD switches the whole
-// conversation machinery off (see RESUME_ENABLED in server.js), and this feature
+// conversation machinery off (see CAPABILITIES in server.js), and this feature
 // reads the transcript, so on the cat fixture it is not merely untested, it is
 // disabled. That is the documented cat gap, and it is why the assertions below
 // exist alongside the unit tests rather than instead of them.

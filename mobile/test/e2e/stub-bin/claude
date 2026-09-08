@@ -4,7 +4,7 @@
 # conversation id, the sid-file handoff, and titles reaching GET /sessions.
 #
 # The `cat` fixture cannot reach any of that, because setting SHELL_CMD turns
-# conversation resume off entirely (see RESUME_ENABLED in server.js). This stub
+# conversation resume off entirely (see CAPABILITIES in server.js). This stub
 # leaves SHELL_CMD unset and shadows `claude` on PATH instead.
 #
 # It records its argv for assertions, then becomes `cat` so the terminal still

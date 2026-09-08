@@ -48,6 +48,58 @@ describe('rowState', () => {
   });
 });
 
+// A WARNING ABOUT WHAT THIS FILE CAN AND CANNOT PROVE, because it was nearly
+// the gap that shipped item 5 as a no-op. Every fixture here is an object
+// literal, so this suite tests rowState's LOGIC and says nothing whatever about
+// whether `statusTracked` reaches rowState in the running product. It does not:
+// rowState receives SessionState instances, and applySessionMeta copies named
+// fields one at a time, so a field added to the server's JSON and nowhere else
+// is dropped on the floor while every test here stays green. The delivery path
+// is covered in test/unit/sessionRow.test.js, which slices applySessionMeta out
+// of index.html and folds a real GET /sessions row through it. DO NOT take this
+// file's greenness as evidence about a new wire field.
+//
+// The fifth state, which is not a point on the attention axis but the absence
+// of one. It exists because a session whose harness writes no transcript does
+// not merely lack a status: without this it FALLS THROUGH to the unread axis
+// and reports "Waiting on you" while it is thinking, which is the strongest
+// signal the UI has fired by a session doing the opposite of needing anyone.
+describe('rowState: a session with no status axis at all', () => {
+  const opaque = (unread = false) => ({ id: 'a', claudeStatus: 'unknown', unread, statusTracked: false });
+
+  it('says so instead of guessing, whatever the unread flag holds', () => {
+    expect(rowState(opaque(true),  'b')).toBe('opaque');
+    expect(rowState(opaque(false), 'b')).toBe('opaque');
+    expect(rowState(opaque(true),  'a')).toBe('opaque');
+  });
+
+  it('outranks every other state, because the others are claims it cannot make', () => {
+    // Nothing else on the row is trustworthy for such a session, so this is
+    // checked before the status is read at all. A stale or invented status must
+    // not be able to promote the row back onto the attention axis.
+    for (const status of ['asking', 'busy', 'idle', 'unknown', undefined]) {
+      expect(rowState({ id: 'a', claudeStatus: status, unread: true, statusTracked: false }, 'b')).toBe('opaque');
+    }
+  });
+
+  it('wants nobody', () => {
+    expect(wantsUser('opaque')).toBe(false);
+    expect(STATE_TEXT.opaque).toBe('Status not tracked');
+  });
+
+  it('is STRICT about the flag, so a row without it behaves exactly as before', () => {
+    // Every fixture in this file omits statusTracked, so `undefined !== false`
+    // is what keeps the four existing states untouched. A falsy check here
+    // would make every one of them opaque.
+    expect(rowState({ id: 'a', claudeStatus: 'idle', unread: true }, 'b')).toBe('waiting');
+    expect(rowState({ id: 'a', claudeStatus: 'idle', unread: true, statusTracked: undefined }, 'b')).toBe('waiting');
+    expect(rowState({ id: 'a', claudeStatus: 'idle', unread: true, statusTracked: true }, 'b')).toBe('waiting');
+    // And not keyed off the status, which is the natural-looking mistake: a
+    // brand new Claude tab reads 'unknown' and DOES have an axis, its output.
+    expect(rowState({ id: 'a', claudeStatus: 'unknown', unread: true, statusTracked: true }, 'b')).toBe('waiting');
+  });
+});
+
 describe('wantsUser', () => {
   it('is true for the two states a human has to act on', () => {
     expect(wantsUser('asking')).toBe(true);
@@ -62,7 +114,7 @@ describe('wantsUser', () => {
   });
 
   it('has a label for every state it can be asked about', () => {
-    for (const state of ['asking', 'working', 'waiting', 'read']) {
+    for (const state of ['asking', 'working', 'waiting', 'read', 'opaque']) {
       expect(typeof STATE_TEXT[state]).toBe('string');
       expect(STATE_TEXT[state].length).toBeGreaterThan(0);
     }
@@ -102,6 +154,16 @@ describe('badgeState', () => {
     // it can usefully answer from inside a session.
     expect(badgeState([session('a', 'asking'), session('b', 'idle')], 'a')).toBe('');
   });
+
+  it('never fires for a session with no status axis, however unread it looks', () => {
+    // Falls out of rowState returning 'opaque' and wantsUser not naming it, so
+    // there is no clause here to forget. Asserted anyway because this is the
+    // symptom a user would report: the badge is what makes them open the list.
+    const opaqueSession = { id: 'b', claudeStatus: 'unknown', unread: true, statusTracked: false };
+    expect(badgeState([session('a', 'idle'), opaqueSession], 'a')).toBe('');
+    // And it does not mask a real one on another session.
+    expect(badgeState([session('a', 'idle'), opaqueSession, session('c', 'asking')], 'a')).toBe('attention');
+  });
 });
 
 // The poll interval is the badge's worst-case latency now that arriving bytes do
@@ -131,6 +193,17 @@ describe('pollDelay', () => {
   it('ignores what the ACTIVE session is doing', () => {
     // You are looking at it; the poll is for learning about the others.
     expect(pollDelay(args([session('a', 'busy')], 'a'))).toBe(8000);
+  });
+
+  it('does NOT tighten for a session with no status axis', () => {
+    // It learns nothing from a poll: no transcript to re-read, and its bytes
+    // move nothing. Left in the 4s tier it reads as 'unknown' and pins the
+    // interval there forever from the moment one such tab exists, buying a
+    // wakeup every four seconds for news that cannot arrive.
+    const opaqueSession = { id: 'b', claudeStatus: 'unknown', unread: true, statusTracked: false };
+    expect(pollDelay(args([session('a', 'idle'), opaqueSession]))).toBe(8000);
+    // A real reason to tighten still wins.
+    expect(pollDelay(args([session('a', 'idle'), opaqueSession, session('c', 'busy')]))).toBe(4000);
   });
 
   it('accepts an iterator, which is what the caller has', () => {
@@ -168,6 +241,32 @@ describe('summarise', () => {
 
   it('says all quiet only when nothing needs you AND nothing is running', () => {
     expect(summarise([session('a', 'idle'), session('b', 'idle')], 'a')).toBe('2 sessions · all quiet');
+  });
+
+  it('NEVER calls a list with an unreadable session quiet', () => {
+    // The defect this test previously CERTIFIED. 'opaque' is neither needy nor
+    // working, so with only three tiers it fell into the "all quiet" branch by
+    // default and three grinding Codex tabs summarised as "all quiet", which is
+    // the exact sentence this module's header forbids.
+    const opaqueSession = (id) => ({ id, claudeStatus: 'unknown', unread: true, statusTracked: false });
+    expect(summarise([opaqueSession('a'), opaqueSession('b'), opaqueSession('c')], 'z'))
+      .toBe('3 sessions · 3 not tracked');
+    expect(summarise([session('a', 'idle'), opaqueSession('b')], 'a')).toBe('2 sessions · 1 not tracked');
+  });
+
+  it('ranks the untracked tier below working and above quiet', () => {
+    // Below working because "something is running" is the more actionable fact;
+    // above quiet because a session nobody can see the state of is not evidence
+    // of quiet. And it never outranks a real summons.
+    const opaqueSession = { id: 'b', claudeStatus: 'unknown', unread: true, statusTracked: false };
+    expect(summarise([session('a', 'busy'), opaqueSession], 'z')).toBe('2 sessions · 1 working');
+    expect(summarise([session('a', 'idle', true), opaqueSession], 'z')).toBe('2 sessions · 1 needs you');
+    expect(summarise([session('a', 'asking'), opaqueSession], 'z')).toBe('2 sessions · 1 needs you');
+  });
+
+  it('still says all quiet when every session is readable and settled', () => {
+    // The new tier must not steal the branch it sits above.
+    expect(summarise([session('a', 'idle'), session('b', 'idle')], 'z')).toBe('2 sessions · all quiet');
   });
 
   it('prefers the count that would make someone open the list', () => {

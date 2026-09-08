@@ -1,6 +1,7 @@
 // What wants the user, and what the Sessions button is allowed to claim.
 //
-// FOUR row states, from two sources that answer different questions.
+// FIVE row states. Four of them come from two sources that answer different
+// questions; the fifth sits OUTSIDE that axis entirely and is described last.
 //
 // The transcript says what the CONVERSATION is doing: working, finished, or
 // blocked on a question it put to the user ('asking'). What it cannot say is
@@ -21,11 +22,20 @@
 //   waiting  finished, and not looked at since. Wants the user.
 //   read     finished, and looked at. Wants nothing; the user saw it and chose
 //            not to reply, which is their business.
+//
+// And the fifth, which is not a point on that axis but the absence of the axis:
+//
+//   opaque   this session's harness writes no transcript AND its output is not
+//            evidence of anything (a TUI paints while it thinks). All four
+//            states above are claims about a conversation nobody can read, so
+//            the row says it has no status instead of picking one. It wants
+//            nobody, and wantsUser() excludes it for free by not naming it.
 export const STATE_TEXT = {
   asking:  'Asked you a question',
   working: 'Working',
   waiting: 'Waiting on you',
   read:    'Read',
+  opaque:  'Status not tracked',
 };
 
 // The session on screen is never unread: you are looking at it, so whatever it
@@ -37,13 +47,40 @@ export function isUnread(session, activeId) {
 }
 
 export function rowState(session, activeId) {
+  // CHECKED FIRST, AND AGAINST === false RATHER THAN FALSY. The server says
+  // whether this session has any axis on which a status could be known. When it
+  // says no, the four states below are all claims about a conversation nobody
+  // can read, and falling through to the unread axis is what makes a session
+  // that is THINKING report "Waiting on you" and light the attention badge.
+  //
+  // Strict on purpose, both halves:
+  //
+  //   === false   a row that predates the field, or a server that did not send
+  //               it, is undefined and must behave exactly as before. Note
+  //               which way the strictness fails: every non-false falsy value
+  //               (undefined, null, '', 0) degrades to the four-state axis and
+  //               so, for a settled session, to "Read". That is FAIL-SAFE for
+  //               the badge, which stays quiet rather than summoning anyone,
+  //               and FAIL-WRONG for the label, which claims a tab was read
+  //               that nobody opened. The trade is deliberate in that
+  //               direction: a missing summons is recoverable by opening the
+  //               list, an invented one trains the user to ignore the badge.
+  //   the FIELD   and never `claudeStatus === 'unknown'`, which is the
+  //               natural-looking mistake. 'unknown' is also what a BRAND NEW
+  //               Claude tab reads before its first turn is written, and that
+  //               session does have an axis: its output. Keying off the status
+  //               would make every new tab opaque and would break the
+  //               unknown-plus-unread case that statusContract.test.js pins.
+  if (session.statusTracked === false) return 'opaque';
   if (session.claudeStatus === 'asking') return 'asking';
   if (session.claudeStatus === 'busy')   return 'working';
   return isUnread(session, activeId) ? 'waiting' : 'read';
 }
 
 // Does this state mean a human has to do something? 'working' does not, and
-// that is the load-bearing half of the answer.
+// that is the load-bearing half of the answer. Neither does 'opaque', which
+// falls out of naming the two that do rather than needing its own clause: a
+// session we know nothing about is not thereby a summons.
 export function wantsUser(state) {
   return state === 'asking' || state === 'waiting';
 }
@@ -81,30 +118,51 @@ export function badgeState(sessions, activeId) {
 //                                to read and so is judged by its output alone
 //   everything settled     8000  nothing can change without first becoming one
 //                                of the two above, which this will notice
+//
+// A session with no status axis at all is excluded from the middle tier: see
+// the comment on the skip below.
 export function pollDelay({ listOpen, sessions, activeId }) {
   if (listOpen) return 3000;
   for (const session of sessions) {
     if (session.id === activeId) continue;
+    // An opaque session learns nothing from a poll: there is no transcript to
+    // re-read and its bytes do not move anything. Left in the tier below it
+    // would read as 'unknown' and pin the interval at 4 seconds forever from
+    // the moment one such tab exists, which is a wakeup every four seconds for
+    // news that cannot arrive.
+    if (session.statusTracked === false) continue;
     if (session.claudeStatus === 'busy' || session.claudeStatus === 'unknown') return 4000;
   }
   return 8000;
 }
 
-// How the list summarises itself, in the same three tiers as the badge, for the
-// same reason: "all quiet" has to mean nothing needs you AND nothing is
-// running. Saying it over three grinding sessions would be a second version of
-// the defect this all exists to fix, just in words instead of a dot.
+// How the list summarises itself, in FOUR tiers now, for the reason the first
+// three existed: "all quiet" has to mean nothing needs you AND nothing is
+// running AND nothing is unreadable. Saying it over three grinding sessions
+// would be a second version of the defect this all exists to fix, just in words
+// instead of a dot.
+//
+// 'opaque' HAS ITS OWN TIER, and it needs one for exactly that reason. It is
+// neither needy nor working, so under the three-tier version it fell into the
+// "all quiet" branch by default and three grinding Codex tabs summarised as
+// "3 sessions · all quiet", which is the sentence this module's own header
+// forbids, produced by the module. The tier sits BELOW working, because
+// "something is running" is the more actionable fact, and ABOVE all quiet,
+// because a session nobody can see the state of is not evidence of quiet.
 export function summarise(sessions, activeId) {
   const total = sessions.length;
   let needy = 0;
   let working = 0;
+  let untracked = 0;
   for (const session of sessions) {
     const state = rowState(session, activeId);
     if (wantsUser(state)) needy++;
     else if (state === 'working') working++;
+    else if (state === 'opaque')  untracked++;
   }
   const count = `${total} session${total === 1 ? '' : 's'}`;
-  if (needy)   return `${count} · ${needy} need${needy === 1 ? 's' : ''} you`;
-  if (working) return `${count} · ${working} working`;
+  if (needy)     return `${count} · ${needy} need${needy === 1 ? 's' : ''} you`;
+  if (working)   return `${count} · ${working} working`;
+  if (untracked) return `${count} · ${untracked} not tracked`;
   return `${count} · all quiet`;
 }
