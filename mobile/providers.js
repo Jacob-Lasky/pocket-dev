@@ -99,11 +99,8 @@ const PROVIDERS = new Map([
     // seccomp=unconfined with the docker socket mounted, so the flag's own
     // "intended solely for externally sandboxed environments" is met.
     //
-    // NO -m, and the reason is NOT that something else pins the model. Nothing
-    // does: PR #55 removed the ~/.codex/config.toml seed, on the argument that
-    // interactive codex is rare in this container and /second-opinion pins `-m`
-    // itself. This feature is what makes interactive codex a first-class case
-    // here, so that premise no longer holds and is worth saying out loud.
+    // The model pin belongs on this per-session command line. PR #55 removed
+    // the base config seed because both personal and API runs share that file.
     //
     // codex-dg, NOT bare codex: these tabs bill Deepgram's API account by
     // decision, 2026-09-08. `codex-dg` is the documented single entry point for
