@@ -115,7 +115,7 @@ test('Copy on an empty screen flashes failure and leaves the clipboard alone', a
   expect(await readClipboard(page)).toContain('sentinel-must-survive');
 });
 
-test('drag-selecting in xterm.js auto-copies via onSelectionChange', async ({ pdServer, page }) => {
+test('xterm programmatic selection auto-copies via onSelectionChange', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
   await sendAndWaitForEcho(page, 'drag-select-marker');

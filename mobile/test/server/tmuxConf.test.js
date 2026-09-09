@@ -8,7 +8,7 @@ describe('mobile/tmux.conf', () => {
 
   it('disables alt-screen for the OUTER terminal via terminal-overrides smcup@/rmcup@', () => {
     // Stops tmux from switching xterm.js to alt-buffer on attach so the main
-    // buffer accumulates scrollback that View mode can read.
+    // buffer remains available for live selection and parsed-cell copy.
     expect(contents).toMatch(/^\s*set\s+-ga\s+terminal-overrides\s+',xterm\*:smcup@:rmcup@'\s*$/m);
   });
 

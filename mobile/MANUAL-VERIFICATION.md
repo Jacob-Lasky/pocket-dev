@@ -5,29 +5,33 @@ Run before tagging a release. Items here can't be reliably automated.
 ## Real device — phone + Firefox (the primary target; Playwright Firefox can't emulate touch, so THIS is the only proof the mobile scroll path works on Gecko)
 
 Live-scroll — the core of the mobile experience:
-- [ ] Open pocket-dev over the LAN (HTTP, not localhost). Default mode is **Live** (no auto-switch to Select).
+- [ ] Open pocket-dev over the LAN (HTTP, not localhost). The live terminal is the only view; there is no Select button.
 - [ ] With a real Claude session on screen and a transcript longer than the viewport, **one-finger drag DOWN** → older conversation scrolls into view; **drag UP** → back toward the latest. This must feel like scrolling Claude on the desktop (it forwards wheel events to Claude; Claude shows its own `Jump to bottom` affordance).
 - [ ] The drag does NOT leave stray clicks/selection in Claude, and does NOT trigger Firefox pull-to-refresh or overscroll bounce (that's what `touch-action: none` on the pane prevents — if it bounces, that setting regressed).
 - [ ] A quick TAP (not drag) still lets the input bar/keyboard work; a two-finger pinch still changes font size.
 - [ ] In a plain shell session (exit Claude, or a shell tab) a one-finger drag scrolls xterm's own scrollback smoothly.
 
-Select overlay + copy:
-- [ ] Tap **Select** → the current screen renders as wrapped text; tap Select again → back to Live.
-- [ ] In Select, words are separated by real spaces (NOT run together) on boxed/indented output — the CHA-positioned-text fix. Colours preserved.
-- [ ] Long-press a word in Select → drag handles → system Copy → paste elsewhere: text matches, no trailing whitespace. (Over LAN HTTP the clipboard API is unavailable; the `execCommand` fallback must still copy.)
-- [ ] While Claude streams, a held selection in Select survives incoming output (isn't wiped).
-- [ ] Scroll the Select overlay: smooth native momentum, no horizontal scrollbar.
-- [ ] 📋 in Live copies the current screen as clean text; 📋 in Select copies the visible rows.
+Live selection + copy:
+- [ ] Hold a word directly in the terminal, lift your finger, adjust both handles, tap **Copy**, then **Done**. Paste elsewhere: the selected words match. Repeat over LAN HTTP to exercise the clipboard fallback.
+- [ ] Select across several rows, including indented code, wide characters and wrapped text. Verify spaces and line breaks.
+- [ ] Move your finger before the long-press threshold: it scrolls without selecting. Pinch still changes font size.
+- [ ] Incoming output stays live; a mouse hover does not erase selection. A grid resize dismisses handles.
+- [ ] The clipboard toolbar button copies the selection, or the current screen when no text is selected.
 
-General:
-- [ ] Type via the HTML input bar: keystrokes reach Claude in both Live and Select.
-- [ ] If Live ever renders jumbled, it self-corrects on rotate/resize (ResizeObserver auto-refit); tapping ⟳ also fixes it.
+Composer:
+- [ ] Tap the message box: the keyboard opens, the composer grows with several lines, and Send stays above the keyboard. Return adds a line without submitting.
+- [ ] Send two lines together to real Claude and Codex. Confirm one prompt with both lines and no premature submission.
+- [ ] Type drafts in two sessions, switch back and forth, then reload: each draft stays with its session.
+- [ ] Disable networking and Send: the error is visible and the message remains editable. Restore networking, check whether it arrived, then retry if needed.
+- [ ] Tap the terminal after dismissing the keyboard: it must not summon a second keyboard through xterm's hidden textarea.
+- [ ] If the grid renders jumbled, it self-corrects on rotate/resize; tapping Refresh also refits it.
 
 ## Desktop — Firefox, HTTP (not localhost)
-- [ ] Mouse-wheel over Live scrolls Claude's transcript (unchanged baseline).
-- [ ] Highlight text in Live with the mouse → release → paste in another window: copies.
-- [ ] Ctrl+Shift+C copies the current selection if one exists; pass-through to terminal otherwise.
-- [ ] Tap Select, click 📋 → only the VISIBLE rows are copied, clean: real spaces, no escape/cursor codes, no big runs of blank lines.
+- [ ] Mouse-wheel scrolls Claude's transcript. Ordinary drag selects multiple lines without a modifier; moving the pointer after release does not erase selection. Paste elsewhere to verify.
+- [ ] A click still operates TUI menus. Alt-drag remains rectangular selection on Linux/Windows.
+- [ ] Ctrl+C copies selected text, and interrupts when no selection exists. Ctrl+Shift+C copies without sending a terminal interrupt.
+- [ ] The clipboard button copies selected text, or the current screen when nothing is selected: real spaces, no escape/cursor codes, no big runs of blank lines.
+- [ ] Enter sends; Shift+Enter adds a line; arrow keys edit the message; Alt+Up/Down recalls history.
 
 ## Alt-screen / scroll behavior
 - [ ] Run a real Claude Code session for 5+ minutes including long responses, tool calls, and exits.

@@ -141,6 +141,19 @@ describe('session-aware endpoints', () => {
     expect(pty.write).toHaveBeenNthCalledWith(2, '\r');
   });
 
+  it('POST /send brackets a multiline paste only when the client negotiated support', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const { body: created } = await request(app).post('/sessions');
+    const text = 'First line\n  Second line';
+    await request(app).post('/send').send({ session: created.id, text, bracketedPaste: true }).expect(200);
+    const pty = sessionsApi._internalSessions.get(created.id).pty;
+    expect(pty.write.mock.calls).toEqual([['\x1b[200~' + text + '\x1b[201~'], ['\r']]);
+    pty.write.mockClear();
+    await request(app).post('/send').send({ session: created.id, text }).expect(200);
+    expect(pty.write.mock.calls).toEqual([[text], ['\r']]);
+  });
+
   it('POST /send rejects missing session', async () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });

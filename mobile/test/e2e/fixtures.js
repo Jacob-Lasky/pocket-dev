@@ -5,6 +5,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
+import { spawn as spawnPty } from 'node-pty';
+import { WebSocketServer } from 'ws';
+import { createApp, createSessionsApi } from '../../server.js';
 
 const execFile = promisify(execFileCb);
 
@@ -115,9 +119,34 @@ export const test = base.extend({
   // Uses `cat` as a deterministic SHELL_CMD so typing `hello\n` in #cmd-input
   // echoes `hello\n` back into the buffer.
   pdServer: ptyServerFixture({ prefix: 'pdtest', shellCmd: 'cat' }),
+  pdServerQueryApp: async ({}, use) => {
+    // Put queries directly on the outer PTY. tmux answers an INNER app's DA2
+    // itself, which would bypass the browser/WS reply boundary under test.
+    const sessionsApi = createSessionsApi({
+      spawnPty: () => spawnPty(process.execPath, [path.resolve(__dirname, 'query-app.cjs')], {
+        name: 'xterm-256color', cols: 120, rows: 40, env: process.env,
+      }),
+      killSession: (_id, done) => done(),
+    });
+    const server = http.createServer(createApp({ sessionsApi }));
+    const wss = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (req, socket, head) => {
+      const url = new URL(req.url, 'http://localhost');
+      wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, url.searchParams.get('session'), {
+        frames: url.searchParams.get('frames') === '1',
+      }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    await use({ port, baseURL: `http://127.0.0.1:${port}` });
+    for (const { id } of sessionsApi.list()) sessionsApi.destroy(id);
+    for (const ws of wss.clients) ws.terminate();
+    await new Promise(resolve => server.close(resolve));
+    wss.close();
+  },
 
   // SHELL_CMD replays a captured real Claude TUI frame (alt-screen,
-  // CHA-positioned words) instead of `cat`. Exercises the View renderer against
+  // CHA-positioned words) instead of `cat`. Exercises live display and copy against
   // the exact content the old serialize()+ansi_up path mangled.
   pdServerClaudeFrame: ptyServerFixture({
     prefix: 'pdframe',
@@ -224,7 +253,7 @@ export const test = base.extend({
 // `test=1` query string, the toolbar-expand init script, and the connected-dot
 // wait all stay in one place.
 export async function gotoTest(page, server) {
-  // A collapsed toolbar is max-height: 0, which makes the Copy/Select/Sessions
+  // A collapsed toolbar is max-height: 0, which makes the Copy/Stop/Sessions
   // buttons unreachable for clicks (the parent #controls intercepts pointer
   // events). Pin it open before navigation so any test can click toolbar
   // buttons without per-spec boilerplate.

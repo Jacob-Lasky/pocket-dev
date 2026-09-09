@@ -9,13 +9,16 @@ export function trimTrailingWhitespace(text) {
 
 function defaultExecCopy(text) {
   const ta = document.createElement('textarea');
+  const focused = document.activeElement;
   ta.value = text;
+  ta.readOnly = true;
   ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
   document.body.appendChild(ta);
   ta.select();
   let ok = false;
   try { ok = document.execCommand('copy'); } catch {}
   document.body.removeChild(ta);
+  if (focused instanceof HTMLElement && focused !== document.body) focused.focus({ preventScroll: true });
   return ok;
 }
 

@@ -30,7 +30,7 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   await expect(page).toHaveTitle('pocket-dev');
 
   // Toolbar elements all rendered
-  await expect(page.locator('#mode-select')).toBeVisible();
+  await expect(page.locator('#mode-select')).toHaveCount(0);
   await expect(page.locator('#copy-btn')).toBeVisible();
   await expect(page.locator('#cmd-input')).toBeVisible();
   await expect(page.locator('#send-btn')).toBeVisible();
@@ -38,9 +38,6 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
   // Module wired correctly: window.term is exposed under ?test=1 (proves the
   // <script type="module"> block executed without throwing).
   await expect.poll(() => page.evaluate(() => typeof window.term)).toBe('object');
-
-  // setMode landed on window (proves applyMode + initial mode-detect ran).
-  await expect.poll(() => page.evaluate(() => typeof window.setMode)).toBe('function');
 
   // Default mode applied. Live is now the sole default on every device.
   const mode = await page.evaluate(() => document.body.dataset.mode);
@@ -62,64 +59,6 @@ test('index.html loads without JS errors and renders the toolbar', async ({ pdSt
 
   // Visual artifact — pinned filename so reviewers know where to look.
   await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-default.png'), fullPage: true });
-});
-
-test('toggling to Select renders the overlay pane (empty buffer is OK)', async ({ pdStaticServer, page }) => {
-  await gotoTest(page, pdStaticServer);
-  await expect(page.locator('#mode-select')).toBeVisible();
-
-  await page.click('#mode-select');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
-  await expect(page.locator('#view-pane')).toBeVisible();
-
-  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'render-select-mode.png'), fullPage: true });
-});
-
-// Regression for "View mode wraps =====-style separators horribly on Safari".
-//
-// The existing PTY-driven wrap test in smoke.spec.js sends 200 'x's through
-// the cat-echo path. The View renderer rejoins soft-wrapped buffer rows into
-// one logical line, so the markup it produces leans on CSS to reflow — and the
-// assertion there strips whitespace anyway. To pin the pure CSS invariant
-// deterministically (no PTY, no buffer state), this test injects an unbroken
-// run straight into #view-content.
-//
-// At the CSS layer, `word-break: break-word` is interpreted differently
-// across engines: Chromium and modern Firefox treat it as equivalent to
-// `overflow-wrap: anywhere`, but WebKit/Safari only breaks at natural
-// opportunities — so an unbroken run overflows horizontally. The fix is
-// `overflow-wrap: anywhere`, the spec-stable form. This test asserts the
-// invariant on every browser in the matrix.
-test('Select overlay wraps an unbroken character run at 360px viewport', async ({ pdStaticServer, browser, browserName }) => {
-  const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
-  const page = await ctx.newPage();
-  await gotoTest(page, pdStaticServer);
-
-  await page.click('#mode-select');
-  await expect.poll(() => page.evaluate(() => document.body.dataset.mode)).toBe('select');
-
-  // Inject an unbroken 300-char run of '=' directly into the view content.
-  // At 360px viewport with the 13px monospace font, that's ~4x the visible
-  // width — needs to break at character boundaries to fit without overflow.
-  await page.evaluate(() => {
-    document.getElementById('view-content').textContent = '='.repeat(300);
-  });
-
-  await page.screenshot({
-    path: path.join(ARTIFACTS_DIR, `view-wrap-${browserName}.png`),
-    fullPage: true,
-  });
-
-  const horizontal = await page.evaluate(() => {
-    const el = document.getElementById('view-pane');
-    return { scroll: el.scrollWidth, client: el.clientWidth };
-  });
-  expect(
-    horizontal.scroll,
-    `${browserName}: #view-pane scrollWidth=${horizontal.scroll} should not exceed clientWidth=${horizontal.client}`,
-  ).toBeLessThanOrEqual(horizontal.client);
-
-  await ctx.close();
 });
 
 test('every onclick handler resolves to a real function on window', async ({ pdStaticServer, page }) => {

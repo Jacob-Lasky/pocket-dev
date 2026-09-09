@@ -1,11 +1,11 @@
 # pocket-dev
 
-A browser-accessible terminal for [Claude Code](https://github.com/anthropics/claude-code), packaged as a Docker container for UnRAID. Open the WebUI from a desktop or phone, get a tmux-backed Claude session that survives disconnects and reconnects.
+A browser-accessible terminal for [Claude Code](https://github.com/anthropics/claude-code) and [Codex](https://github.com/openai/codex), packaged as a Docker container for UnRAID. Open the WebUI from a desktop or phone, get a tmux-backed Claude session that survives disconnects and reconnects.
 
 ## Architecture
 
 - `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
-- `mobile/public/` — the client (xterm.js for the live terminal; the wrapped View renderer walks xterm's parsed buffer directly in `js/view.js`; a small toolbar; an iOS-friendly PWA manifest).
+- `mobile/public/` — the client: a selectable live xterm.js terminal, touch selection handles, a multiline composer with per-session drafts, and collapsible terminal keys.
 - `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container, and [Lavish Editor](https://github.com/kunchenguid/lavish-axi) so a session can hand a generated HTML artifact to a human to annotate.
 
 For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
@@ -20,6 +20,16 @@ For repo orientation — particularly the two-layers-of-alt-screen gotcha around
 The container exposes port 7681. Click the WebUI button or hit `http://<server>:7681/` from any device on your network. The mobile UI is the same as desktop; iOS users can "Add to Home Screen" for a PWA experience.
 
 Port 7682, one above the terminal, is Lavish Editor's review server (see "Point at the thing" below). Set `LAVISH_AXI_LINK_HOST` to the hostname you reach this host by, or the review URLs it prints carry the container's internal bridge address and open nowhere.
+
+## Using the terminal on desktop and phone
+
+There is one live view; no separate Select mode. On desktop, drag across output to select and copy it, even when Claude or Codex has mouse tracking enabled. Clicks still reach application menus. Ctrl+C copies a selection; with none selected it interrupts the terminal.
+
+On a phone, swipe through the conversation. Hold a word to select it, adjust the handles, then tap **Copy** and **Done**. Pinch to change the terminal font size. The keyboard belongs to the message box, and terminal keys are tucked behind the chevron beside Send. The session title opens the session list.
+
+The composer grows as you type. Return adds a line on phones; on desktop, Enter sends and Shift+Enter adds a line. Ctrl/Cmd+Enter sends on either. Drafts stay with their session across switches and reloads in the same browser tab, and remain available if delivery fails. Alt+Up/Down recalls sent messages. Multiline messages use bracketed paste when the terminal application enables it.
+
+The clipboard toolbar button copies the selected text, or the current screen if nothing is selected. A full-screen agent keeps its conversation history inside the agent: scroll to the text you want first. The [interface decision](docs/mobile-interface-decision.md) records the terminal-versus-chat research and when to reconsider it.
 
 ## Run locally (development)
 
@@ -54,7 +64,7 @@ Two consequences worth knowing:
 
 ## A second model in the box
 
-The image also ships [Codex](https://github.com/openai/codex), OpenAI's coding CLI, at `/usr/local/bin/codex`. It is not an alternative to Claude here, it is a second opinion: a model from a different lab has different blind spots, so asking it to attack a diff catches things a self-review agrees with itself about.
+The image also ships [Codex](https://github.com/openai/codex), OpenAI's coding CLI, at `/usr/local/bin/codex`. It can run in its own session, and also provide a second opinion: a model from a different lab has different blind spots, so asking it to attack a diff catches things a self-review agrees with itself about.
 
 ```sh
 git diff | codex exec "Assume this contains at least one defect. Enumerate the inputs that break it and what each one causes. Do not report style." \
@@ -81,7 +91,7 @@ codex login --device-auth   # prints a URL and a code; open them on any other de
 
 The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
 
-**Codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore losing your tabs; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
+**Codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore restarting your terminal processes; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
 
 ## Point at the thing
 
@@ -145,7 +155,7 @@ WebKit is in the matrix because mobile Safari's CSS engine has historically inte
 
 - Base: `node:24-bookworm-slim` (Debian Bookworm, newest LTS and the last major that bundles corepack)
 - Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit`
-- View renderer: in-house buffer walk in `mobile/public/js/view.js` (reads xterm's parsed buffer → colour-preserving wrapped HTML; no ANSI round-trip)
+- Selection: public xterm selection APIs in `mobile/public/js/selection.js`; whole-screen copy walks parsed cells in `js/view.js` without an ANSI round-trip
 - Session persistence: `tmux`, plus an on-disk roster + per-tab Claude conversation id under `PD_STATE_DIR` so sessions outlive the container
 - Architectures: `linux/amd64` (pocket-dev runs only on an amd64 host; building arm64 under QEMU roughly doubled CI time for a target nothing runs)
 - Container user: `claude` (uid 99, gid 100; matches UnRAID's `nobody:users`)

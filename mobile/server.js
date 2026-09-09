@@ -242,7 +242,10 @@ const SESSION_ENV_PREFIX = 'LAVISH_';
 function sessionEnvForwards(source = process.env) {
   const out = {};
   for (const [key, value] of Object.entries(source)) {
-    if (key.startsWith(SESSION_ENV_PREFIX) && value !== undefined) out[key] = value;
+    // Resolve the same harness binaries as the launching server, even when a
+    // different process started tmux first. Otherwise a test stub PATH (or an
+    // updated installed tool) is silently replaced by tmux's stale PATH.
+    if ((key === 'PATH' || key.startsWith(SESSION_ENV_PREFIX)) && value !== undefined) out[key] = value;
   }
   return out;
 }
@@ -263,6 +266,10 @@ function buildTmuxSpawnArgs(session, sessionCmd, { env = {}, envSource = process
     '-f', TMUX_CONF_PATH,
     'new-session', '-A', '-s', session,
     ...envArgs,
+    // Multiple command arguments make tmux exec directly. A single string is
+    // interpreted by the existing tmux server's default shell; fish startup
+    // can rewrite PATH and bypass both a selected harness and test stubs.
+    '/bin/bash', '-c',
     sessionCmd,
   ];
 }
@@ -360,7 +367,12 @@ function createApp({ sessionsApi } = {}) {
       if (typeof text !== 'string' || !text.length)
         return res.status(400).json({ error: 'text required' });
       sessionsApi.noteInput(req.session);
-      req.session.pty.write(text);
+      // The browser reads the negotiated mode from xterm. Bracketed paste
+      // keeps embedded newlines in one message for supporting terminal apps.
+      const payload = req.body.bracketedPaste === true
+        ? '\x1b[200~' + text.replace(/\x1b/g, '') + '\x1b[201~'
+        : text;
+      req.session.pty.write(payload);
       req.session.pty.write('\r');
       res.json({ ok: true });
     });
@@ -635,8 +647,12 @@ function createSessionsApi({
         state.attentionSeq += 1;
       }
       appendToReplay(state, data);
+      // One browser answers live terminal queries. Replayed queries may have
+      // already timed out in tmux, so they must NEVER be answered on attach.
+      const responder = [...state.clients].find(ws => ws.pdFrames && ws.readyState === 1);
       for (const ws of state.clients) {
-        if (ws.readyState === 1) ws.send(data);
+        if (ws.readyState === 1) ws.send(ws.pdFrames
+          ? JSON.stringify({ type: 'output', data, reply: ws === responder }) : data);
       }
     });
 
@@ -1014,14 +1030,17 @@ function createSessionsApi({
     return rows;
   }
 
-  function attachWs(ws, sessionId) {
+  function attachWs(ws, sessionId, { frames = false } = {}) {
     const state = sessions.get(sessionId);
     if (!state) {
       try { ws.close(GONE_CODE, 'session not found'); } catch {}
       return;
     }
     state.clients.add(ws);
-    if (state.replayBuffer.length > 0) ws.send(state.replayBuffer);
+    ws.pdFrames = frames;
+    if (state.replayBuffer.length > 0) {
+      ws.send(frames ? JSON.stringify({ type: 'replay', data: state.replayBuffer }) : state.replayBuffer);
+    }
 
     ws.on('message', data => {
       const msg = data.toString();
@@ -1112,7 +1131,7 @@ function startServer() {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId));
+    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId, { frames: url.searchParams.get('frames') === '1' }));
   });
 
   server.listen(PORT, '0.0.0.0', () =>
