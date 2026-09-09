@@ -65,7 +65,7 @@ General:
 - [ ] Start a container against a home with NO `~/.codex/config.toml` (the fresh-home case the removed seed would have fired on) and confirm the file is still absent afterwards, while `~/.codex` itself exists and is writable by the session's uid.
 - [ ] Append a line to an existing `~/.codex/config.toml`, restart the container, and confirm the line is still there — nothing in this image may rewrite that file, or `codex login` trust levels get discarded on every boot.
 - [ ] A `/second-opinion` consult reports the model it passed with `-m` in codex's banner, so the flag is what decides the model and no base pin is needed.
-- [ ] `command -v codex` is `/usr/local/bin/codex` and nothing shadows it from `~/bin`; a consult's banner says `sandbox: read-only`, which is the only visible proof no bypass wrapper crept in.
+- [ ] `command -v codex` resolves to the npm launcher or the official standalone symlink in `~/bin`, never a shell wrapper injecting bypass flags. A consult's banner says `sandbox: read-only`.
 - [ ] From inside this checkout, run a consult whose prompt never mentions the rules and confirm codex reads `AGENTS.md`, follows it to `CLAUDE.md`, and obeys what it finds. CI only asserts the pointer file exists and stays a pointer; that codex FOLLOWS it is model behaviour, so re-check it after a codex major bump.
 
 ## Provider per session (the whole point is a second harness, and CI runs one binary: no test in this repo starts codex, logs into it, or renders its TUI)
