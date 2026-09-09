@@ -29,6 +29,11 @@ their existing browser/platform conditions.
 The GitHub workflow additionally runs WebKit on Ubuntu; local Arch cannot run
 that browser's bundled runtime.
 
+The first CI matrix passed 216 browser tests and exposed one WebKit console
+error: it rejects the `interactive-widget` viewport key. That key was removed;
+the existing visualViewport resize handler remains responsible for keyboard
+geometry. The console-error test was kept intact.
+
 Named bug witnesses and mutation evidence:
 
 - `live-selection.spec.js`: ordinary drag failed before the pointer bridge and
