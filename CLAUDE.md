@@ -1,6 +1,6 @@
 # pocket-dev
 
-Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) hosts N independent tmux sessions — each its own pty, each surfaced as its own xterm.js instance in a single browser tab. The `+New / Next / Last / Kill` toolbar row switches between them; only one is visible at a time, but each retains its own main-buffer scrollback so browser scroll (wheel + touch) never shows the wrong session's history. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main and on a weekly schedule.
+Browser-accessible terminal for Claude Code. Node + Express server (`mobile/server.js`) hosts N independent tmux sessions — each its own pty, each surfaced as its own xterm.js instance in a single browser tab. The session list switches between them; only one is visible at a time, but each retains its own main-buffer scrollback so browser scroll (wheel + touch) never shows the wrong session's history. Runs as a Docker container on UnRAID; image is `ghcr.io/jacob-lasky/pocket-dev:latest` published from `.github/workflows/docker-publish.yml` on push to main and on a weekly schedule.
 
 ## Per-session model — why it exists
 
@@ -20,7 +20,7 @@ There are two independent "alternate screen" mechanisms in play. They are NOT th
 
 2. **Inner alt-screen**: applications running INSIDE tmux (Claude Code's TUI, vim, less, htop) using alt-screen for their own full-screen UI.
 
-We **disable the outer** so all output lands in xterm.js's normal buffer (which the Select overlay reads by walking `term.buffer.normal`, see `view.js`; for a plain shell this is continuous scrollback, for a TUI coder it is the current frame — see "Mobile scroll + the Select overlay"). We **must NOT disable the inner** — Claude Code renders its prompt input area inside an alt-screen TUI; disabling inner alt-screen breaks input handling entirely (user can't type).
+We **disable the outer** so all output lands in xterm.js's normal buffer (which the copy helper reads by walking `term.buffer.normal`, see `view.js`; for a plain shell this is continuous scrollback, for a TUI coder it is the current frame — see "Mobile scroll + live selection"). We **must NOT disable the inner** — Claude Code renders its prompt input area inside an alt-screen TUI; disabling inner alt-screen breaks input handling entirely (user can't type).
 
 The `mobile/tmux.conf` knobs:
 
@@ -36,9 +36,9 @@ The `mobile/tmux.conf` knobs:
 
 The E2E fixture sets `SHELL_CMD=cat` for deterministic echo behavior. **Cat doesn't use alt-screen**, so any regression that affects only TUI apps (anything with a curses-style prompt — Claude, vim, htop) won't surface in CI. The `setw alternate-screen off` mistake shipped through CI green for this reason.
 
-To partly close this gap, `mobile/test/e2e/fixtures/claude-trust-frame.b64` is a captured real Claude TUI frame (the "trust this folder?" prompt, which positions words with CHA absolute-column moves and emits no literal spaces). `view.test.js` replays it through a real xterm to assert the View renderer reconstructs the spaces, and `view-claude-frame.spec.js` replays it through the full server (via `SHELL_CMD=bash replay-claude-frame.sh`) for a browser-level check. This covers the alt-screen render path that cat cannot.
+To partly close this gap, `mobile/test/e2e/fixtures/claude-trust-frame.b64` is a captured real Claude TUI frame (the "trust this folder?" prompt, which positions words with CHA absolute-column moves and emits no literal spaces). `view.test.js` replays it through a real xterm to assert the copy helper reconstructs the spaces, and `view-claude-frame.spec.js` replays it through the full server (via `SHELL_CMD=bash replay-claude-frame.sh`) for a browser-level check. This covers the alt-screen render path that cat cannot.
 
-If you change anything in the buffer / View-render / focus / alt-screen path, still manually verify against the deployed Claude before declaring success. The `mobile/MANUAL-VERIFICATION.md` checklist exists for this.
+If you change anything in the buffer / copy / focus / alt-screen path, still manually verify against the deployed Claude before declaring success. The `mobile/MANUAL-VERIFICATION.md` checklist exists for this.
 
 ## Architecture cheat sheet
 
@@ -46,31 +46,64 @@ If you change anything in the buffer / View-render / focus / alt-screen path, st
   - **`createApp({ sessionsApi })`**: returns an Express app. Session-aware routes (`GET/POST/DELETE /sessions`, plus `/send /key /refresh /viewed`) only wire up if `sessionsApi` is passed; the static `render.spec.js` boots `createApp()` with no api on purpose to get an unwired test surface.
   - **`createSessionsApi({ store, spawnPty, killSession, projectsDir, logger })`**: stateful factory holding `Map<id, SessionState>`. Each session owns a pty, a 512 KB replay buffer, and the set of connected WebSocket clients. `attachWs(ws, sessionId)` wires an upgraded WS into the matching session and replays buffered bytes. Every option is injectable and defaults to inert or real-world: `store` defaults to `nullSessionStore` (no filesystem side effects unless asked), `spawnPty` to the real tmux spawn, `killSession` to a real `tmux kill-session` — tests swap them rather than mocking modules, same shape as `createApp({ sessionsApi })`. `killSession` is injectable because its default is destructive to things the tests do not own; see "Archiving a conversation somewhere else closes its tab here".
   - **`restore()`**: re-creates the sessions in the roster, before `listen()`. See "Session restore".
-  - Endpoints: `GET /sessions` (list), `POST /sessions` (create + return id), `DELETE /sessions/:id` (terminate), `POST /send { session, text }`, `POST /key { session, key }`, `POST /refresh { session }`, `/ws?session=<id>` upgrade. No `/tmux-kill` — replaced by `DELETE /sessions/:id`. No `/history` — the Select overlay replaces it client-side.
+  - Endpoints: `GET /sessions` (list), `POST /sessions` (create + return id), `DELETE /sessions/:id` (terminate), `POST /send { session, text }`, `POST /key { session, key }`, `POST /refresh { session }`, `/ws?session=<id>` upgrade. No `/tmux-kill` — replaced by `DELETE /sessions/:id`. No `/history` — copying reads parsed cells client-side.
   - `SAFE_ID = /^[A-Za-z0-9._-]+$/` guards every session id that touches shell interpolation (notably `/refresh`, which lists tmux clients via shell pipe).
 - **Server-side modules**: `safeId.js` (the shared `SAFE_ID` / `UUID_RE` guards — one definition, three consumers), `sessionStore.js` (the on-disk roster + per-session Claude uuid), `claudeSession.js` (read-only inspection of Claude's transcripts: find one by uuid, classify busy/idle/asking/unknown, identify which turn that verdict came from, and spot the Remote Control archive notice). It exports `findTranscript`, `classifyTranscript`, `inspectTranscript`, `USER_INPUT_TOOLS`, `STATUSES`, `WANTS_USER`, `TURN_SETTLED` and deliberately no uuid-level convenience wrappers: the two that existed (`statusOf`, `inspect`) re-resolved the path per call, which is what `describe()`'s memo cache exists to avoid, and once the server stopped calling them their only callers were their own tests.
 - **Shell helpers shipped beside the server**: `pd-claude-session` (per-session restart loop + resume decision) and `pd-trust-workspace` (clears the workspace-trust gate at boot). Both are invoked by absolute path, so their exec bit is load-bearing and asserted in tests.
 - **Client modules** (`mobile/public/js/*.js`, all ESM):
   - `clipboard.js` — `clipboardWrite` strips trailing whitespace, falls back to `document.execCommand('copy')` on HTTP where `navigator.clipboard` is unavailable.
-  - `view.js` — walks the active session's `term.buffer.normal` directly to build the Select-overlay output: `renderTerminalHtml` (colour-preserving styled spans, one `<div class="vrow">` per logical line) and `renderTerminalText` (plain text for copy). `buildPalette` maps xterm colour indices to CSS; `cleanCopyText` normalises copied text; `ViewRenderer` owns only the sticky-bottom scroll + innerHTML swap. NO serialize/ansi_up (see the WHY block at the top of the file).
-  - `mode.js` — `detectDefaultMode` (always `live` now — Live is the sole default on every device), `applyMode` (sets `body.dataset.mode` to `live`/`select`, toggles the Select overlay).
+  - `view.js` — `renderTerminalText` walks parsed normal-buffer cells for whole-screen copy, preserving real spaces and joining soft-wrapped rows. `cleanCopyText` trims copy-only whitespace. No serialize/ansi_up.
+  - `selection.js` — `LiveSelection` turns ordinary mouse drags into xterm selection while preserving TUI clicks; long press and touch handles use public xterm selection APIs. No alternate view or transcript parser.
   - `scroll.js` — mobile Live touch-scroll helpers: `scanMouseState` (fold a WS chunk into `{track,sgr}`), `wheelSequence` (SGR/X10 wheel bytes), `wheelStepsFromDelta` (drag px → whole wheel steps). Pure; the DOM wiring lives in `index.html`'s `installTouchScroll`.
   - `attention.js` — what wants the user: `rowState` (the four-state model), `wantsUser`, `badgeState` (the two Sessions-button tiers), `pollDelay`, `summarise`, `STATE_TEXT`. Pure and unit-tested, which is the point: this logic was inline in `index.html` where nothing could check it, and it was wrong three ways at once. `index.html` binds `activeId` into two one-line wrappers and holds no rules of its own.
   - `keys.js` — `maybeInterceptCopyKey` for `term.attachCustomKeyEventHandler`. Selection-aware Ctrl+C + always-copy Ctrl+Shift+C.
 - **`index.html`**: monolithic by design. Inline `<script type="module">` with imports; toolbar functions exposed on `window` via `Object.assign` so HTML `onclick` attrs can find them. The `mobile/test/unit/onclick-coverage.test.js` test parses the file and asserts every `onclick="X("` resolves to an exposed name — this catches the "scope-leaked-after-converting-to-module" regression class.
 
-## Mobile scroll + the Select overlay — what the buffer actually holds
+## Mobile scroll + live selection — what the buffer actually holds
 
 **Measured reality (verify before theorising).** With a full-screen TUI coder (Claude Code) running, xterm.js's `buffer.active` IS `buffer.normal` (the outer smcup strip means xterm never enters an alt buffer) and that buffer holds **exactly one screen — zero scrollback**. tmux flattens the coder's inner alt-screen and repaints it in place via cursor addressing, so no history accumulates in ANY browser buffer. The back-and-forth transcript lives *inside the coder* and is reached only by telling the coder to scroll. Confirmed by driving real `claude` through the pipeline and inspecting the buffer (40 rows, `baseY 0`).
 
 Consequences that shape the UI:
 
 - **Live is the one primary surface, and it is touch-scrollable** (`scroll.js` + the `installTouchScroll` wiring in `index.html`). A one-finger vertical drag is intercepted capture-phase and routed: if the inner app has mouse tracking on (a TUI coder) it is forwarded as SGR wheel events to the pty (the coder scrolls its own transcript — this is exactly what a desktop mouse-wheel does); if not (a plain shell) it scrolls xterm's real scrollback locally. A per-session `mouse` flag (fed by `scanMouseState` on every WS chunk) picks the branch. `tmux.conf`'s `mouse off` is load-bearing for the forward path (lets the coder's mouse tracking pass through).
-- **The former "View mode" is retired** as a co-equal mode with a mobile default. It could never show the history it implied (there is none in the buffer). What survives is the opt-in **Select overlay** (`toggleSelect`, body `data-mode="select"`): `view.js` renders the active session's `term.buffer.normal` (the current screen) as wrapped, selectable HTML so a user can grab text that a mouse-tracking TUI otherwise steals from touch selection in Live. It is per-session and reflects the current screen, not a transcript.
-- `renderTerminalHtml` / `renderTerminalText` read `.normal` (not `.active`) and reconstruct real spaces from cells (the #12 fix — do NOT reintroduce serialize/ansi_up). Soft-wrapped rows are rejoined so the overlay reflows to the viewport, not the host PTY width.
-- Two refresh guards: `refreshViewIfActive` skips the innerHTML rebuild while a text selection is active in the overlay (a rebuild collapses the selection) and flushes on `selectionchange`; the `⟳` button calls `renderViewNow` to force a rebuild regardless.
+- **Selection lives in xterm.** `LiveSelection` delays primary mouse-down while tracking is enabled: a drag requests xterm forced selection, a click is replayed to the TUI. Force Shift on non-Mac and Option on Mac; Alt on non-Mac means rectangular selection and must not be forced. Hover while selected must not reach ALL_MOUSE_EVENTS, because xterm clears selection on user input.
+- **Touch selection uses long press, public `term.select`, and Copy/Done handles.** One-finger movement before the hold cancels selection and scrolls. Compatibility mouse events must not clear a held selection. Pinch or terminal resize clears selection because its grid coordinates changed. Output continues rendering; this is the current screen, not a frozen transcript.
+- **The composer owns mobile text input.** Multiline paste is negotiated through xterm's bracketedPasteMode; `/send` brackets only when the browser requests it. Drafts are per session in sessionStorage with an in-memory fallback; clear only after a successful response and only if the draft is unchanged. Mobile Return inserts a line, desktop Enter sends, Shift+Enter inserts a line, Ctrl/Cmd+Enter sends.
+- The copy helper reconstructs real spaces from parsed cells (the #12 fix). Do NOT reintroduce serialize/ansi_up. Soft-wrapped rows join for copy. No HTML overlay or second renderer exists.
 
 Guard tests: `test/unit/scroll.test.js` (mouse-state scan + wheel math), `test/e2e/touch-scroll.spec.js` (drag → wheel forwarded to pty for a mouse-tracking session via `mouse-app.sh`; drag → local xterm scroll + zero wheel bytes for a plain shell). The forward path can't be exercised by the `cat` fixture (no mouse tracking) — same test-gap shape as alt-screen.
+
+## Terminal replies across reconnects
+
+The browser negotiates JSON output frames with `/ws?session=…&frames=1`.
+**All replay is paint-only**, including output no browser saw before. An old
+unanswered query may already have timed out in tmux; replying on reconnect can
+put `0;276;0c` into the user's next prompt. Do not add retries for historical
+terminal requests. tmux answers inner applications' DA/DSR queries itself and
+uses its defaults if its outer capability negotiation times out.
+With no browser attached at startup, tmux's focus reporting can take its
+five-second negotiation timeout to enable; rendering and inner DA/DSR replies
+do not wait for it.
+
+For each new live chunk, the server flags the first open framed client as its
+sole responder. Other clients render it without replying. When that client
+disconnects, the next connected client answers future queries. No reply ledger,
+acknowledgement or history migration is needed. The client serializes writes to
+keep automatic replies associated with the right frame; keyboard, paste, IME,
+mouse input and focus reports still go straight to the PTY.
+
+xterm 5.5's public `onData` omits input provenance. The sole internal adapter is
+`term._core.coreService.onUserInput`, which fires synchronously before `onData`
+for human input. Its flag is cleared before routing; focus reports bypass the
+reply batch separately. Verify this adapter when upgrading xterm. The real
+browser guards are `test/e2e/replay-queries.spec.js`; their query app runs on an
+**outer** node-pty because tmux itself answers an inner app's DA2 query.
+
+Session launch also forwards PATH explicitly with tmux `-e` and passes
+`/bin/bash -c <command>` as separate arguments. A single command string goes
+through tmux's default shell; a pre-existing fish server can reorder PATH during
+startup and bypass the intended harness. `titles.spec.js` and `serverArgs.test.js`
+cover the launch path.
 
 ## Session restore — surviving a restart
 
@@ -391,5 +424,5 @@ A `200` says something answered on that port and accepted that `Host`, which is 
 ## Common gotchas
 
 - `<script type="module">` scopes everything inside to the module. Functions referenced from HTML `onclick="..."` attributes MUST be put on `window` explicitly. The `Object.assign(window, { ... })` block at the end of `index.html`'s script is load-bearing — `onclick-coverage.test.js` is the regression guard.
-- View renders from the parsed xterm buffer, NOT from a re-serialized ANSI stream. `serialize()` encodes gaps/tabs/never-written cells as cursor-move CSI (`\x1b[NC`, `\x1b[NG`), and any ANSI->HTML converter that only handles SGR (e.g. `ansi_up`) drops those and loses the spaces. This is why `@xterm/addon-serialize` and `ansi_up` were removed. Don't add them back for the Select overlay.
+- Whole-screen copy reads the parsed xterm buffer, NOT a re-serialized ANSI stream. `serialize()` encodes gaps/tabs/never-written cells as cursor-move CSI (`\x1b[NC`, `\x1b[NG`), and any ANSI->HTML converter that only handles SGR (e.g. `ansi_up`) drops those and loses the spaces. This is why `@xterm/addon-serialize` and `ansi_up` were removed. Don't add them back for copy.
 - xterm.js's `copyOnSelect: true` silently no-ops on HTTP (clipboard API requires a secure context). We do explicit `term.onSelectionChange` + `clipboardWrite` (with `execCommand` fallback) instead.

@@ -1,9 +1,9 @@
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
 
-test('toolbar shows Copy / Select buttons', async ({ pdServer, page }) => {
+test('toolbar has Copy and no separate Select view', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await expect(page.locator('#copy-btn')).toBeVisible();
-  await expect(page.locator('#mode-select')).toBeVisible();
+  await expect(page.locator('#mode-select')).toHaveCount(0);
 });
 
 test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pdServer, page }) => {
@@ -12,16 +12,7 @@ test('typed input echoes back into terminal (WebSocket round-trip)', async ({ pd
   await sendAndWaitForEcho(page, 'hello');
 });
 
-test('toggling to Select shows current buffer content', async ({ pdServer, page }) => {
-  await gotoTest(page, pdServer);
-  await waitForConnection(page);
-  await sendAndWaitForEcho(page, 'unique-marker-string');
-
-  await page.click('#mode-select');
-  await expect(page.locator('#view-content')).toContainText('unique-marker-string', { timeout: 3000 });
-});
-
-test('Select overlay wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
+test('Live terminal wraps long lines on a 360px viewport', async ({ pdServer, browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 360, height: 700 } });
   const page = await ctx.newPage();
   await gotoTest(page, pdServer);
@@ -29,7 +20,6 @@ test('Select overlay wraps long lines on a 360px viewport', async ({ pdServer, b
 
   const longLine = 'x'.repeat(200);
   await sendAndWaitForEcho(page, longLine);
-  await page.click('#mode-select');
 
   // Whitespace-stripped poll: a 200-char line wraps to ~5 rows in xterm.js
   // at this viewport width, so the visible text has line breaks splitting
@@ -37,15 +27,15 @@ test('Select overlay wraps long lines on a 360px viewport', async ({ pdServer, b
   // buffer" without caring about layout.
   await expect.poll(
     async () => {
-      const text = await page.evaluate(() => document.getElementById('view-content').innerText);
+      const text = await page.evaluate(() => document.getElementById('terminal-stack').innerText);
       return text.replace(/\s+/g, '');
     },
     { timeout: 3000 },
   ).toContain(longLine);
 
-  // No horizontal scrollbar on the view pane
+  // No horizontal scrollbar on the live terminal
   const overflow = await page.evaluate(() => {
-    const el = document.getElementById('view-pane');
+    const el = document.getElementById('terminal-container');
     return el.scrollWidth > el.clientWidth;
   });
   expect(overflow).toBe(false);

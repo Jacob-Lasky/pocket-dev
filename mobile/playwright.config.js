@@ -30,7 +30,7 @@ export default defineConfig({
     // `word-break: break-word` differently than Chromium/Firefox in the
     // past (treats it like `overflow-wrap: break-word`, only breaking at
     // natural opportunities). Without webkit in the matrix, Safari-only
-    // mobile-UI regressions ship green. See render.spec.js wrap test.
+    // mobile-UI regressions ship green. See smoke.spec.js and mobile-composer.spec.js.
     { name: 'webkit',   use: { ...devices['Desktop Safari'] } },
     // No pixel5-firefox project: Playwright Firefox doesn't support isMobile/hasTouch
     // (which the Pixel 5 device descriptor sets to true), so the context fails to

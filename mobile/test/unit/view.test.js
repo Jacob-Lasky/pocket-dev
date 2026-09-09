@@ -1,86 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Terminal } from '@xterm/xterm';
-import {
-  ViewRenderer,
-  buildPalette,
-  renderTerminalHtml,
-  renderTerminalText,
-  cleanCopyText,
-} from '../../public/js/view.js';
-
-// ── ViewRenderer: now just sticky-bottom scroll + innerHTML swap ────────────
-function makeContainer() {
-  const scroll = document.createElement('div');
-  scroll.style.cssText = 'height:100px;overflow-y:auto';
-  const content = document.createElement('div');
-  scroll.appendChild(content);
-  document.body.appendChild(scroll);
-  return { scroll, content };
-}
-
-describe('ViewRenderer', () => {
-  let scroll, content, renderer;
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    ({ scroll, content } = makeContainer());
-    renderer = new ViewRenderer({ scrollEl: scroll, contentEl: content });
-  });
-
-  it('inserts ready HTML into contentEl', () => {
-    renderer.update('<span>hello world</span>');
-    expect(content.innerHTML).toBe('<span>hello world</span>');
-    expect(content.textContent).toBe('hello world');
-  });
-
-  it('replaces content on each update (not appends)', () => {
-    renderer.update('first');
-    renderer.update('second');
-    expect(content.textContent).toBe('second');
-  });
-
-  it('handles empty input without throwing', () => {
-    expect(() => renderer.update('')).not.toThrow();
-    expect(content.textContent).toBe('');
-  });
-
-  it('auto-scrolls to bottom when previously at bottom', () => {
-    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, get: () => 1000 });
-    Object.defineProperty(scroll, 'clientHeight', { configurable: true, get: () => 100 });
-    scroll.scrollTop = 900;
-    renderer.update('x'.repeat(5000));
-    expect(scroll.scrollTop).toBe(scroll.scrollHeight - scroll.clientHeight);
-  });
-
-  it('does NOT auto-scroll when the user has scrolled up', () => {
-    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, get: () => 1000 });
-    Object.defineProperty(scroll, 'clientHeight', { configurable: true, get: () => 100 });
-    scroll.scrollTop = 200;
-    renderer.update('x'.repeat(5000));
-    expect(scroll.scrollTop).toBe(200);
-  });
-});
-
-// ── buildPalette ─────────────────────────────────────────────────────────────
-describe('buildPalette', () => {
-  const theme = {
-    black: '#000', red: '#f00', green: '#0f0', yellow: '#ff0',
-    blue: '#00f', magenta: '#f0f', cyan: '#0ff', white: '#fff',
-    brightBlack: '#111', brightRed: '#f11', brightGreen: '#1f1', brightYellow: '#ff1',
-    brightBlue: '#11f', brightMagenta: '#f1f', brightCyan: '#1ff', brightWhite: '#eee',
-  };
-
-  it('uses the theme for indices 0-15 and the xterm cube above', () => {
-    const p = buildPalette(theme);
-    expect(p).toHaveLength(256);
-    expect(p[0]).toBe('#000');
-    expect(p[15]).toBe('#eee');
-    expect(p[16]).toBe('#000000');   // cube origin
-    expect(p[231]).toBe('#ffffff');  // cube max
-    expect(p[232]).toBe('#080808');  // first grey
-    expect(p[255]).toBe('#eeeeee');  // last grey
-  });
-});
+import { renderTerminalText, cleanCopyText } from '../../public/js/view.js';
 
 // ── Buffer walk: the actual bug fixes ───────────────────────────────────────
 // These run a REAL xterm under the test DOM so we exercise the parsed buffer,
@@ -97,12 +18,6 @@ async function makeTerm(cols = 20) {
   return term;
 }
 
-const palette = buildPalette({
-  black: '#000000', red: '#ff0000', green: '#00ff00', yellow: '#ffff00',
-  blue: '#0000ff', magenta: '#ff00ff', cyan: '#00ffff', white: '#ffffff',
-  brightBlack: '#555555', brightRed: '#ff5555', brightGreen: '#55ff55', brightYellow: '#ffff55',
-  brightBlue: '#5555ff', brightMagenta: '#ff55ff', brightCyan: '#55ffff', brightWhite: '#ffffff',
-});
 
 describe('renderTerminalText (buffer walk → plain text)', () => {
   it('preserves internal and leading spaces (the cursor-move bug)', async () => {
@@ -131,9 +46,7 @@ describe('renderTerminalText (buffer walk → plain text)', () => {
   });
 
   it('does not crash on palette-coloured cells (no palette passed)', async () => {
-    // renderTerminalText discards colour, so it calls logicalLines with no
-    // palette. A palette-indexed colour (\x1b[31m) must not blow up the cell
-    // colour lookup. Regression guard for the undefined-palette crash.
+    // Copy ignores colour without losing the text from coloured cells.
     const term = await makeTerm(40);
     await write(term, '\x1b[31mred\x1b[0m word\r\n');
     expect(() => renderTerminalText(term)).not.toThrow();
@@ -146,49 +59,22 @@ describe('renderTerminalText (buffer walk → plain text)', () => {
     const text = renderTerminalText(term);
     expect(text.split('\n')[0]).toBe('abcdefghijklmnop');
   });
-});
 
-describe('renderTerminalHtml (buffer walk → coloured HTML)', () => {
-  it('preserves spaces as literal text', async () => {
-    const term = await makeTerm(40);
-    await write(term, 'a   b\r\n');
-    const html = renderTerminalHtml(term, { palette });
-    expect(html).toContain('a   b');
+  it('preserves wide glyphs and spaces at a soft wrap', async () => {
+    const term = await makeTerm(10);
+    await write(term, '界界    abcd\r\n');
+    expect(renderTerminalText(term).split('\n')[0]).toBe('界界    abcd');
   });
 
-  it('escapes HTML metacharacters', async () => {
-    const term = await makeTerm(40);
-    await write(term, '<script>&\r\n');
-    const html = renderTerminalHtml(term, { palette });
-    expect(html).toContain('&lt;script&gt;&amp;');
-    expect(html).not.toContain('<script>');
-  });
-
-  it('emits a coloured span for SGR foreground colour', async () => {
-    const term = await makeTerm(40);
-    await write(term, '\x1b[31mred\x1b[0m plain\r\n');
-    const html = renderTerminalHtml(term, { palette });
-    expect(html).toMatch(/<span style="[^"]*color:[^"]*">red<\/span>/);
-    expect(html).toContain('plain');
-  });
-
-  it('renders bold as font-weight', async () => {
-    const term = await makeTerm(40);
-    await write(term, '\x1b[1mBOLD\x1b[0m\r\n');
-    const html = renderTerminalHtml(term, { palette });
-    expect(html).toMatch(/font-weight:bold[^>]*>BOLD/);
-  });
-
-  it('wraps each logical line in a .vrow block', async () => {
-    const term = await makeTerm(40);
-    await write(term, 'line one\r\nline two\r\n');
-    const html = renderTerminalHtml(term, { palette });
-    expect(html).toContain('<div class="vrow">line one</div>');
-    expect(html).toContain('<div class="vrow">line two</div>');
-    // blank trailing rows get a <br> so they occupy a line
-    expect(html).toContain('<div class="vrow"><br></div>');
-    // no stray newlines between blocks (would render as extra blank lines)
-    expect(html).not.toContain('</div>\n');
+  it('copies only the visible rows when scrolled into shell history', async () => {
+    const term = await makeTerm(20);
+    for (let n = 0; n < 20; n++) await write(term, `line-${n}\r\n`);
+    term.scrollToTop();
+    const text = renderTerminalText(term, { viewportOnly: true });
+    expect(text).toContain('line-0');
+    expect(text).toContain('line-9');
+    expect(text).not.toContain('line-10');
+    expect(text).not.toContain('line-19');
   });
 });
 
@@ -218,14 +104,6 @@ describe('real Claude frame (closes the cat/alt-screen test gap)', () => {
     expect(text).not.toContain('\x1b'); // no escape codes leaked
   });
 
-  it('preserves the banner colour in HTML output', async () => {
-    const term = await makeTerm(110);
-    await write(term, frameBytes);
-    const html = renderTerminalHtml(term, { palette });
-    // The amber rule/header is truecolor #ffc107 -> rgb(255,193,7).
-    expect(html).toMatch(/color:#ffc107/i);
-    expect(html).toContain('Quick safety check: Is this');
-  });
 });
 
 describe('cleanCopyText', () => {

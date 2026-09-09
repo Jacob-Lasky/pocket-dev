@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0d1117">
   <title>pocket-dev</title>
 
 <link rel="stylesheet" href="/xterm/css/xterm.css">
@@ -52,8 +53,7 @@
          will otherwise claim the gesture for pull-to-refresh/overscroll and
          fire touchcancel before our capture-phase scroll handler (scroll.js
          wiring) can forward it. `none` hands every 1-finger drag to us; our
-         own JS pinch handler still drives 2-finger font zoom. NOT set on
-         #view-pane, which needs native scrolling for the Select overlay. */
+         own JS pinch handler still drives 2-finger font zoom. */
       touch-action: none;
     }
     .terminal-pane.active {
@@ -111,7 +111,7 @@
       flex-shrink: 0;
       background: #161b22;
       border-top: 1px solid #30363d;
-      padding: 8px;
+      padding: 8px 10px max(10px, env(safe-area-inset-bottom));
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -122,7 +122,6 @@
       flex-direction: column;
       gap: 6px;
       overflow: hidden;
-      transition: max-height 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
       max-height: 100px;
       opacity: 1;
     }
@@ -146,13 +145,14 @@
     .action-btn.tmux-kill:active { background: #ff7b7222; }
     .action-btn.tmux-kill.armed { background: #ff7b72; border-color: #ff7b72; color: #0d1117; font-weight: 600; }
 
-    #input-row { display: flex; gap: 8px; align-items: center; }
+    #input-row { display: flex; gap: 8px; align-items: flex-end; min-width: 0; }
 
     #cmd-input {
       flex: 1; background: #0d1117; color: #e6edf3;
       border: 1px solid #30363d; border-radius: 6px;
-      padding: 0 12px; height: 44px; font-size: 16px;
-      font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+      padding: 11px 12px; min-height: 48px; height: 48px; max-height: 160px; font-size: 16px;
+      min-width: 0; resize: none; line-height: 24px; overflow-y: auto;
+      font-family: inherit;
       outline: none; transition: border-color 0.1s;
     }
     #cmd-input::placeholder { color: #484f58; }
@@ -179,36 +179,29 @@
     #collapse-btn:active  { color: #e6edf3; }
     #collapse-btn.collapsed { transform: rotate(180deg); }
 
-    /* ── Select overlay (wrapped, selectable render of the current screen) ── */
-    #view-pane {
-      position: absolute;
-      inset: 0;
-      display: none;
-      overflow-y: auto;
-      overflow-x: hidden;
-      -webkit-overflow-scrolling: touch;
-      background: #0d1117;
-      padding: 8px 10px;
-      z-index: 5;
+    .selection-tools {
+      position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+      z-index: 20; display: flex; border: 1px solid #388bfd; border-radius: 12px;
+      background: #21262d; box-shadow: 0 4px 20px #0008; overflow: hidden;
     }
-
-    body[data-mode="select"] #view-pane { display: block; }
-
-    #view-content {
-      margin: 0;
-      font-family: 'SF Mono', Consolas, 'Courier New', monospace;
-      font-size: 13px;
-      line-height: 1.45;
-      color: #e6edf3;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      cursor: text;
-      user-select: text;
-      -webkit-user-select: text;
+    .selection-tools button {
+      min-width: 72px; height: 44px; color: #e6edf3; background: none;
+      border: 0; font: inherit; cursor: pointer; touch-action: manipulation;
     }
-
-    /* Mode toggle styling */
-    .mode-btn.active { background: #388bfd33; border-color: #388bfd; color: #58a6ff; }
+    .selection-handle {
+      position: absolute; z-index: 21; width: 44px; height: 44px;
+      margin-left: -22px; padding: 0; background: transparent; border: 0;
+      touch-action: none;
+    }
+    .selection-handle::before {
+      content: ''; position: absolute; top: 0; left: 14px; width: 16px; height: 18px;
+      border-radius: 2px 2px 50% 50%; background: #58a6ff;
+    }
+    .selection-tools[hidden], .selection-handle[hidden] { display: none; }
+    #composer-error { color: #ff7b72; margin: 0; font-size: 13px; }
+    #input-area { flex: 1; min-width: 0; }
+    #composer-hint { color: #8b949e; font-size: 11px; margin-top: 5px; }
+    #send-btn:disabled { opacity: .5; cursor: default; }
 
     /* ── Session list ─────────────────────────────────────────────────────
        A full-screen overlay rather than a swap of #terminal-stack's contents.
@@ -429,9 +422,17 @@
       .btn-row    { gap: 4px; }
       .action-btn { flex: none; height: 28px; padding: 0 10px; font-size: 12px; }
       #input-row  { flex: 1; }
-      #cmd-input  { height: 34px; font-size: 14px; padding: 0 10px; }
+      #cmd-input  { min-height: 38px; height: 38px; font-size: 14px; padding: 6px 10px; }
       #send-btn   { height: 34px; font-size: 15px; padding: 0 14px; }
-      #collapse-btn { height: 34px; }
+      #collapse-btn { height: 38px; }
+    }
+    @media (max-width: 767px) {
+      #topbar { padding-top: env(safe-area-inset-top); }
+      .session-label { min-height: 44px; font-size: 14px; }
+      .action-btn { min-height: 44px; }
+      #send-btn { height: 48px; padding: 0 16px; }
+      #collapse-btn { height: 48px; width: 36px; color: #8b949e; }
+      #btn-group { max-height: 100px; }
     }
   </style>
 </head>
@@ -446,9 +447,6 @@
     </div>
     <div id="terminal-container">
       <div id="conn-dot" title="WebSocket disconnected"></div>
-      <div id="view-pane">
-        <div id="view-content"></div>
-      </div>
       <div id="terminal-stack"></div>
     </div>
     <div id="controls">
@@ -459,7 +457,7 @@
           <button class="action-btn" onclick="sendKey('tab')"    title="Tab">Tab</button>
           <button class="action-btn" onclick="sendKey('enter')"  title="Enter">↵</button>
           <button id="copy-btn"  class="action-btn"          onclick="copyAllOutput()" title="Copy the current screen">📋</button>
-          <button id="mode-select" class="action-btn mode-btn" onclick="toggleSelect()" title="Select / copy text from the current screen">Select</button>
+          <button class="action-btn" onclick="sendKey('ctrl-c')" title="Interrupt the running command">Stop</button>
           <button id="sessions-btn" class="action-btn tmux-btn" onclick="openSessionList()" title="All sessions">Sessions</button>
         </div>
         <div class="btn-row">
@@ -471,11 +469,15 @@
           <button id="kill-btn" class="action-btn tmux-kill" onclick="killPressed()" title="Kill this session">✕</button>
         </div>
       </div>
-      <div id="input-row">
-        <input id="cmd-input" type="text" placeholder="Type a message…"
-               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-        <button id="send-btn" onclick="sendText()" title="Send">→</button>
-        <button id="collapse-btn" class="collapsed" onclick="toggleCollapse()" title="Toggle toolbar">⌄</button>
+      <div id="input-area">
+        <div id="input-row">
+          <textarea id="cmd-input" rows="1" placeholder="Message this session…" aria-label="Message this session"
+                    autocomplete="off" autocapitalize="sentences" spellcheck="true"></textarea>
+          <button id="send-btn" onclick="sendText()" title="Send message" aria-label="Send message">↑</button>
+          <button id="collapse-btn" class="collapsed" onclick="toggleCollapse()" title="Terminal keys" aria-label="Toggle terminal keys">⌄</button>
+        </div>
+        <div id="composer-hint">Drag to copy · Shift+Enter for a new line</div>
+        <p id="composer-error" role="status" hidden></p>
       </div>
     </div>
   </div>
@@ -505,8 +507,8 @@
   <script src="/addon-fit/lib/addon-fit.js"></script>
   <script type="module">
     import { clipboardWrite } from '/js/clipboard.js';
-    import { ViewRenderer, buildPalette, renderTerminalHtml, renderTerminalText, cleanCopyText } from '/js/view.js';
-    import { detectDefaultMode, applyMode } from '/js/mode.js';
+    import { renderTerminalText, cleanCopyText } from '/js/view.js';
+    import { LiveSelection } from '/js/selection.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
     import { scanMouseState, wheelSequence, wheelStepsFromDelta } from '/js/scroll.js';
     import { STATE_TEXT, rowState, badgeState, summarise, isUnread, pollDelay } from '/js/attention.js';
@@ -536,8 +538,6 @@
     const connDot     = document.getElementById('conn-dot');
     const scrollBtn   = document.getElementById('scroll-bottom');
     const sessionLbl  = document.getElementById('session-label');
-    const viewPaneEl  = document.getElementById('view-pane');
-    const viewContent = document.getElementById('view-content');
 
     // ── Session model ───────────────────────────────────────────────────────
     // Each session owns its own xterm.js + WS + scrollback. Only one .pane
@@ -623,6 +623,7 @@
 
         this.term = new Terminal({
           cursorBlink: true,
+          macOptionClickForcesSelection: true,
           scrollback:  10000,
           fontSize:    currentFontSize,
           fontFamily:  "'SF Mono', Consolas, 'Courier New', monospace",
@@ -634,7 +635,7 @@
 
         this.term.onSelectionChange(() => {
           if (activeId !== this.id) return;
-          if (this.term.hasSelection()) clipboardWrite(this.term.getSelection());
+          if (this.term.hasSelection() && !this.selection?.touchSelecting) clipboardWrite(this.term.getSelection());
         });
         this.term.attachCustomKeyEventHandler(e => {
           if (maybeHandlePrefix(e)) return false;
@@ -647,8 +648,22 @@
           });
         });
 
+        this.writeQueue = Promise.resolve();
+        this.outputReplies = null;
+        // xterm 5.5's public onData mixes keyboard/paste/mouse input with
+        // automatic terminal replies. Its internal onUserInput fires directly
+        // before onData for human input. Keep this one version-sensitive hook
+        // covered by replay-queries.spec.js when upgrading xterm.
+        let userInput = false;
+        this.term._core.coreService.onUserInput(() => { userInput = true; });
         this.term.onData(data => {
-          if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(data);
+          const human = userInput;
+          userInput = false;
+          // Focus reports originate outside the parser and aren't tagged by
+          // xterm as user input. They must not join a terminal reply batch.
+          if (!human && this.outputReplies && data !== '\x1b[I' && data !== '\x1b[O') {
+            this.outputReplies.push(data);
+          } else this.sendRaw(data);
         });
         this.term.onScroll(() => { if (activeId === this.id) updateScrollBtn(); });
 
@@ -658,6 +673,7 @@
         // xterm scrollback, so a drag scrolls that locally. scanMouseState
         // (fed every output chunk) tells the touch handler which case we're in.
         this.mouse = { track: false, sgr: false };
+        this.selection = new LiveSelection({ term: this.term, pane: this.pane, mouseTracking: () => this.mouse.track });
         // Does this pane track the bottom of its buffer? See installFollowGuard.
         this.follow = true;
         this.installTouchScroll();
@@ -784,16 +800,19 @@
       installTouchScroll() {
         let dragging = false, committed = false, lastY = 0, startY = 0, acc = 0;
         const stepPx = () => Math.max(14, currentFontSize * 1.2); // ~one text row
-        const active = () => activeId === this.id && document.body.dataset.mode !== 'select';
+        const active = () => activeId === this.id;
 
         const onStart = e => {
-          if (!active() || e.touches.length !== 1) { dragging = false; return; }
+          if (!active() || e.touches.length !== 1) { this.selection.cancelPress(); dragging = false; return; }
+          if (!this.selection.touchStart(e)) { dragging = false; return; }
+          e.stopPropagation();
           dragging = true; committed = false;
           startY = lastY = e.touches[0].clientY; acc = 0;
         };
         const onMove = e => {
           if (!dragging) return;
-          if (e.touches.length !== 1) { dragging = false; return; } // yield to pinch
+          if (e.touches.length !== 1) { this.selection.cancelPress(); dragging = false; return; }
+          if (this.selection.touchMove(e)) { e.preventDefault(); e.stopPropagation(); return; }
           const y = e.touches[0].clientY;
           // Require a small deliberate movement before hijacking, so a tap still
           // reaches xterm (focus / cursor) instead of being eaten as a scroll.
@@ -817,17 +836,17 @@
           e.preventDefault();
           e.stopPropagation();
         };
-        const onEnd = () => { dragging = false; committed = false; };
+        const onEnd = e => { this.selection.touchEnd(e); dragging = false; committed = false; };
 
         this.pane.addEventListener('touchstart', onStart, { capture: true, passive: true });
         this.pane.addEventListener('touchmove',  onMove,  { capture: true, passive: false });
-        this.pane.addEventListener('touchend',   onEnd,   { capture: true, passive: true });
-        this.pane.addEventListener('touchcancel', onEnd,  { capture: true, passive: true });
+        this.pane.addEventListener('touchend',   onEnd,   { capture: true, passive: false });
+        this.pane.addEventListener('touchcancel', onEnd,  { capture: true, passive: false });
       }
 
       connect() {
         const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${wsProto}//${location.host}/ws?session=${encodeURIComponent(this.id)}`);
+        const ws = new WebSocket(`${wsProto}//${location.host}/ws?session=${encodeURIComponent(this.id)}&frames=1`);
         this.ws = ws;
         this.setStatus('connecting');
 
@@ -862,8 +881,25 @@
         };
 
         ws.onmessage = e => {
-          const str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
-          this.term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+          let str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
+          let frame;
+          try { frame = JSON.parse(str); } catch { /* Legacy server sends raw terminal bytes. */ }
+          if (frame?.type === 'replay' || frame?.type === 'output') {
+            str = frame.data;
+            // Serialize writes so each automatic reply belongs to exactly one
+            // original output chunk. Human typing bypasses this queue.
+            this.writeQueue = this.writeQueue.then(() => new Promise(resolve => {
+              if (this.ws !== ws) { resolve(); return; }
+              const replies = this.outputReplies = [];
+              this.term.write(str, () => {
+                this.outputReplies = null;
+                if (frame.reply && replies.length && ws.readyState === WebSocket.OPEN) {
+                  ws.send(replies.join(''));
+                }
+                resolve();
+              });
+            }));
+          } else this.term.write(str);
           // Arriving bytes NEVER mark a session unread here.
           //
           // This used to optimistically set unread = true for any background
@@ -891,7 +927,6 @@
           // whether to forward wheel events to the coder or scroll xterm locally.
           this.mouse = scanMouseState(str, this.mouse);
           if (activeId === this.id) {
-            scheduleViewRefresh();
             if (!this.isAtBottom()) scrollBtn.classList.add('has-new-output');
           }
         };
@@ -937,6 +972,7 @@
 
       destroy() {
         try { this.ws && this.ws.close(); } catch {}
+        this.selection.dispose();
         try { this.term.dispose(); } catch {}
         this.pane.remove();
       }
@@ -950,7 +986,14 @@
 
     function setActive(id) {
       if (!sessions.has(id)) return;
+      if (activeId !== id) {
+        saveDraft();
+        input.value = readDraft(id);
+        resizeComposer();
+        composerError.hidden = true;
+      }
       if (activeId !== null && activeId !== id) {
+        sessions.get(activeId)?.selection.clear();
         previousId = activeId;
         // Flush the outgoing session's read state on the way out, unthrottled.
         //
@@ -963,6 +1006,7 @@
         markViewed(previousId);
       }
       activeId = id;
+      sendButton.disabled = pendingSends.has(id);
       for (const s of sessions.values()) {
         s.pane.classList.toggle('active', s.id === id);
       }
@@ -983,7 +1027,6 @@
       // Hidden panes don't render; the newly-visible one needs a fit.
       requestAnimationFrame(() => {
         active.fitAndResize();
-        refreshViewIfActive();
         updateScrollBtn();
       });
     }
@@ -1051,6 +1094,7 @@
       if (!s) return;
       s.destroy();
       sessions.delete(id);
+      storeDraft(id, '');
       dropSessionRow(id);
       const idx = order.indexOf(id);
       if (idx >= 0) order.splice(idx, 1);
@@ -1059,7 +1103,10 @@
         activeId = null;
         const fallback = previousId && sessions.has(previousId) ? previousId : (order[0] || null);
         if (fallback) setActive(fallback);
-        else applyConnStatusToDot('disconnected');
+        else {
+          input.value = ''; resizeComposer();
+          applyConnStatusToDot('disconnected');
+        }
       }
       updateSessionLabel();
     }
@@ -1400,103 +1447,15 @@
       }
     }
 
-    // ── Select overlay + copy helpers (scoped to ACTIVE session) ────────────
-    // The overlay renders the ACTIVE session's parsed buffer directly (see view.js for
-    // why we don't round-trip through serialize()+ansi_up — it drops spaces).
-    const viewPalette  = buildPalette(termTheme());
-    const viewRenderer = new ViewRenderer({
-      scrollEl:  viewPaneEl,
-      contentEl: viewContent,
-    });
-
+    // Copy helpers, scoped to the active session.
     function activeTerm() {
-      const s = sessions.get(activeId);
-      return s ? s.term : null;
-    }
-
-    // A live text selection inside the view pane must survive incoming output.
-    // Rebuilding innerHTML collapses the selection, so while the user holds a
-    // selection we defer the refresh and flush it once the selection clears.
-    let pendingViewRefresh = false;
-
-    function viewHasSelection() {
-      const sel = window.getSelection && window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
-      return viewPaneEl.contains(sel.anchorNode) || viewPaneEl.contains(sel.focusNode);
-    }
-
-    function renderViewNow() {
-      const term = activeTerm();
-      viewRenderer.update(term ? renderTerminalHtml(term, { palette: viewPalette, theme: termTheme() }) : '');
-      pendingViewRefresh = false;
-    }
-
-    function refreshViewIfActive() {
-      if (document.body.dataset.mode !== 'select') return;
-      // Don't rebuild the DOM out from under an in-progress text selection — it
-      // collapses the highlight. Defer and flush once the selection clears.
-      if (viewHasSelection()) { pendingViewRefresh = true; return; }
-      renderViewNow();
-    }
-
-    document.addEventListener('selectionchange', () => {
-      if (pendingViewRefresh && !viewHasSelection()) refreshViewIfActive();
-    });
-
-    let viewRefreshTimer = null;
-    function scheduleViewRefresh() {
-      if (viewRefreshTimer) return;
-      viewRefreshTimer = setTimeout(() => {
-        viewRefreshTimer = null;
-        refreshViewIfActive();
-      }, 100);
-    }
-
-    const modeRefs = {
-      body:      document.body,
-      livePane:  stackEl,
-      viewPane:  viewPaneEl,
-      selectBtn: document.getElementById('mode-select'),
-    };
-
-    window.setMode = function(mode) {
-      applyMode(mode, modeRefs);
-      if (mode === 'select') refreshViewIfActive();
-      else { const s = sessions.get(activeId); s && s.fitAndResize(); }
-    };
-
-    // The Select overlay is a toggle: tap to grab text from the current screen,
-    // tap again to return to the live terminal.
-    window.toggleSelect = function() {
-      setMode(document.body.dataset.mode === 'select' ? 'live' : 'select');
-    };
-
-    // Copy the VISIBLE rows of the Select overlay — the ones currently on
-    // screen. Each rendered line is a .vrow block; we keep the ones whose box
-    // intersects the pane's viewport, then clean the text (real spaces, no
-    // escape codes, collapsed blanks). In Live mode there's no rendered reader,
-    // so fall back to the live terminal's current screen.
-    function visibleViewText() {
-      const paneRect = viewPaneEl.getBoundingClientRect();
-      const picked = [];
-      for (const row of viewContent.querySelectorAll('.vrow')) {
-        const r = row.getBoundingClientRect();
-        if (r.bottom > paneRect.top + 1 && r.top < paneRect.bottom - 1) picked.push(row.textContent);
-      }
-      return cleanCopyText(picked.join('\n'));
+      return sessions.get(activeId)?.term || null;
     }
 
     window.copyAllOutput = async function() {
-      let text = '';
-      if (document.body.dataset.mode === 'select') {
-        if (!viewHasSelection()) renderViewNow(); // make sure visible rows are current
-        text = visibleViewText();
-      } else {
-        const term = activeTerm();
-        text = term ? cleanCopyText(renderTerminalText(term)) : '';
-      }
-      const ok = await clipboardWrite(text);
-      flashCopyButton(ok);
+      const term = activeTerm();
+      const text = term ? (term.getSelection() || cleanCopyText(renderTerminalText(term, { viewportOnly: true }))) : '';
+      flashCopyButton(await clipboardWrite(text));
     };
 
     function flashCopyButton(ok) {
@@ -1518,11 +1477,11 @@
       btnGroup.classList.toggle('collapsed', toolbarCollapsed);
       collapseBtn.classList.toggle('collapsed', toolbarCollapsed);
       localStorage.setItem('pd-toolbar-collapsed', toolbarCollapsed);
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         const s = sessions.get(activeId);
         s && s.fitAndResize();
         positionScrollBtn();
-      }, 220);
+      });
     }
 
     // ── Scroll-to-bottom button ────────────────────────────────────────────
@@ -1569,8 +1528,8 @@
     // a snapshot of the container at one instant; if layout settles to a
     // different size afterwards (browser chrome show/hide, rotation, font load,
     // late reflow) nothing re-fits and the live grid renders jumbled — until the
-    // user pokes it (e.g. collapsing/expanding the toolbar, which fits after its
-    // animation). A ResizeObserver makes that workaround automatic and covers
+    // user pokes it (e.g. collapsing/expanding the toolbar). A ResizeObserver
+    // makes that workaround automatic and covers
     // size changes the window/visualViewport 'resize' events miss.
     if (window.ResizeObserver) {
       let roTimer = null;
@@ -1628,6 +1587,32 @@
     }, { passive: true });
 
     const input = document.getElementById('cmd-input');
+    const composerError = document.getElementById('composer-error');
+    const sendButton = document.getElementById('send-btn');
+    const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
+    document.getElementById('composer-hint').textContent = isTouch()
+      ? 'Hold text to copy · Return adds a line'
+      : 'Drag to copy · Shift+Enter for a new line';
+    const drafts = new Map();
+    function readDraft(id) {
+      try { return sessionStorage.getItem(`pd-draft:${id}`) || drafts.get(id) || ''; }
+      catch { return drafts.get(id) || ''; }
+    }
+    function storeDraft(id, text) {
+      if (!id) return;
+      drafts.set(id, text);
+      try {
+        if (text) sessionStorage.setItem(`pd-draft:${id}`, text);
+        else sessionStorage.removeItem(`pd-draft:${id}`);
+      } catch { /* In-memory drafts still survive session switches. */ }
+    }
+    function saveDraft() { storeDraft(activeId, input.value); }
+    function resizeComposer() {
+      input.style.height = 'auto';
+      input.style.height = Math.min(160, input.scrollHeight + 2) + 'px';
+    }
+    input.addEventListener('input', () => { saveDraft(); resizeComposer(); });
+    input.addEventListener('focus', () => sessions.get(activeId)?.selection.clear());
     if (window.innerWidth >= 768) input.focus();
 
     // ── Command history ────────────────────────────────────────────────────
@@ -1638,20 +1623,24 @@
       if (!cmdHistory.length) return;
       historyIndex = Math.min(historyIndex + 1, cmdHistory.length - 1);
       input.value = cmdHistory[historyIndex];
+      saveDraft(); resizeComposer();
       setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
     }
 
     function historyDown() {
-      if (historyIndex <= 0) { historyIndex = -1; input.value = ''; return; }
+      if (historyIndex <= 0) { historyIndex = -1; input.value = ''; saveDraft(); resizeComposer(); return; }
       historyIndex--;
       input.value = cmdHistory[historyIndex];
+      saveDraft(); resizeComposer();
       setTimeout(() => input.setSelectionRange(input.value.length, input.value.length), 0);
     }
 
     input.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
-      else if (e.key === 'ArrowUp')   { e.preventDefault(); historyUp(); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); historyDown(); }
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || (!e.shiftKey && !isTouch()))) {
+        e.preventDefault(); sendText();
+      } else if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); historyUp(); }
+      else if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); historyDown(); }
     });
 
     // ── Session-switch row (was: tmux row) ─────────────────────────────────
@@ -1732,30 +1721,50 @@
     }
 
     // ── Actions ────────────────────────────────────────────────────────────
-    // The ⟳ button is the "my display is messed up — fix it" escape hatch.
-    // It repaints whichever pane you're looking at: in Select it force-re-renders
-    // from the current buffer (ignoring the selection guard — an explicit tap
-    // means "redraw now"); in Live it re-fits and forces a full xterm redraw to
-    // clear a jumbled grid. It also asks the server/tmux to repaint.
+    // Refit the live grid and ask tmux to repaint it.
     async function refreshTerminal() {
       if (!activeId) return;
       const s = sessions.get(activeId);
-      if (document.body.dataset.mode === 'select') {
-        renderViewNow();
-      } else if (s) {
+      if (s) {
+        s.selection.clear();
         s.fitAndResize();
         s.term.refresh(0, s.term.rows - 1);
       }
       await post('/refresh', { session: activeId });
     }
 
+    const pendingSends = new Set();
     async function sendText() {
-      const text = input.value.trim();
-      if (!text || !activeId) return;
-      if (cmdHistory[0] !== text) cmdHistory.unshift(text);
-      historyIndex = -1;
-      input.value = '';
-      await post('/send', { session: activeId, text });
+      const text = input.value, id = activeId;
+      if (!text.trim() || !id || pendingSends.has(id)) return;
+      pendingSends.add(id);
+      sendButton.disabled = true;
+      composerError.hidden = true;
+      saveDraft();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch('/send', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: id, text, bracketedPaste: !!sessions.get(id)?.term.modes.bracketedPasteMode }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        if (cmdHistory[0] !== text) cmdHistory.unshift(text);
+        historyIndex = -1;
+        if (activeId === id && input.value === text) {
+          input.value = ''; saveDraft(); resizeComposer();
+        } else if (activeId !== id && readDraft(id) === text) storeDraft(id, '');
+      } catch {
+        if (activeId === id) {
+          composerError.textContent = 'Could not confirm delivery. Your draft is saved. Check the session before retrying.';
+          composerError.hidden = false;
+        }
+      } finally {
+        clearTimeout(timeout);
+        pendingSends.delete(id);
+        sendButton.disabled = pendingSends.has(activeId);
+      }
     }
 
     async function sendKey(key) {
@@ -1775,7 +1784,7 @@
 
     // ── Default mode + go ──────────────────────────────────────────────────
     document.body.dataset.view = 'session';
-    window.setMode(detectDefaultMode());
+    document.body.dataset.mode = 'live';
     // Expose `term` immediately under ?test=1 so static-mode render tests can
     // confirm the module script ran to completion before bootstrap finishes.
     // Real sessions overwrite this as soon as the first one is created/attached.
