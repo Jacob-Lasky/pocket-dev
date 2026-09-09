@@ -65,7 +65,7 @@ recovery before moving daily sessions. A custom ACP frontend becomes justified
 only if maintained clients cannot meet those requirements.
 
 The chosen change preserves session ownership and adds no dependencies. The
-composer negotiates bracketed paste with the server; reconnects also need an
+composer negotiates bracketed paste with the server; reconnects also need a
 replay boundary to prevent old handshakes becoming prompt text.
 That protocol uses one documented xterm 5.5 internal input-provenance hook,
 covered by browser tests. A chat migration would additionally require retaining
