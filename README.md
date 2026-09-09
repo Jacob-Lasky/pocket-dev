@@ -50,6 +50,7 @@ Two consequences worth knowing:
 
 - **Install session tools into `~/bin`** (on `PATH`, inside the mount), not `~/.local/bin` — that one is a symlink into the image skeleton, and writes there are lost on the next update.
 - **`~/.cache` and `~/.npm` are deliberately not persisted.** They are relinked to a container-local path, because the home mount lands on the UnRAID array over shfs FUSE and a write-heavy cache is the wrong traffic for it.
+- **`~/.codex/tmp` is relinked the same way**, for a different reason: Codex deletes its own temporary helper directories while their lock files are still open, which shfs cannot do (it leaves a `.fuse_hidden*` file behind and the removal fails), so on the array each start would strand another directory in your appdata. Only the temporary helpers move — your codex login, conversations and config stay in the mount.
 
 ## A second model in the box
 
