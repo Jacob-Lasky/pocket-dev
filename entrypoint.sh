@@ -115,6 +115,17 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
+  # Codex removes its arg0 helper directories with their .lock files still
+  # open. shfs FUSE keeps an unlinked open file as .fuse_hidden*, so rmdir
+  # fails with ENOTEMPTY and each startup leaves more stale directories.
+  # These are process-lifetime helpers, not persisted Codex state. Relocate
+  # only tmp, before the daemon or any session starts. DO NOT run this
+  # migration against active Codex processes; their PATH uses these helpers.
+  mkdir -p "$CACHE/.codex-tmp"
+  chmod 700 "$CACHE/.codex-tmp"
+  [ -L "$HOME/.codex/tmp" ] || rm -rf "$HOME/.codex/tmp"
+  ln -sfn "$CACHE/.codex-tmp" "$HOME/.codex/tmp"
+
   # CODEX REMOTE CONTROL, so a Codex tab is drivable from the phone the way a
   # Claude tab is. The two mechanisms are NOT alike, and that asymmetry is the
   # whole reason this lives here instead of on a command line:
@@ -161,7 +172,9 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # against an IP address.
   CODEX_STANDALONE="$HOME/.codex/packages/standalone/current/bin/codex"
   if [ "${PD_CODEX_RC:-1}" != "0" ] && [ ! -x "$CODEX_STANDALONE" ]; then
-    if CODEX_INSTALL_DIR="$HOME/bin" curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | sh >/dev/null 2>&1; then
+    # The installer, not curl, must receive the destination. pipefail keeps a
+    # failed download from looking like a successful empty shell script.
+    if (set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | CODEX_INSTALL_DIR="$HOME/bin" sh >/dev/null 2>&1); then
       echo "pocket-dev: installed the standalone codex (remote control needs it)" >&2
     else
       echo "pocket-dev: standalone codex install failed; remote control unavailable," >&2

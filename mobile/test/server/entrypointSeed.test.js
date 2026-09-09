@@ -140,6 +140,60 @@ describe('entrypoint.sh seeding, executed', () => {
     }
   });
 
+  it('relocates Codex temporary helpers while preserving credentials and sessions', () => {
+    const codex = path.join(home, '.codex');
+    fs.mkdirSync(path.join(codex, 'tmp/arg0/stale'), { recursive: true });
+    fs.mkdirSync(path.join(codex, 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(codex, 'auth.json'), 'saved auth');
+    fs.writeFileSync(path.join(codex, 'sessions/saved.jsonl'), 'saved conversation');
+    expect(run().status).toBe(0);
+    const tmp = path.join(codex, 'tmp');
+    expect(fs.lstatSync(tmp).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(tmp)).toBe(path.join(cache, '.codex-tmp'));
+    expect(fs.statSync(tmp).mode & 0o777).toBe(0o700);
+    expect(fs.existsSync(path.join(tmp, 'arg0/stale'))).toBe(false);
+    expect(fs.readFileSync(path.join(codex, 'auth.json'), 'utf8')).toBe('saved auth');
+    expect(fs.readFileSync(path.join(codex, 'sessions/saved.jsonl'), 'utf8')).toBe('saved conversation');
+
+    // A recreate keeps the home symlink but discards its container-local target.
+    fs.rmSync(cache, { recursive: true });
+    expect(run().status).toBe(0);
+    expect(fs.realpathSync(tmp)).toBe(path.join(cache, '.codex-tmp'));
+    expect(fs.statSync(tmp).mode & 0o777).toBe(0o700);
+  });
+
+  it('passes the persistent launcher directory to the standalone installer', () => {
+    const bin = path.join(tmproot, 'stubs');
+    const installer = path.join(tmproot, 'installer.sh');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\ncat "$PD_TEST_INSTALLER"\n', { mode: 0o755 });
+    fs.writeFileSync(installer, `
+test "$CODEX_INSTALL_DIR" = "$HOME/bin" || exit 23
+test -L "$HOME/.codex/tmp" || exit 24
+mkdir -p "$HOME/.codex/packages/standalone/current/bin"
+cat > "$HOME/.codex/packages/standalone/current/bin/codex" <<'CODEX'
+#!/bin/sh
+printf '%s\\n' "$*" > "$HOME/daemon-args"
+CODEX
+chmod +x "$HOME/.codex/packages/standalone/current/bin/codex"
+ln -s "$HOME/.codex/packages/standalone/current/bin/codex" "$CODEX_INSTALL_DIR/codex"
+`);
+    const res = run({ PD_CODEX_RC: '1', PD_TEST_INSTALLER: installer, CODEX_INSTALL_DIR: '', PATH: `${bin}:${process.env.PATH}` });
+    expect(res.status).toBe(0);
+    expect(fs.existsSync(path.join(home, 'bin/codex'))).toBe(true);
+    expect(fs.readFileSync(path.join(home, 'daemon-args'), 'utf8')).toBe('remote-control start\n');
+  });
+
+  it('reports a failed installer download while still booting the terminal', () => {
+    const bin = path.join(tmproot, 'stubs');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\nexit 22\n', { mode: 0o755 });
+    const res = run({ PD_CODEX_RC: '1', PATH: `${bin}:${process.env.PATH}` });
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('standalone codex install failed');
+    expect(res.stderr).not.toContain('installed the standalone codex');
+  });
+
   it('preserves user state in the home across a re-seed', () => {
     // The credentials this whole design exists to keep: nothing in seeding may
     // touch them.
