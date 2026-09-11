@@ -1,6 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
-import { createApp } from '../../server.js';
+import { createApp, refreshTmuxSession } from '../../server.js';
+
+describe('tmux refresh helper', () => {
+  it('refreshes every tmux client attached to a safe session id', () => {
+    const run = vi.fn();
+    const done = vi.fn();
+
+    refreshTmuxSession('main-1', done, run);
+
+    expect(run).toHaveBeenCalledWith(
+      "tmux list-clients -t 'main-1' -F '#{client_name}' | xargs -r -I{} tmux refresh-client -t {}",
+      { shell: '/bin/bash' },
+      done,
+    );
+  });
+
+  it('rejects an unsafe id before invoking a shell', () => {
+    const run = vi.fn();
+    const done = vi.fn();
+
+    refreshTmuxSession("x'; touch /tmp/pwned; '", done, run);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(done).toHaveBeenCalledOnce();
+    expect(done.mock.calls[0][0]).toMatchObject({ message: 'invalid session id' });
+  });
+});
 
 describe('express endpoints (static + assets)', () => {
   const app = createApp();

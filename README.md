@@ -112,6 +112,8 @@ The bind address is handled for you: `entrypoint.sh` resolves the container's ow
 
 Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
 
+On every reconnect, pocket-dev replays recent terminal bytes and then asks tmux to repaint its authoritative current screen. The second step matters for Claude, Codex, and other full-screen terminal apps because their bounded byte history can begin inside a differential frame and cannot reconstruct a screen by itself.
+
 Each tab is also bound to a stable Claude conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
 
 If Claude was mid-task, what happens next depends on **how** the container went down:

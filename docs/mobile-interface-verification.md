@@ -1,4 +1,4 @@
-# Live selection and mobile composer verification
+# Live selection, mobile composer and reconnect rendering verification
 
 Recorded 2026-09-09. Implementation and screenshots were exercised in isolated
 local servers with real tmux, Claude Code and Codex. Production remains unchanged
@@ -28,6 +28,24 @@ Results: 478 unit/server tests passed; 147 browser tests passed, 13 skipped for
 their existing browser/platform conditions.
 The GitHub workflow additionally runs WebKit on Ubuntu; local Arch cannot run
 that browser's bundled runtime.
+
+Reconnect regression evidence recorded 2026-09-10:
+
+- The final local suites passed 484 unit/server tests and 149 Chromium/Firefox
+  browser tests, with 13 existing browser/platform skips. WebKit remains in the
+  GitHub Actions matrix.
+- The captured production replay for `main-133` was 656,731 bytes. Its retained
+  suffix began in ordinary text, carried no erase-display sequence and visibly
+  rebuilt duplicated, interleaved rows in a 390 px Chromium viewport.
+- `sessionsRestore.test.js` failed before the fix because `attachWs` sent the
+  replay without requesting a tmux refresh. It now pins replay-before-refresh
+  ordering and verifies an empty session does not request a needless repaint.
+- `mobile-render-order.spec.js` draws a Claude-shaped full-screen frame at the
+  browser's actual mobile dimensions, evicts that base frame with more than the
+  512 KB replay window of one-row differential updates, then closes the live
+  socket and reconnects with the exact same terminal grid. The reconnect ends
+  with one coherent frame only because the authoritative tmux repaint follows
+  the context-dependent suffix.
 
 The first CI matrix passed 216 browser tests and exposed one WebKit console
 error: it rejects the `interactive-widget` viewport key. That key was removed;
@@ -69,7 +87,9 @@ remain covered. These guards are not presented as additional baseline failures.
 Screenshots are kept in `mobile/test-artifacts/` and copied into the Lavish
 review: `live-claude-desktop-selection.png`, `live-claude-mobile.png`,
 `live-codex-mobile-reconnect.png`, `mobile-live-selection.png`,
-`mobile-composer.png`. They are actual browser captures, not mockups.
+`mobile-composer.png`, `reported-mobile-replay.png` and
+`mobile-render-order-chromium.png` / `mobile-render-order-firefox.png`. They are
+actual browser captures, not mockups.
 
 ## Independent review and limits
 
