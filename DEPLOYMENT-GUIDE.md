@@ -40,6 +40,12 @@ docker pull ghcr.io/jacob-lasky/pocket-dev:latest
 
 The first option is the normal path. The second is only needed if the container is wedged.
 
+### One-time: binding Codex tabs opened before per-tab capture shipped
+
+Only for the first deploy that carries the Codex `SessionStart` hook. A Codex tab started under an older image never recorded its conversation id, so the recreate that installs the hook would bring that tab back on a fresh conversation. `mobile/pd-codex-bind-current` records it in advance, and it has to run **inside that tab's own Codex conversation** (as a tool call from that Codex session), because that is the only place `CODEX_THREAD_ID` exists. The running image predates the helper, so run it from a checkout of the branch — the running pocket-dev has no copy of it yet.
+
+Bind immediately before the recreate: if that Codex process exits after binding and before the deploy, its replacement is a different conversation and needs binding again, because the pre-upgrade restart loop cannot update the file. Claude tabs need nothing here — their launcher has always recorded an id. `CLAUDE.md` under "Session restore" has the reasoning.
+
 ## Verifying the deploy
 
 After redeploy:

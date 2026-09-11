@@ -127,7 +127,7 @@ The difference is a `clean-shutdown` marker written by the server's signal handl
 |---|---|---|
 | `PD_STATE_DIR` | `/home/claude/.pocket-dev` | Where the roster and per-tab conversation ids live |
 | `PD_RESUME` | on | `0` disables conversation resume; the tab roster still restores |
-| `PD_RESUME_NUDGE` | `continue please` | What an interrupted session is asked after a deliberate restart. Empty string sends nothing |
+| `PD_RESUME_NUDGE` | `continue please` | What an interrupted Claude session is asked after a deliberate restart (Codex is never prompted). Empty string sends nothing |
 | `PD_CRASH_NUDGE` | a warning, see above | What it is told instead after an unexpected shutdown. Empty string sends nothing |
 | `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
 | `PD_ARCHIVE_CLOSE` | on | `0` keeps a tab open after its conversation is archived from another device |
