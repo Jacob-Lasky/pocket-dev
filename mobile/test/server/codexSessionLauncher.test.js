@@ -12,12 +12,13 @@ const RUN_SECONDS = '2.5s';
 
 let home, stubDir, argvLog, sidFile;
 
-function runLauncher(file = sidFile) {
+function runLauncher(file = sidFile, extraEnv = {}) {
   const env = spawnEnv({
     HOME: home,
     PATH: `${stubDir}:${process.env.PATH}`,
     PD_ARGV_LOG: argvLog,
     PD_CODEX_SID_FILE: file,
+    ...extraEnv,
   });
 
   spawnSync('timeout', [
@@ -64,6 +65,17 @@ describe('pd-codex-session', () => {
     expect(calls.length).toBeGreaterThan(1);
     expect(calls[1]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol');
     expect(calls[1]).not.toContain(UUID_A);
+  }, 15000);
+
+  it('passes a restore prompt to the resumed Codex turn only', () => {
+    fs.mkdirSync(path.dirname(sidFile), { recursive: true });
+    fs.writeFileSync(sidFile, `${UUID_A}\n`);
+
+    const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: 'continue please' });
+    expect(calls[0]).toBe(
+      `resume ${UUID_A} continue please --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol`,
+    );
+    expect(calls[1]).not.toContain('continue please');
   }, 15000);
 
   it('does not let two restored tabs converge on one conversation', () => {

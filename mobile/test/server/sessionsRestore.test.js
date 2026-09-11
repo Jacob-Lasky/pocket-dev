@@ -93,7 +93,7 @@ function fakeKill() {
   return (id, cb) => { kills.push(id); cb(null); };
 }
 
-function makeApi({ refreshSession = () => {} } = {}) {
+function makeApi({ refreshSession = () => {}, codexTurnStatus = () => 'unknown' } = {}) {
   const store = createSessionStore({ dir, logger });
   const api = createSessionsApi({
     killSession: fakeKill(),
@@ -101,6 +101,7 @@ function makeApi({ refreshSession = () => {} } = {}) {
     store,
     projectsDir,
     logger,
+    codexTurnStatus,
     spawnPty: (opts) => {
       const proc = fakePty();
       spawned.push({ ...opts, proc });
@@ -847,9 +848,9 @@ describe('the provider a session runs', () => {
     expect(said).toContain('Codex (Deepgram) session with no transcript status');
   });
 
-  it('does not hand a Claude continuation prompt to Codex', () => {
-    // Codex can resume, but pocket-dev cannot classify its transcript as busy.
-    // The Claude continuation prompt must therefore stay off its command line.
+  it.each(['interrupted', 'inProgress'])(
+    'continues a Codex turn whose last status is %s after a clean restart',
+    (lastTurnStatus) => {
     const first = makeApi();
     const state = first.api.create('main-1', { provider: 'codex' });
     const store = createSessionStore({ dir, logger });
@@ -857,13 +858,42 @@ describe('the provider a session runs', () => {
     fs.writeFileSync(store.sidPath(state.id), UUID);
     writeTranscript(UUID, BUSY);
 
-    const second = makeApi();
-    second.api.restore();
+    const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+    second.api.restore({ autoContinue: true });
     const spawn = spawned[spawned.length - 1];
-    expect(spawn.env.PD_RESUME_PROMPT).toBeUndefined();
+    expect(spawn.env.PD_RESUME_PROMPT).toBe('continue please');
     expect(spawn.command).not.toContain('pd-claude-session');
     expect(spawn.command).toContain('pd-codex-session');
+    },
+  );
+
+  it('warns an interrupted Codex turn after an unexpected restart', () => {
+    const first = makeApi();
+    const state = first.api.create('main-1', { provider: 'codex' });
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+
+    const second = makeApi({ codexTurnStatus: () => 'interrupted' });
+    second.api.restore({ autoContinue: false });
+    const spawn = spawned[spawned.length - 1];
+    expect(spawn.env.PD_RESUME_PROMPT).toContain('unexpected shutdown');
   });
+
+  it.each(['completed', 'failed', 'unknown'])(
+    'does not nudge a Codex turn whose last status is %s',
+    (lastTurnStatus) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider: 'codex' });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+      second.api.restore({ autoContinue: true });
+      expect(spawned[spawned.length - 1].env.PD_RESUME_PROMPT).toBeUndefined();
+    },
+  );
 
   it('hands each provider only its own launcher environment', () => {
     const { api } = makeApi();
