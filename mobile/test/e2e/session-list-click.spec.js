@@ -64,6 +64,11 @@ async function backgroundSessionId(page) {
   });
 }
 
+async function waitForBackgroundSessionId(page) {
+  await expect.poll(() => backgroundSessionId(page), { timeout: 5000 }).not.toBeNull();
+  return backgroundSessionId(page);
+}
+
 async function rowIndexFor(page, id) {
   return page.evaluate((wanted) =>
     [...document.querySelectorAll('.sl-row')].findIndex(r => r.dataset.sessionId === wanted), id);
@@ -76,8 +81,7 @@ test('a row click lands while another session is streaming output', async ({ pdS
   await waitForPanes(page, 2);      // the create is a fetch; the pane lands after the click returns
   await waitForConnection(page);
 
-  const targetId = await backgroundSessionId(page);
-  expect(targetId).toBeTruthy();
+  const targetId = await waitForBackgroundSessionId(page);
 
   await openSessionList(page);
   await expect.poll(() => page.locator('.sl-row').count()).toBe(2);
@@ -113,8 +117,7 @@ test('rows survive a re-render, so a press is never orphaned mid-click', async (
   await waitForPanes(page, 2);
   await waitForConnection(page);
 
-  const bg = await backgroundSessionId(page);
-  expect(bg).toBeTruthy();
+  const bg = await waitForBackgroundSessionId(page);
   await openSessionList(page);
   await expect.poll(() => page.locator('.sl-row').count()).toBe(2);
   await tagRows(page);
