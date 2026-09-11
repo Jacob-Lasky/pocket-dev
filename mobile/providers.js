@@ -55,9 +55,55 @@ const SHELL_OVERRIDE_CAPABILITIES = Object.freeze({
   autoName:           false,
 });
 
+const SHELL_OVERRIDE_INPUT = Object.freeze({
+  submitSequence: '\r',
+  submitDelayMs:  0,
+});
+
+const CLAUDE_INPUT = SHELL_OVERRIDE_INPUT;
+const CODEX_INPUT = Object.freeze({
+  // Codex enables the Kitty keyboard protocol. Its TUI therefore expects
+  // Enter as CSI 13 u when pocket-dev submits text outside xterm's own key
+  // encoder; a carriage return only inserts the prompt and leaves it idle.
+  submitSequence: '\x1b[13u',
+  // Codex treats a whole composer payload as a paste burst. If Enter follows
+  // in the same burst it stays in the composer, so let that detection settle
+  // before submitting. Measured live against Codex 0.154.0 on 2026-09-11.
+  submitDelayMs:  100,
+});
+
+// Both Codex credential routes speak the same TUI and use the same supported
+// SessionStart hook. What differs is the account behind the command: the
+// Deepgram API profile can use the API model catalog, while bare Codex carries
+// the ChatGPT login and its connected apps. Keep the session capabilities one
+// value so adding an account route cannot quietly change what pocket-dev
+// believes about that TUI.
+const CODEX_CAPABILITIES = Object.freeze({
+  resumeConversation: true,
+  transcriptStatus:   false,
+  transcriptTitle:    false,
+  // PROVISIONAL VALUE, SETTLED ENUM. That a Codex tab tracks no unread is
+  // under review and may become 'bytes'; that the axis is an ENUM of
+  // 'turns' | 'bytes' | 'none' is not. A boolean here is how the
+  // false-summons bug survives: 'none' and 'bytes' both read as "no
+  // transcript", and only one of them may light the attention badge.
+  unreadAxis:         'none',
+  archiveClose:       false,
+  // THIS ONE IS A SAFETY GATE, NOT A FEATURE FLAG. maybeAutoName writes
+  // `/rename <title>\r` INTO THE PTY, so left on for a Codex tab pocket-dev
+  // would be typing a Claude slash command into Codex's TUI. It is inert
+  // today only because meta.title is always null for a session with no
+  // transcript, so it returns at its first condition. That is protection by
+  // accident of the data path, not by a gate. This is the gate.
+  autoName:           false,
+});
+
 const PROVIDERS = new Map([
   ['claude', {
     label:   'Claude',
+    pickerLabel: 'Claude',
+    sessionKind: 'claude',
+    input: CLAUDE_INPUT,
     command: 'claude --dangerously-skip-permissions --model "opus[1m]"',
     // CLAUDE-ONLY FLAG SYNTAX, which is why it lives in this entry and not in a
     // process-wide constant any more. Codex spells its equivalent
@@ -80,7 +126,10 @@ const PROVIDERS = new Map([
   }],
 
   ['codex', {
-    label: 'Codex',
+    label: 'Codex (Deepgram)',
+    pickerLabel: 'Codex DG',
+    sessionKind: 'codex',
+    input: CODEX_INPUT,
     // THE BYPASS FLAG IS DELIBERATE AND IS NOT THE WRAPPER THE REPO FORBIDS.
     // CLAUDE.md's rule is that no `codex` WRAPPER may exist on PATH carrying
     // --dangerously-bypass-approvals-and-sandbox, because that flag outranks an
@@ -148,25 +197,27 @@ const PROVIDERS = new Map([
     // read Claude's transcript format, which Codex does not write. Do not infer
     // them from Codex's legacy rollout files. Codex ships a migration away from
     // that format, so it is not a stable integration boundary.
-    capabilities: {
-      resumeConversation: true,
-      transcriptStatus:   false,
-      transcriptTitle:    false,
-      // PROVISIONAL VALUE, SETTLED ENUM. That a Codex tab tracks no unread is
-      // under review and may become 'bytes'; that the axis is an ENUM of
-      // 'turns' | 'bytes' | 'none' is not. A boolean here is how the
-      // false-summons bug survives: 'none' and 'bytes' both read as "no
-      // transcript", and only one of them may light the attention badge.
-      unreadAxis:         'none',
-      archiveClose:       false,
-      // THIS ONE IS A SAFETY GATE, NOT A FEATURE FLAG. maybeAutoName writes
-      // `/rename <title>\r` INTO THE PTY, so left on for a Codex tab pocket-dev
-      // would be typing a Claude slash command into Codex's TUI. It is inert
-      // today only because meta.title is always null for a session with no
-      // transcript, so it returns at its first condition. That is protection by
-      // accident of the data path, not by a gate. This is the gate.
-      autoName:           false,
-    },
+    capabilities: CODEX_CAPABILITIES,
+  }],
+
+  ['codex-chatgpt', {
+    label: 'Codex (ChatGPT)',
+    pickerLabel: 'Codex GPT',
+    sessionKind: 'codex',
+    input: CODEX_INPUT,
+    // Bare Codex uses the persisted ChatGPT login in ~/.codex/auth.json. That
+    // identity is also where OpenAI's connected apps live, so this is the
+    // route for Slack, Notion and other account apps. Do not send it through
+    // codex-dg: that wrapper deliberately replaces the ChatGPT identity with
+    // the Deepgram API profile, where account apps are unavailable.
+    //
+    // There is no model pin here on purpose. App availability is evaluated by
+    // the ChatGPT account and model, and the account default was live-verified
+    // with both Slack and Notion on 2026-09-11. The Deepgram route keeps the
+    // explicit Sol pin above for the separate billing/model decision it owns.
+    command: 'codex --dangerously-bypass-approvals-and-sandbox',
+    remoteControlArgs: null,
+    capabilities: CODEX_CAPABILITIES,
   }],
 ]);
 
@@ -179,6 +230,18 @@ function isProvider(id) {
 function labelFor(id) {
   const entry = PROVIDERS.get(id);
   return entry ? entry.label : id;
+}
+
+function sessionKindFor(id) {
+  const entry = PROVIDERS.get(id);
+  if (!entry) throw new Error(`unknown provider: ${id}`);
+  return entry.sessionKind;
+}
+
+function resolveInput(id, { shellOverride = false } = {}) {
+  const entry = PROVIDERS.get(id);
+  if (!entry) throw new Error(`unknown provider: ${id}`);
+  return shellOverride ? SHELL_OVERRIDE_INPUT : entry.input;
 }
 
 // The command line for a provider. `remoteControl` is process-wide (one account
@@ -266,10 +329,13 @@ function statusTracked(caps) {
 module.exports = {
   DEFAULT_PROVIDER,
   SHELL_OVERRIDE_CAPABILITIES,
+  SHELL_OVERRIDE_INPUT,
   PROVIDERS,
   PROVIDER_IDS,
   isProvider,
   labelFor,
+  sessionKindFor,
+  resolveInput,
   commandFor,
   resolveCapabilities,
   statusTracked,

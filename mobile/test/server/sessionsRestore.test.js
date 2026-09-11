@@ -729,7 +729,7 @@ describe('with a custom SHELL_CMD', () => {
 
   it('honours PD_RESUME=0 even when pocket-dev owns the command line', async () => {
     const { buildSessionCommand: build } = await loadWith({ PD_RESUME: '0' });
-    for (const provider of ['claude', 'codex']) {
+    for (const provider of ['claude', 'codex', 'codex-chatgpt']) {
       const cmd = build(provider);
       expect(cmd).not.toContain('pd-claude-session');
       expect(cmd).not.toContain('pd-codex-session');
@@ -752,6 +752,8 @@ describe('the provider a session runs', () => {
     // also what makes the -m pin valid, since Sol exists on that account and
     // not on the ChatGPT seat.
     expect(buildSessionCommand('codex')).toContain('codex-dg --dangerously-bypass-approvals-and-sandbox');
+    expect(buildSessionCommand('codex-chatgpt')).toContain('codex --dangerously-bypass-approvals-and-sandbox');
+    expect(buildSessionCommand('codex-chatgpt')).not.toContain('codex-dg');
   });
 
   it('defaults to Claude when nothing says otherwise', () => {
@@ -774,9 +776,11 @@ describe('the provider a session runs', () => {
   });
 
   it('runs Codex through its own resume launcher', () => {
-    const cmd = buildSessionCommand('codex');
-    expect(cmd).toContain('pd-codex-session');
-    expect(cmd).not.toContain('while true; do codex-dg ');
+    for (const provider of ['codex', 'codex-chatgpt']) {
+      const cmd = buildSessionCommand(provider);
+      expect(cmd).toContain('pd-codex-session');
+      expect(cmd).not.toContain('while true; do codex');
+    }
   });
 
   it('builds the LOOP from the session command, not from a baked-in one', () => {
@@ -840,7 +844,7 @@ describe('the provider a session runs', () => {
     const second = makeApi();
     second.api.restore();
     const said = logger.log.mock.calls.map(args => args.join(' ')).join('\n');
-    expect(said).toContain('Codex session with no transcript status');
+    expect(said).toContain('Codex (Deepgram) session with no transcript status');
   });
 
   it('does not hand a Claude continuation prompt to Codex', () => {
@@ -864,14 +868,19 @@ describe('the provider a session runs', () => {
   it('hands each provider only its own launcher environment', () => {
     const { api } = makeApi();
     api.create('main-1', { provider: 'codex' });
-    api.create('main-2', { provider: 'claude' });
+    api.create('main-2', { provider: 'codex-chatgpt' });
+    api.create('main-3', { provider: 'claude' });
     expect(spawned[0].env.PD_CODEX_SID_FILE).toContain('main-1.uuid');
     expect(spawned[0].env.PD_STATE_DIR).toBe(dir);
     expect(spawned[0].env.PD_SID_FILE).toBeUndefined();
     expect(spawned[0].env.PD_CLAUDE_PROJECTS_DIR).toBeUndefined();
-    expect(spawned[1].env.PD_CLAUDE_PROJECTS_DIR).toBe(projectsDir);
-    expect(spawned[1].env.PD_SID_FILE).toContain('main-2.uuid');
-    expect(spawned[1].env.PD_CODEX_SID_FILE).toBeUndefined();
+    expect(spawned[1].env.PD_CODEX_SID_FILE).toContain('main-2.uuid');
+    expect(spawned[1].env.PD_STATE_DIR).toBe(dir);
+    expect(spawned[1].env.PD_SID_FILE).toBeUndefined();
+    expect(spawned[1].env.PD_CLAUDE_PROJECTS_DIR).toBeUndefined();
+    expect(spawned[2].env.PD_CLAUDE_PROJECTS_DIR).toBe(projectsDir);
+    expect(spawned[2].env.PD_SID_FILE).toContain('main-3.uuid');
+    expect(spawned[2].env.PD_CODEX_SID_FILE).toBeUndefined();
   });
 
   it('lets SHELL_CMD outrank the provider, for every provider', async () => {
@@ -879,7 +888,7 @@ describe('the provider a session runs', () => {
     // how you get a tab whose command line nobody can predict. Four e2e
     // fixtures depend on this mechanism.
     const mod = await loadWith({ SHELL_CMD: 'cat' });
-    for (const provider of ['claude', 'codex']) {
+    for (const provider of ['claude', 'codex', 'codex-chatgpt']) {
       const cmd = mod.buildSessionCommand(provider);
       expect(cmd).toContain('while true; do cat;');
       expect(cmd).not.toContain('pd-claude-session');
@@ -1025,10 +1034,12 @@ describe('the six capabilities a provider does or does not have', () => {
     // renders a fifth row state for the second one, OUTSIDE the attention axis.
     const { api } = makeApi();
     api.create('main-1', { provider: 'codex' });
-    api.create('main-2', { provider: 'claude' });
+    api.create('main-2', { provider: 'codex-chatgpt' });
+    api.create('main-3', { provider: 'claude' });
     const rows = api.describe();
-    expect(rows[0]).toMatchObject({ provider: 'codex',  providerLabel: 'Codex',  statusTracked: false });
-    expect(rows[1]).toMatchObject({ provider: 'claude', providerLabel: 'Claude', statusTracked: true });
+    expect(rows[0]).toMatchObject({ provider: 'codex',         providerLabel: 'Codex (Deepgram)', statusTracked: false });
+    expect(rows[1]).toMatchObject({ provider: 'codex-chatgpt', providerLabel: 'Codex (ChatGPT)',  statusTracked: false });
+    expect(rows[2]).toMatchObject({ provider: 'claude',        providerLabel: 'Claude',            statusTracked: true });
   });
 
   it('keeps a plain shell session honest rather than opaque', async () => {

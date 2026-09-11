@@ -388,11 +388,11 @@ async function waitForActiveChange(page, previous) {
 }
 
 // Start a tab on the DEFAULT provider. The button is labelled by harness now,
-// not `+ New`: the picker is two explicit buttons so the choice and the action
+// not `+ New`: the picker uses explicit buttons so the choice and the action
 // are the same tap and the harness name is in the label. Twenty-eight calls
 // across nine specs come through here, so this selector is the single place
 // that has to track that label. DO NOT inline `page.click` on the picker in a
-// spec; go through one of these two.
+// spec; go through one of these helpers.
 export async function newSession(page) {
   return newSessionWithProvider(page, 'Claude');
 }

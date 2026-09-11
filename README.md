@@ -77,7 +77,7 @@ Run it from inside a checkout. Codex refuses to start outside a git repo (`Not i
 
 **Nothing on boot writes your codex config.** `~/.codex/config.toml` is yours: whatever you put there — or leave out — is what a `codex` you type yourself uses. An earlier build seeded a model and reasoning effort into it and that was removed, because the thing that actually runs consults here (`/second-opinion`) passes `-m` and `-c model_reasoning_effort` on every invocation anyway, and a base config that quietly pins a model gets in the way of layering one on top. Set options on the command line, as the example above does.
 
-A browser tab started on Codex is the one place pocket-dev picks a model for you, and it does it the same way: its command line carries `-m gpt-5.6-sol` rather than editing your config. The tab's startup banner names whatever it was given, so a change shows up there.
+A browser tab started on **Codex DG** is the one place pocket-dev picks a model for you, and it does it the same way: its Deepgram API command line carries `-m gpt-5.6-sol` rather than editing your config. **Codex GPT** uses the persisted ChatGPT login instead and leaves the model on that account's default, because connected-app availability is account- and model-dependent. The startup banner names the selected model in either case.
 
 There is no `codex` wrapper on `PATH`, and that is deliberate. `--dangerously-bypass-approvals-and-sandbox` overrides an explicit `-s read-only`, so a wrapper carrying it would quietly give every consult write access to the tree it is reviewing while the command still said read-only. If you alias `codex` on your desktop, do not copy that alias in here.
 
@@ -90,6 +90,8 @@ codex login --device-auth   # prints a URL and a code; open them on any other de
 ```
 
 The auth is deliberately not baked into the image. Copying an `auth.json` in from another machine also works and is documented upstream, but it puts two machines on one session; the device flow gives the container its own.
+
+The session picker exposes the two Codex identities separately. **Codex DG** uses `codex-dg`, the Deepgram API account and its model catalog. **Codex GPT** uses bare `codex`, the ChatGPT account and its connected apps. Install the desired plugins with `codex plugin add`, then connect their underlying apps from the ChatGPT Plugins directory; installing a plugin and authorizing its app are separate steps. Existing Codex DG sessions stay on the API account after a restart.
 
 **Codex does not update itself, and Claude does.** Claude installs into a prefix the container's own user can write, so it takes new versions at runtime. Codex is installed with `npm install -g` into root-owned `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore restarting your terminal processes; to move codex alone without that, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
 

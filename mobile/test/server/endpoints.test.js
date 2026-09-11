@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { createApp, refreshTmuxSession } from '../../server.js';
+import { labelFor, resolveCapabilities, statusTracked } from '../../providers.js';
 
 describe('tmux refresh helper', () => {
   it('refreshes every tmux client attached to a safe session id', () => {
@@ -89,8 +90,8 @@ function stubSessionsApi() {
     describe: vi.fn(() => [...sessions.values()].map(s => ({
       id: s.id, cols: s.cols, rows: s.rows, title: null, lastPrompt: null,
       status: 'unknown', unread: false, lastOutputAt: 0,
-      provider: s.provider, providerLabel: s.provider === 'codex' ? 'Codex' : 'Claude',
-      statusTracked: s.provider !== 'codex',
+      provider: s.provider, providerLabel: labelFor(s.provider),
+      statusTracked: statusTracked(resolveCapabilities(s.provider)),
     }))),
     markViewed: vi.fn((id) => sessions.has(id)),
     // Part of the route contract: /send and /key report the keystroke so the
@@ -167,6 +168,46 @@ describe('session-aware endpoints', () => {
     expect(pty.write).toHaveBeenNthCalledWith(2, '\r');
   });
 
+  it('POST /send submits Codex with the enhanced Enter sequence its TUI requests', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    for (const provider of ['codex', 'codex-chatgpt']) {
+      const { body: created } = await request(app).post('/sessions').send({ provider });
+      await request(app).post('/send').send({ session: created.id, text: 'hello' }).expect(200);
+      const pty = sessionsApi._internalSessions.get(created.id).pty;
+      expect(pty.write.mock.calls).toEqual([['hello'], ['\x1b[13u']]);
+    }
+  });
+
+  it('serializes delayed Codex sends so separate prompts cannot merge', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+    const { body: created } = await request(app).post('/sessions').send({ provider: 'codex' });
+
+    await Promise.all([
+      request(app).post('/send').send({ session: created.id, text: 'first' }).expect(200),
+      request(app).post('/send').send({ session: created.id, text: 'second' }).expect(200),
+    ]);
+
+    const pty = sessionsApi._internalSessions.get(created.id).pty;
+    expect(pty.write.mock.calls).toEqual([
+      ['first'], ['\x1b[13u'],
+      ['second'], ['\x1b[13u'],
+    ]);
+  });
+
+  it('uses shell Enter when SHELL_CMD replaces a Codex provider', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi, shellOverride: true });
+    const { body: created } = await request(app).post('/sessions').send({ provider: 'codex' });
+
+    await request(app).post('/send').send({ session: created.id, text: 'hello' }).expect(200);
+    await request(app).post('/key').send({ session: created.id, key: 'enter' }).expect(200);
+
+    const pty = sessionsApi._internalSessions.get(created.id).pty;
+    expect(pty.write.mock.calls).toEqual([['hello'], ['\r'], ['\r']]);
+  });
+
   it('POST /send brackets a multiline paste only when the client negotiated support', async () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });
@@ -211,6 +252,23 @@ describe('session-aware endpoints', () => {
 
     await request(app).post('/key').send({ session: created.id, key: 'ctrl-c' });
     expect(pty.write).toHaveBeenCalledWith('\x03');
+  });
+
+  it('POST /key sends Enter in each provider keyboard protocol', async () => {
+    const sessionsApi = stubSessionsApi();
+    const app = createApp({ sessionsApi });
+
+    const cases = [
+      ['claude', '\r'],
+      ['codex', '\x1b[13u'],
+      ['codex-chatgpt', '\x1b[13u'],
+    ];
+    for (const [provider, sequence] of cases) {
+      const { body: created } = await request(app).post('/sessions').send({ provider });
+      await request(app).post('/key').send({ session: created.id, key: 'enter' }).expect(200);
+      const pty = sessionsApi._internalSessions.get(created.id).pty;
+      expect(pty.write).toHaveBeenCalledWith(sequence);
+    }
   });
 
   it('reports input on /send and /key, so the auto-rename does not type over you', async () => {
@@ -280,13 +338,15 @@ describe('session-aware endpoints', () => {
     expect(unknown.status).toBe(404);
   });
 
-  it('POST /sessions starts the harness the body asked for', async () => {
+  it('POST /sessions starts each Codex account route the body asked for', async () => {
     const sessionsApi = stubSessionsApi();
     const app = createApp({ sessionsApi });
-    const res = await request(app).post('/sessions').send({ provider: 'codex' });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ provider: 'codex' });
-    expect(sessionsApi.create).toHaveBeenCalledWith(undefined, { provider: 'codex' });
+    for (const provider of ['codex', 'codex-chatgpt']) {
+      const res = await request(app).post('/sessions').send({ provider });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ provider });
+      expect(sessionsApi.create).toHaveBeenCalledWith(undefined, { provider });
+    }
   });
 
   it('POST /sessions takes the default when the body says nothing', async () => {
@@ -325,7 +385,7 @@ describe('session-aware endpoints', () => {
     await request(app).post('/sessions').send({ provider: 'codex' });
     const res = await request(app).get('/sessions');
     expect(res.body[0]).toMatchObject({
-      provider: 'codex', providerLabel: 'Codex', statusTracked: false,
+      provider: 'codex', providerLabel: 'Codex (Deepgram)', statusTracked: false,
     });
   });
 

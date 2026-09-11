@@ -227,7 +227,7 @@
       background: #161b22;
       border-bottom: 1px solid #30363d;
     }
-    /* The bar is the tightest space in the UI: at 390px a name, a count and two
+    /* The bar is the tightest space in the UI: at 390px a name, a count and three
        controls do not fit, and the count is the only one carrying information.
        So the app name is dropped here and the buttons are sized to content
        rather than inheriting .action-btn's flex: 1. */
@@ -246,6 +246,10 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    @media (max-width: 480px) {
+      #sl-bar { flex-wrap: wrap; gap: 8px; }
+      #sl-count { flex-basis: 100%; }
     }
 
     #sl-rows {
@@ -485,17 +489,18 @@
   <!-- Session list: the primary way to move between sessions. Overlays the app
        so the terminal panes underneath keep their layout. -->
   <div id="session-list">
-    <!-- TWO EXPLICIT BUTTONS, NOT A CYCLING CHIP. A chip carries hidden state
+    <!-- EXPLICIT BUTTONS, NOT A CYCLING CHIP. A chip carries hidden state
          the user has to read before tapping, and on a phone a mis-tap starts
-         the wrong harness on the wrong billing account. Two buttons make the
+         the wrong harness on the wrong billing account. Explicit buttons make the
          choice and the action the same tap and put the harness name in the
-         label. The provider ids here are checked against the registry by
+         label. The provider ids and compact picker labels here are checked against the registry by
          test/server/providers.test.js, so a button naming an id the server
          would 400 cannot ship. -->
     <div id="sl-bar">
       <span id="sl-count">–</span>
       <button class="action-btn tmux-btn" onclick="newSessionFromList('claude')" title="Start a new Claude session">+ Claude</button>
-      <button class="action-btn tmux-btn" onclick="newSessionFromList('codex')" title="Start a new Codex session">+ Codex</button>
+      <button class="action-btn tmux-btn" onclick="newSessionFromList('codex')" title="Start Codex on the Deepgram API account">+ Codex DG</button>
+      <button class="action-btn tmux-btn" onclick="newSessionFromList('codex-chatgpt')" title="Start Codex with the ChatGPT account and connected apps">+ Codex GPT</button>
     </div>
     <ul id="sl-rows"></ul>
   </div>

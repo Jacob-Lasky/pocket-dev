@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DEFAULT_PROVIDER, PROVIDERS, PROVIDER_IDS, SHELL_OVERRIDE_CAPABILITIES,
-  isProvider, labelFor, commandFor, resolveCapabilities, statusTracked,
+  SHELL_OVERRIDE_INPUT, isProvider, labelFor, sessionKindFor, resolveInput,
+  commandFor, resolveCapabilities, statusTracked,
 } from '../../providers.js';
 import { SAFE_PROVIDER } from '../../safeId.js';
 
@@ -17,7 +18,7 @@ describe('the provider id set', () => {
     // Membership is the real gate. The regex is what keeps a hostile value out
     // of the object lookup and the log line in front of it, so it has to be
     // satisfied by every id we actually ship.
-    expect(PROVIDER_IDS).toEqual(['claude', 'codex']);
+    expect(PROVIDER_IDS).toEqual(['claude', 'codex', 'codex-chatgpt']);
     for (const id of PROVIDER_IDS) expect(SAFE_PROVIDER.test(id)).toBe(true);
   });
 
@@ -44,7 +45,27 @@ describe('the provider id set', () => {
 
   it('names every provider for display, from the server side of the wire', () => {
     expect(labelFor('claude')).toBe('Claude');
-    expect(labelFor('codex')).toBe('Codex');
+    expect(labelFor('codex')).toBe('Codex (Deepgram)');
+    expect(labelFor('codex-chatgpt')).toBe('Codex (ChatGPT)');
+  });
+
+  it('maps account routes to the session implementation they share', () => {
+    expect(sessionKindFor('claude')).toBe('claude');
+    expect(sessionKindFor('codex')).toBe('codex');
+    expect(sessionKindFor('codex-chatgpt')).toBe('codex');
+    expect(() => sessionKindFor('cursor')).toThrow(/unknown provider/);
+  });
+
+  it('uses each TUI keyboard protocol when submitting composer text', () => {
+    expect(resolveInput('claude')).toEqual({ submitSequence: '\r', submitDelayMs: 0 });
+    expect(resolveInput('codex')).toEqual({ submitSequence: '\x1b[13u', submitDelayMs: 100 });
+    expect(resolveInput('codex-chatgpt')).toEqual({ submitSequence: '\x1b[13u', submitDelayMs: 100 });
+    expect(() => resolveInput('cursor')).toThrow(/unknown provider/);
+  });
+
+  it('lets SHELL_CMD replace the input protocol with the command', () => {
+    for (const provider of PROVIDER_IDS)
+      expect(resolveInput(provider, { shellOverride: true })).toBe(SHELL_OVERRIDE_INPUT);
   });
 });
 
@@ -61,6 +82,8 @@ describe('the command line a provider selects', () => {
     expect(commandFor('claude')).toContain('--rc --remote-control-session-name-prefix pocket-dev');
     expect(commandFor('codex')).not.toContain('--rc');
     expect(commandFor('codex')).not.toContain('remote-control');
+    expect(commandFor('codex-chatgpt')).not.toContain('--rc');
+    expect(commandFor('codex-chatgpt')).not.toContain('remote-control');
   });
 
   it('drops Remote Control for every provider when the process says off', () => {
@@ -94,6 +117,13 @@ describe('the command line a provider selects', () => {
     // 400s every tab, which is exactly what happened once.
     expect(commandFor('codex')).toMatch(/^codex-dg\b/);
     expect(commandFor('codex')).toContain('-m gpt-5.6-sol');
+  });
+
+  it('offers a ChatGPT-authenticated Codex command for account apps', () => {
+    const cmd = commandFor('codex-chatgpt');
+    expect(cmd).toMatch(/^codex\b/);
+    expect(cmd).not.toMatch(/^codex-dg\b/);
+    expect(cmd).toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
   it('runs codex, and does NOT pass a flag the interactive CLI rejects', () => {
@@ -131,17 +161,19 @@ describe('capabilities: what pocket-dev is allowed to believe', () => {
     });
   });
 
-  it('gives Codex resume only, and gates Claude transcript features', () => {
-    const caps = resolveCapabilities('codex');
-    expect(caps.resumeConversation).toBe(true);
-    expect(caps.transcriptStatus).toBe(false);
-    expect(caps.transcriptTitle).toBe(false);
-    expect(caps.archiveClose).toBe(false);
-    // The safety one. maybeAutoName writes `/rename ...` into the pty, so this
-    // being on means pocket-dev types a Claude slash command into Codex's TUI.
-    // It is inert today only because meta.title is null for a session with no
-    // transcript, which is protection by accident of the data path.
-    expect(caps.autoName).toBe(false);
+  it('gives both Codex account routes resume only, and gates Claude transcript features', () => {
+    for (const provider of ['codex', 'codex-chatgpt']) {
+      const caps = resolveCapabilities(provider);
+      expect(caps.resumeConversation).toBe(true);
+      expect(caps.transcriptStatus).toBe(false);
+      expect(caps.transcriptTitle).toBe(false);
+      expect(caps.archiveClose).toBe(false);
+      // The safety one. maybeAutoName writes `/rename ...` into the pty, so this
+      // being on means pocket-dev types a Claude slash command into Codex's TUI.
+      // It is inert today only because meta.title is null for a session with no
+      // transcript, which is protection by accident of the data path.
+      expect(caps.autoName).toBe(false);
+    }
   });
 
   it('declares autoName off in the ENTRY, not just off by consequence', () => {
@@ -289,7 +321,7 @@ describe('the registry is what the picker is built from', () => {
     const bar = indexHtml.slice(indexHtml.indexOf('id="sl-bar"'), indexHtml.indexOf('id="sl-rows"'));
     for (const id of PROVIDER_IDS) {
       expect(bar).toContain(`newSessionFromList('${id}')`);
-      expect(bar).toContain(`+ ${PROVIDERS.get(id).label}`);
+      expect(bar).toContain(`+ ${PROVIDERS.get(id).pickerLabel}`);
     }
   });
 });
