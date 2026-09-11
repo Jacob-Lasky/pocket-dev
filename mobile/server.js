@@ -60,7 +60,9 @@ const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
 
 const TMUX_CONF_PATH = path.join(__dirname, 'tmux.conf');
-const LAUNCHER_PATH  = path.join(__dirname, 'pd-claude-session');
+const LAUNCHER_PATH       = path.join(__dirname, 'pd-claude-session');
+const CODEX_LAUNCHER_PATH = path.join(__dirname, 'pd-codex-session');
+const CODEX_HOOK_PATH     = path.join(__dirname, 'pd-codex-session-start');
 
 // One HOME authority. It is also the cwd every session is spawned with, which
 // matters for resume: `claude --resume` only finds conversations belonging to
@@ -292,16 +294,20 @@ function commandForSession(provider) {
 
 // The command tmux runs for a session.
 //
-// With Claude (the default), pd-claude-session owns the restart loop, because
-// the resume-or-start-fresh decision has to be remade on every iteration of it.
-// See the contract comment in that script. A provider that cannot resume a
-// conversation, and any session under a custom SHELL_CMD, gets the plain inline
-// loop instead: pd-claude-session is Claude-only BY CONTRACT (its own header
-// says so), so pointing a Codex session at it would be a bug and not a
-// degradation.
+// Each resumable provider owns its restart loop because the first iteration
+// resumes and later iterations start fresh. A provider without resume support,
+// and every session under a custom SHELL_CMD, gets the plain inline loop.
+function launcherFor(provider) {
+  if (!capsFor(provider).resumeConversation) return null;
+  if (provider === 'claude') return LAUNCHER_PATH;
+  if (provider === 'codex') return CODEX_LAUNCHER_PATH;
+  throw new Error(`no resume launcher for provider: ${provider}`);
+}
+
 function buildSessionCommand(provider = DEFAULT_PROVIDER) {
   const cmd = commandForSession(provider);
-  return capsFor(provider).resumeConversation ? `'${LAUNCHER_PATH}' ${cmd}` : loopCommand(cmd);
+  const launcher = launcherFor(provider);
+  return launcher ? `'${launcher}' ${cmd}` : loopCommand(cmd);
 }
 
 function spawnTmuxPty({ session, command, env, cols, rows }) {
@@ -516,22 +522,20 @@ function createSessionsApi({
       archivedId: initialArchivedId,
     } = observe(id, caps);
 
-    // ALL THREE OF THESE ARE THE LAUNCHER'S CONTRACT, so they are only set for a
-    // session that runs it. Handing them to a harness that ignores them is
-    // harmless but misleading: `tmux show-environment` on a Codex tab would
-    // show it pointed at Claude's transcript directory and at a sid file
-    // nothing will ever write.
-    //
-    // The launcher decides whether a transcript exists and the server decides
-    // what state it was in, so they MUST agree on where transcripts live. Pass
-    // the resolved directory rather than letting the shell script re-derive it
-    // from $HOME, which would silently diverge under PD_CLAUDE_PROJECTS_DIR.
+    // Each resumable provider gets only the environment its own launcher and
+    // capture path understand. The shared sid path is safe because the roster
+    // fixes one provider to a tab for its lifetime.
     const env = {};
     if (caps.resumeConversation) {
-      env.PD_CLAUDE_PROJECTS_DIR = projectsDir;
       const sidFile = store.sidPath(id);
-      if (sidFile) env.PD_SID_FILE = sidFile;
-      if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
+      if (provider === 'claude') {
+        env.PD_CLAUDE_PROJECTS_DIR = projectsDir;
+        if (sidFile) env.PD_SID_FILE = sidFile;
+        if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
+      } else if (provider === 'codex' && sidFile) {
+        env.PD_CODEX_SID_FILE = sidFile;
+        if (store.dir) env.PD_STATE_DIR = store.dir;
+      }
     }
 
     const ptyProc = spawnPty({
@@ -710,8 +714,8 @@ function createSessionsApi({
         // and the session would then look newly-finished the first time anyone
         // opened the list after a restart.
         const caps   = capsFor(entry.provider);
-        const uuid   = caps.resumeConversation ? store.readSid(entry.id) : null;
-        const status = metaFor(uuid).status;
+        const uuid = caps.resumeConversation ? store.readSid(entry.id) : null;
+        const status = caps.transcriptStatus ? metaFor(uuid).status : 'unknown';
 
         // 'unknown' never prompts — see claudeSession.js. Only a conversation
         // we can positively see was mid-turn gets asked to carry on; one that
@@ -733,7 +737,7 @@ function createSessionsApi({
         // reads as a session that was skipped rather than one that has no
         // conversation to have an opinion about.
         if (!caps.transcriptStatus) {
-          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} session with no conversation tracking, restored as-is`);
+          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} session with no transcript status, restored as-is`);
         } else if (status !== 'busy') {
           if (status === 'idle')   logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
           if (status === 'asking') logger.log(`session ${entry.id}: was waiting for an answer to a question, restored as-is`);
@@ -1098,6 +1102,8 @@ module.exports = {
   refreshTmuxSession,
   TMUX_CONF_PATH,
   LAUNCHER_PATH,
+  CODEX_LAUNCHER_PATH,
+  CODEX_HOOK_PATH,
   SAFE_ID,
 };
 

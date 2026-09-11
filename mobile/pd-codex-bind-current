@@ -1,0 +1,27 @@
+#!/bin/bash
+# One-time migration helper for Codex tabs started before per-tab capture
+# existed. Run it from the Codex conversation itself so Codex provides the
+# current thread id in the tool environment.
+set -euo pipefail
+
+thread_id="${CODEX_THREAD_ID:-}"
+if [[ ! "$thread_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+  echo "Could not identify this Codex conversation." >&2
+  exit 1
+fi
+
+tmux_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
+if [[ ! "$tmux_session" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Could not identify this pocket-dev tab." >&2
+  exit 1
+fi
+
+state_dir="${PD_STATE_DIR:-$HOME/.pocket-dev}"
+sid_file="$state_dir/sids/$tmux_session.uuid"
+hook="$(dirname "$0")/pd-codex-session-start"
+
+PD_STATE_DIR="$state_dir" PD_CODEX_SID_FILE="$sid_file" "$hook" <<EOF
+{"session_id":"$thread_id","hook_event_name":"SessionStart"}
+EOF
+
+echo "This Codex tab is ready to resume after the pocket-dev update."

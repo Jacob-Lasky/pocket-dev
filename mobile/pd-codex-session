@@ -1,0 +1,40 @@
+#!/bin/bash
+# Run Codex in pocket-dev's restart loop and resume the conversation recorded
+# for this tab on the first iteration only. A later iteration means the user
+# exited Codex and wants a fresh conversation.
+set -u
+
+sid_file="${PD_CODEX_SID_FILE:-}"
+codex_cmd="${1:-}"
+if [ -z "$codex_cmd" ]; then
+  exit 2
+fi
+shift
+
+valid_uuid() {
+  [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+first=1
+while true; do
+  sid=""
+  if [ -n "$sid_file" ] && [ -r "$sid_file" ]; then
+    sid="$(tr -d '[:space:]' < "$sid_file" 2>/dev/null)"
+  fi
+
+  if [ "$first" = 1 ] && valid_uuid "$sid"; then
+    "$codex_cmd" resume "$sid" "$@"
+  else
+    # Clear the previous binding before starting fresh. SessionStart will write
+    # the new id, and a crash before that event must not leave the old id live.
+    if [ -n "$sid_file" ]; then
+      rm -f "$sid_file" 2>/dev/null || true
+    fi
+    "$codex_cmd" "$@"
+  fi
+
+  first=0
+  echo
+  echo restarting...
+  sleep 1
+done

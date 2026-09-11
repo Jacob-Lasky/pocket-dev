@@ -21,10 +21,10 @@ const { PROVIDERS, DEFAULT_PROVIDER } = require('./providers');
 // of views: both restart with the process, and after a restart the pty history
 // is gone anyway, so nothing is unread until a session says something new.
 //
-// Alongside the roster we keep one tiny `<id>.uuid` file per session, written
-// by pd-claude-session and only ever read (and deleted) here. That is the
-// handoff that lets a restored tab resume its Claude conversation; see
-// claudeSession.js for what we do with the uuid.
+// Alongside the roster we keep one tiny `<id>.uuid` file per session. Each
+// provider's launcher or supported lifecycle hook writes it, while the server
+// reads and deletes it. That handoff lets a restored tab resume the exact
+// conversation it owned without selecting a shared most-recent conversation.
 //
 // EVERY failure in this module is non-fatal by design. An unwritable, missing,
 // or garbage state dir must leave pocket-dev booting exactly as it did before
@@ -94,7 +94,7 @@ function createSessionStore({ dir, logger = console } = {}) {
     return path.join(sidDir, `${id}.uuid`);
   }
 
-  // The Claude conversation id pd-claude-session recorded for this tab, or null.
+  // The provider conversation id recorded for this tab, or null.
   // Untrusted despite being ours: validate before handing it to anything.
   function readSid(id) {
     const p = sidPath(id);
@@ -110,7 +110,7 @@ function createSessionStore({ dir, logger = console } = {}) {
   }
 
   // Session ids are reused across restarts (`main-1` is always the first tab),
-  // so a killed tab MUST drop its uuid — otherwise the next `main-1` would
+  // so a killed tab MUST drop its uuid. Otherwise the next `main-1` would
   // resume a conversation that belonged to a session the user deliberately
   // threw away.
   function clearSid(id) {

@@ -729,9 +729,12 @@ describe('with a custom SHELL_CMD', () => {
 
   it('honours PD_RESUME=0 even when pocket-dev owns the command line', async () => {
     const { buildSessionCommand: build } = await loadWith({ PD_RESUME: '0' });
-    const cmd = build();
-    expect(cmd).not.toContain('pd-claude-session');
-    expect(cmd).toContain('while true;');
+    for (const provider of ['claude', 'codex']) {
+      const cmd = build(provider);
+      expect(cmd).not.toContain('pd-claude-session');
+      expect(cmd).not.toContain('pd-codex-session');
+      expect(cmd).toContain('while true;');
+    }
   });
 });
 
@@ -770,10 +773,10 @@ describe('the provider a session runs', () => {
     expect(buildSessionCommand('codex')).not.toContain('pd-claude-session');
   });
 
-  it('runs a provider that cannot resume in the plain restart loop', () => {
+  it('runs Codex through its own resume launcher', () => {
     const cmd = buildSessionCommand('codex');
-    expect(cmd).toContain('while true; do codex-dg ');
-    expect(cmd).toContain('restarting...');
+    expect(cmd).toContain('pd-codex-session');
+    expect(cmd).not.toContain('while true; do codex-dg ');
   });
 
   it('builds the LOOP from the session command, not from a baked-in one', () => {
@@ -802,6 +805,15 @@ describe('the provider a session runs', () => {
     expect(store.load()).toEqual([{ id: 'main-1', provider: 'codex' }]);
   });
 
+  it('deleting a Codex tab clears the conversation binding before its id is reused', () => {
+    const { api, store } = makeApi();
+    const state = api.create('main-1', { provider: 'codex' });
+    fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(state.id), UUID);
+    api.destroy(state.id, () => {});
+    expect(store.readSid(state.id)).toBeNull();
+  });
+
   it('throws rather than starting a process for an unknown provider', () => {
     // create() is the last gate before a command line becomes a running
     // process, so it must not default. Both real callers screen first (the
@@ -819,7 +831,7 @@ describe('the provider a session runs', () => {
     expect(spawned[1].command).toBe(buildSessionCommand('codex'));
   });
 
-  it('says in the log that a restored session has no conversation to classify', () => {
+  it('says in the log that a restored session has no transcript to classify', () => {
     // docker logs IS the artifact for restore (see the restore lines above), so
     // silence for such a session reads as one that was skipped rather than one
     // with no opinion to have.
@@ -828,13 +840,12 @@ describe('the provider a session runs', () => {
     const second = makeApi();
     second.api.restore();
     const said = logger.log.mock.calls.map(args => args.join(' ')).join('\n');
-    expect(said).toContain('Codex session with no conversation tracking');
+    expect(said).toContain('Codex session with no transcript status');
   });
 
-  it('does not resume a conversation for a provider that has none', () => {
-    // The sid file belongs to pd-claude-session. A Codex session must not be
-    // handed one, or a restart would aim `--resume` at a conversation that is
-    // not its own.
+  it('does not hand a Claude continuation prompt to Codex', () => {
+    // Codex can resume, but pocket-dev cannot classify its transcript as busy.
+    // The Claude continuation prompt must therefore stay off its command line.
     const first = makeApi();
     const state = first.api.create('main-1', { provider: 'codex' });
     const store = createSessionStore({ dir, logger });
@@ -847,20 +858,20 @@ describe('the provider a session runs', () => {
     const spawn = spawned[spawned.length - 1];
     expect(spawn.env.PD_RESUME_PROMPT).toBeUndefined();
     expect(spawn.command).not.toContain('pd-claude-session');
+    expect(spawn.command).toContain('pd-codex-session');
   });
 
-  it('hands the launcher env only to a session that runs the launcher', () => {
-    // PD_CLAUDE_PROJECTS_DIR, PD_SID_FILE and PD_RESUME_PROMPT are all
-    // pd-claude-session's contract. Setting them on a session that ignores them
-    // is harmless and misleading: `tmux show-environment` on such a tab would
-    // show it pointed at Claude's transcript directory and at a sid file
-    // nothing will ever write.
+  it('hands each provider only its own launcher environment', () => {
     const { api } = makeApi();
     api.create('main-1', { provider: 'codex' });
     api.create('main-2', { provider: 'claude' });
-    expect(spawned[0].env).toEqual({});
+    expect(spawned[0].env.PD_CODEX_SID_FILE).toContain('main-1.uuid');
+    expect(spawned[0].env.PD_STATE_DIR).toBe(dir);
+    expect(spawned[0].env.PD_SID_FILE).toBeUndefined();
+    expect(spawned[0].env.PD_CLAUDE_PROJECTS_DIR).toBeUndefined();
     expect(spawned[1].env.PD_CLAUDE_PROJECTS_DIR).toBe(projectsDir);
     expect(spawned[1].env.PD_SID_FILE).toContain('main-2.uuid');
+    expect(spawned[1].env.PD_CODEX_SID_FILE).toBeUndefined();
   });
 
   it('lets SHELL_CMD outrank the provider, for every provider', async () => {
@@ -872,6 +883,7 @@ describe('the provider a session runs', () => {
       const cmd = mod.buildSessionCommand(provider);
       expect(cmd).toContain('while true; do cat;');
       expect(cmd).not.toContain('pd-claude-session');
+      expect(cmd).not.toContain('pd-codex-session');
       expect(cmd).not.toContain('codex');
     }
   });

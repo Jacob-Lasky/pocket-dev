@@ -1,10 +1,10 @@
 // Which AI harness a session runs, and what pocket-dev can therefore know about it.
 //
 // WHY A REGISTRY AND NOT A BOOLEAN: a provider id selects a COMMAND LINE, and
-// every piece of session machinery downstream of that command line is
-// Claude-shaped. Conversation resume, transcript-derived status, the
-// conversation title, the unread axis, the archive-close and the Remote Control
-// auto-rename are all reads of a transcript only Claude writes. Before this
+// most session machinery downstream of that command line is provider-shaped.
+// Both providers can resume, but they learn the conversation id differently.
+// Transcript-derived status, titles, archive-close and Remote Control
+// auto-rename are reads of a transcript only Claude writes. Before this
 // module those six lived as process-wide booleans keyed off SHELL_CMD, so
 // pointing one tab at a second harness silently switched all six off for every
 // tab, or (worse, see autoName) left one of them ON and aimed at a TUI that
@@ -24,7 +24,7 @@
 
 // The default, and the reason is not "Claude is nicer": every existing roster
 // entry predates this field, the default command has always been Claude, and
-// every capability below is Claude-only. A Codex default would make the
+// the default command has always been Claude. A Codex default would make the
 // untouched case the degraded one.
 const DEFAULT_PROVIDER = 'claude';
 
@@ -143,15 +143,13 @@ const PROVIDERS = new Map([
     // is sitting in.
     command: 'codex-dg --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
     remoteControlArgs: null,
-    // EVERY CAPABILITY OFF, and that is a statement about the data, not a
-    // preference. All six are reads of Claude's `<uuid>.jsonl`, which Codex does
-    // not write. Deliberately NOT filled in from Codex's own rollout files:
-    // `codex migrate-rollouts` exists to move "legacy local sessions to
-    // paginated thread history", so that format already carries a deprecation.
-    // If a real status layer is ever wanted it comes from ACP as a second
-    // session kind; see issue #53 and the /acp skill.
+    // Resume is supported through Codex's SessionStart hook and explicit
+    // `codex resume SESSION_ID`. The other capabilities stay off because they
+    // read Claude's transcript format, which Codex does not write. Do not infer
+    // them from Codex's legacy rollout files. Codex ships a migration away from
+    // that format, so it is not a stable integration boundary.
     capabilities: {
-      resumeConversation: false,
+      resumeConversation: true,
       transcriptStatus:   false,
       transcriptTitle:    false,
       // PROVISIONAL VALUE, SETTLED ENUM. That a Codex tab tracks no unread is
@@ -235,20 +233,17 @@ function resolveCapabilities(id, {
   if (shellOverride) return SHELL_OVERRIDE_CAPABILITIES;
 
   const caps = entry.capabilities;
-  // One gate, because it is one question: is there a transcript to read? The
-  // launcher is what binds a session to a conversation, so resume off means no
-  // uuid, which means no status, no title and no archive notice either.
-  const transcript = caps.resumeConversation && resume;
+  const canResume = caps.resumeConversation && resume;
 
   return Object.freeze({
-    resumeConversation: transcript,
-    transcriptStatus:   caps.transcriptStatus && transcript,
-    transcriptTitle:    caps.transcriptTitle  && transcript,
-    unreadAxis:         transcript ? caps.unreadAxis
+    resumeConversation: canResume,
+    transcriptStatus:   caps.transcriptStatus && canResume,
+    transcriptTitle:    caps.transcriptTitle  && canResume,
+    unreadAxis:         canResume ? caps.unreadAxis
                       : caps.unreadAxis === 'none' ? 'none'
                       : 'bytes',
-    archiveClose:       caps.archiveClose && transcript && archiveClose,
-    autoName:           caps.autoName && transcript && remoteControl && autoName,
+    archiveClose:       caps.archiveClose && canResume && archiveClose,
+    autoName:           caps.autoName && canResume && remoteControl && autoName,
   });
 }
 
