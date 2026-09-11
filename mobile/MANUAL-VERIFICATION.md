@@ -38,16 +38,18 @@ Composer:
 - [ ] Scroll back through the session (drag in Live): no duplicated chunks, reaches the top of Claude's transcript, returns cleanly to the bottom.
 - [ ] When Claude exits and restarts (the per-session restart loop, `loopCommand` or `pd-claude-session`), prior plain-shell output stays in xterm scrollback (outer alternate-screen-off behavior).
 
-## Session restore across a restart (needs a real Claude; the e2e fixture runs `cat` and has no conversation to resume)
-- [ ] Open two or three tabs. In one, ask Claude something long-running so it is mid-tool-call; in another, let it finish and sit waiting on you.
+## Session restore across a restart (needs real providers; the e2e fixture runs `cat` and has no conversation to resume)
+- [ ] Open two Claude tabs and two Codex tabs. Give every conversation a different message you can recognize. In one Claude tab, start something long-running; in another, let it finish and sit waiting on you.
 - [ ] `docker restart pocket-dev` without touching the browser. Every tab comes back under the same id, and the page reconnects on its own (no reload, dots go green).
 - [ ] The tab that was mid-work resumes its conversation and picks the work back up on its own, having been asked "continue please" exactly once (it arrives as Claude's first message, not as keystrokes — check the transcript shows one such user turn, not two).
 - [ ] The tab that was waiting on you resumes its conversation and just sits there. Nothing is typed into it.
+- [ ] Both Codex tabs resume their own distinct conversations. Neither opens fresh and neither attaches to the other tab's conversation. Codex receives no automatic continuation prompt.
 - [ ] No tab comes back sitting on "Quick safety check: is this a project you trust?" — pd-trust-workspace clears that at boot. If one does, restore still worked but every tab needs a keypress, so treat it as a regression.
 - [ ] Now kill it the hard way (`docker kill pocket-dev`, or trigger a real OOM) with a session mid-task. The tab and conversation still come back, but the session is WARNED about the unexpected shutdown instead of being told to continue. This is the one that matters: auto-continuing after an OOM tells Claude to rebuild whatever took the host down.
-- [ ] Type `/exit` in a restored tab. The loop restarts Claude with a NEW conversation, not the one you just left.
+- [ ] Type `/exit` in one restored Claude tab and one restored Codex tab. Each loop starts a NEW conversation, not the one you just left. Restart again and confirm each fresh conversation, rather than the exited one, resumes.
+- [ ] Run `/clear` in a Codex tab, restart, and confirm the cleared conversation resumes. Its `SessionStart` event must replace the prior id even though the Codex process did not exit.
 - [ ] Kill a tab, restart the container: it stays killed, and its conversation is not resumed into a new tab.
-- [ ] `docker stop` + `docker rm` + `docker run` (a recreate) with the `Session State` volume mounted: tabs still come back. Without the mount they do not — expected, and the reason the volume exists.
+- [ ] `docker stop` + `docker rm` + `docker run` (a recreate) with the Home mount present: tabs and both providers' conversations still come back. Without the mount they do not, as expected.
 
 ## Archived-elsewhere close (no automated test can reach this: it needs a real bridged conversation and a real archive action in another app)
 - [ ] Open a fresh tab, send Claude one message so the conversation exists, and confirm the tab appears in the Remote Control list on the phone or at claude.ai/code.
@@ -82,7 +84,7 @@ Composer:
 - [ ] Session list → **+ Claude** still starts Claude, still gets an AI-generated title after its first turn, and still shows `Working` / `Waiting on you` / `Read`. The Codex work must not have flattened the Claude row.
 - [ ] `Ctrl-B c` and the keyboard path start a **Claude** tab (the default), silently and by design.
 - [ ] `curl -X POST -H 'Content-Type: application/json' -d '{"provider":"cursor"}' localhost:7681/sessions` returns **400 `unknown provider`** and creates nothing. A 200 means an unrecognised id is being defaulted through, which is a typo starting the wrong harness.
-- [ ] `docker restart pocket-dev` with one Claude tab and one Codex tab open. Both come back on their OWN harness: `docker logs pocket-dev` names the Codex one as having no conversation tracking, and the Codex pane is Codex and not Claude. A Codex tab that comes back running Claude means the restart loop is baking a process-wide command again.
+- [ ] `docker restart pocket-dev` with one Claude tab and one Codex tab open. Both come back on their OWN harness and conversation: `docker logs pocket-dev` names the Codex one as having no transcript status, and the Codex pane is Codex and not Claude. A Codex tab that comes back running Claude means the restart loop is baking a process-wide command again.
 - [ ] `cat $PD_STATE_DIR/sessions.json` shows `"version": 2` and a `provider` on every entry.
 - [ ] Kill the Codex tab, then hand-edit `sessions.json` to name a provider that does not exist (`"provider": "gemini"`) and restart. The tab comes back as **Claude** with one warning in the log, rather than the server refusing to boot or dropping the tab.
 - [ ] Confirm `/second-opinion` still works from inside a Claude session, and that its banner still says `sandbox: read-only`. The Codex tab's command line carries the sandbox bypass, and the thing that must remain true is that nothing on `PATH` was shadowed, so a consult is unaffected.

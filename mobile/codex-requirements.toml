@@ -1,0 +1,12 @@
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/mobile"
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/mobile/pd-codex-session-start"
+timeout = 3

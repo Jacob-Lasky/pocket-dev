@@ -126,6 +126,28 @@ describe('Codex CLI install', () => {
   });
 });
 
+describe('Codex session capture policy', () => {
+  const root = path.resolve(__dirname, '../../..');
+  const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  const requirements = fs.readFileSync(path.join(root, 'mobile', 'codex-requirements.toml'), 'utf8');
+
+  it('installs a managed SessionStart hook from the image', () => {
+    expect(dockerfile).toMatch(/\/etc\/codex\/requirements\.toml/);
+    expect(requirements).toMatch(/\[\[hooks\.SessionStart\]\]/);
+    expect(requirements).toMatch(/command = "\/mobile\/pd-codex-session-start"/);
+    expect(requirements).toMatch(/managed_dir = "\/mobile"/);
+  });
+
+  it('keeps hooks enabled so a restart cannot silently lose its binding', () => {
+    expect(requirements).toMatch(/\[features\][\s\S]*hooks = true/);
+  });
+
+  it('does not bypass trust for unrelated user or project hooks', () => {
+    expect(dockerfile).not.toContain('dangerously-bypass-hook-trust');
+    expect(requirements).not.toContain('allow_managed_hooks_only');
+  });
+});
+
 // Codex model defaults and, more importantly, the wrapper that must NOT exist.
 // Both fail silently: a missing config means consults run at whatever codex
 // defaults to that month, and a bypass wrapper means they run unsandboxed while

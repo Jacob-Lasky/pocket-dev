@@ -112,11 +112,13 @@ The bind address is handled for you: `entrypoint.sh` resolves the container's ow
 
 Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
 
-Each tab is also bound to a stable Claude conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
+Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. Typing `/exit` still gives you a fresh conversation. Only the first launch after pocket-dev respawns the tab resumes.
 
-If Claude was mid-task, what happens next depends on **how** the container went down:
+Claude receives an id chosen by its launcher. Codex reports its id through the supported `SessionStart` hook installed as a managed system hook, and pocket-dev resumes it with an explicit `codex resume SESSION_ID`. Codex tabs still share the normal `CODEX_HOME`, so config, credentials, packages, plugins, and skills remain in one place. The explicit per-tab id is what prevents two restored tabs from selecting the same most-recent conversation.
 
-- **You restarted it** (`docker restart`, a stop, an image update): the session is asked `continue please` and picks the work back up.
+If Claude was mid-task, what happens next depends on **how** the container went down. Codex resumes the conversation but receives no automatic prompt because pocket-dev does not parse Codex's private transcript format:
+
+- **You restarted it** (`docker restart`, a stop, an image update): a Claude session is asked `continue please` and picks the work back up.
 - **It died** (OOM kill, hard kill, power loss): the session is restored and the conversation resumed, but it is **not** told to continue. It is warned that the shutdown was unexpected and asked to check whether its own work caused it before retrying. A Claude session can take a host down by building something the wrong way, and auto-continuing there just does it again.
 
 The difference is a `clean-shutdown` marker written by the server's signal handler on the way out, so an exit that never got a say can never look deliberate.
@@ -156,7 +158,7 @@ WebKit is in the matrix because mobile Safari's CSS engine has historically inte
 - Base: `node:24-bookworm-slim` (Debian Bookworm, newest LTS and the last major that bundles corepack)
 - Terminal: `node-pty` + `@xterm/xterm` + `@xterm/addon-fit`
 - Selection: public xterm selection APIs in `mobile/public/js/selection.js`; whole-screen copy walks parsed cells in `js/view.js` without an ANSI round-trip
-- Session persistence: `tmux`, plus an on-disk roster + per-tab Claude conversation id under `PD_STATE_DIR` so sessions outlive the container
+- Session persistence: `tmux`, plus an on-disk roster and per-tab provider conversation id under `PD_STATE_DIR` so sessions outlive the container
 - Architectures: `linux/amd64` (pocket-dev runs only on an amd64 host; building arm64 under QEMU roughly doubled CI time for a target nothing runs)
 - Container user: `claude` (uid 99, gid 100; matches UnRAID's `nobody:users`)
 

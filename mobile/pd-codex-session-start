@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+// Managed Codex SessionStart hook. Codex supplies its supported session_id on
+// stdin, and server.js supplies a destination for only pocket-dev Codex tabs.
+// Ordinary Codex sessions have no destination and this exits without effects.
+const fs = require('fs');
+const path = require('path');
+const { SAFE_ID, UUID_RE } = require('./safeId');
+
+const target = process.env.PD_CODEX_SID_FILE;
+
+if (!target) process.exit(0);
+
+const stateDir = path.resolve(
+  process.env.PD_STATE_DIR || path.join(process.env.HOME || '', '.pocket-dev'),
+);
+const sidDir = path.join(stateDir, 'sids');
+const resolvedTarget = path.resolve(target);
+const sidName = path.basename(resolvedTarget);
+const sessionId = sidName.endsWith('.uuid') ? sidName.slice(0, -5) : '';
+
+if (path.dirname(resolvedTarget) !== sidDir || !SAFE_ID.test(sessionId)) {
+  process.exit(1);
+}
+
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  input += chunk;
+  if (input.length > 64 * 1024) process.exit(1);
+});
+process.stdin.on('end', () => {
+  let event;
+  try {
+    event = JSON.parse(input);
+  } catch {
+    process.exit(1);
+  }
+  if (event?.hook_event_name !== 'SessionStart' || !UUID_RE.test(event?.session_id || '')) {
+    process.exit(1);
+  }
+
+  const tmp = `${resolvedTarget}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(sidDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmp, `${event.session_id}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, resolvedTarget);
+  } catch {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    process.exit(1);
+  }
+});

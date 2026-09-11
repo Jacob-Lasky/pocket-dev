@@ -131,9 +131,9 @@ describe('capabilities: what pocket-dev is allowed to believe', () => {
     });
   });
 
-  it('gives Codex none, and gates autoName in particular', () => {
+  it('gives Codex resume only, and gates Claude transcript features', () => {
     const caps = resolveCapabilities('codex');
-    expect(caps.resumeConversation).toBe(false);
+    expect(caps.resumeConversation).toBe(true);
     expect(caps.transcriptStatus).toBe(false);
     expect(caps.transcriptTitle).toBe(false);
     expect(caps.archiveClose).toBe(false);
@@ -145,13 +145,9 @@ describe('capabilities: what pocket-dev is allowed to believe', () => {
   });
 
   it('declares autoName off in the ENTRY, not just off by consequence', () => {
-    // Asserted against the registry as well as the resolved set, because the
-    // resolved one cannot see this: resolveCapabilities gates autoName on there
-    // being a transcript, and Codex has none, so a registry entry that said
-    // `autoName: true` would resolve to false anyway and the safety gate would
-    // read as present while being absent. That is the same accidental
-    // protection this gate exists to replace, one layer up. The DECLARATION is
-    // what a future provider with a transcript would inherit.
+    // Asserted against the registry as well as the resolved set. Resume support
+    // does not grant Codex a Claude transcript or a compatible rename command,
+    // so the declaration itself must keep this write path disabled.
     expect(PROVIDERS.get('codex').capabilities.autoName).toBe(false);
     expect(PROVIDERS.get('claude').capabilities.autoName).toBe(true);
   });
