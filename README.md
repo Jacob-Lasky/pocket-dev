@@ -116,7 +116,7 @@ Each browser tab is a tmux session, and the set of them is recorded under `PD_ST
 
 On every reconnect, pocket-dev replays recent terminal bytes and then asks tmux to repaint its authoritative current screen. The second step matters for Claude, Codex, and other full-screen terminal apps because their bounded byte history can begin inside a differential frame and cannot reconstruct a screen by itself.
 
-Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
+Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If the session was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
 
 Claude receives an id chosen by its launcher. Codex reports its id through the supported `SessionStart` hook installed as a managed system hook, and pocket-dev resumes it with an explicit `codex resume SESSION_ID`. Codex tabs still share the normal `CODEX_HOME`, so config, credentials, packages, plugins, and skills remain in one place. The explicit per-tab id is what prevents two restored tabs from selecting the same most-recent conversation. Later compaction events cannot replace that root, while `/clear` intentionally rebinds the tab to its new conversation.
 
@@ -135,6 +135,7 @@ The difference is a `clean-shutdown` marker written by the server's signal handl
 | `PD_RESUME` | on | `0` disables conversation resume; the tab roster still restores |
 | `PD_RESUME_NUDGE` | `continue please` | What an active Claude or Codex session is asked after a deliberate restart. Empty string sends nothing |
 | `PD_CRASH_NUDGE` | a warning, see above | What it is told instead after an unexpected shutdown. Empty string sends nothing |
+| `PD_CODEX_STATUS_TIMEOUT_MS` | `10000` | How long the boot-time Codex turn-status read may take for all Codex tabs together. On timeout every status is unknown, so the tabs restore without a prompt |
 | `PD_TRUST_WORKSPACE` | on | `0` keeps Claude's workspace-trust prompt, which every restored tab will then wait on |
 | `PD_ARCHIVE_CLOSE` | on | `0` keeps a tab open after its conversation is archived from another device |
 
