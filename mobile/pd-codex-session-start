@@ -4,6 +4,7 @@
 // Ordinary Codex sessions have no destination and this exits without effects.
 const fs = require('fs');
 const path = require('path');
+const { randomBytes } = require('node:crypto');
 const { SAFE_ID, UUID_RE } = require('./safeId');
 
 const target = process.env.PD_CODEX_SID_FILE;
@@ -39,20 +40,26 @@ process.stdin.on('end', () => {
     process.exit(1);
   }
 
-  const tmp = `${resolvedTarget}.${process.pid}.tmp`;
+  const tmp = `${resolvedTarget}.${process.pid}.${randomBytes(12).toString('hex')}.tmp`;
   try {
     fs.mkdirSync(sidDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, `${event.session_id}\n`, { mode: 0o600, flag: 'wx' });
-    // The launcher deletes the old binding before a genuinely fresh TUI starts,
-    // so the first SessionStart is the root we must preserve. Later lifecycle
-    // events in the same TUI can carry a non-resumable multi-agent identity.
-    // linkSync publishes the complete temp inode without replacing that root.
-    try {
-      fs.linkSync(tmp, resolvedTarget);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+    if (process.env.PD_CODEX_REPLACE_BINDING === '1') {
+      // The one-time migration helper has already resolved and verified the
+      // root, so it must repair an existing stale binding atomically.
+      fs.renameSync(tmp, resolvedTarget);
+    } else {
+      // The launcher deletes the old binding before a genuinely fresh TUI
+      // starts, so the first SessionStart is the root we must preserve. Later
+      // lifecycle events in the same TUI can carry a non-resumable identity.
+      // linkSync publishes the complete temp inode without replacing that root.
+      try {
+        fs.linkSync(tmp, resolvedTarget);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+      fs.rmSync(tmp);
     }
-    fs.rmSync(tmp);
   } catch {
     try { fs.rmSync(tmp, { force: true }); } catch {}
     process.exit(1);
