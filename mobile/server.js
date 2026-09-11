@@ -4,12 +4,14 @@ const http     = require('http');
 const os       = require('os');
 const path     = require('path');
 const pty      = require('node-pty');
+const { setTimeout: delay } = require('node:timers/promises');
 const { exec, execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 const { SAFE_ID } = require('./safeId');
 const { createSessionStore, nullSessionStore } = require('./sessionStore');
 const {
   PROVIDER_IDS, DEFAULT_PROVIDER, isProvider, labelFor,
+  sessionKindFor, resolveInput,
   commandFor: providerCommand, resolveCapabilities, statusTracked,
 } = require('./providers');
 const claudeSession = require('./claudeSession');
@@ -194,6 +196,10 @@ function capsFor(provider) {
   return caps;
 }
 
+function inputFor(provider, shellOverride = Boolean(SHELL_CMD)) {
+  return resolveInput(provider, { shellOverride });
+}
+
 // How long the session has to have been quiet, input-wise, before we type into
 // it. The rename fires just after the first turn, when the user is reading
 // rather than typing, so in practice this never waits; it exists for the case
@@ -299,8 +305,9 @@ function commandForSession(provider) {
 // and every session under a custom SHELL_CMD, gets the plain inline loop.
 function launcherFor(provider) {
   if (!capsFor(provider).resumeConversation) return null;
-  if (provider === 'claude') return LAUNCHER_PATH;
-  if (provider === 'codex') return CODEX_LAUNCHER_PATH;
+  const sessionKind = sessionKindFor(provider);
+  if (sessionKind === 'claude') return LAUNCHER_PATH;
+  if (sessionKind === 'codex') return CODEX_LAUNCHER_PATH;
   throw new Error(`no resume launcher for provider: ${provider}`);
 }
 
@@ -320,8 +327,24 @@ function spawnTmuxPty({ session, command, env, cols, rows }) {
   });
 }
 
-function createApp({ sessionsApi } = {}) {
+function createApp({ sessionsApi, shellOverride = Boolean(SHELL_CMD) } = {}) {
   const app = express();
+  const inputTails = new WeakMap();
+
+  // Preserve request order through a provider's delayed submit. Without one
+  // tail per session, two composer requests can write both payloads before
+  // either Enter and merge two prompts into one turn.
+  function enqueueInput(session, operation) {
+    const previous = inputTails.get(session) || Promise.resolve();
+    const current = previous.then(operation);
+    const settled = current.then(() => undefined, () => undefined);
+    inputTails.set(session, settled);
+    settled.then(() => {
+      if (inputTails.get(session) === settled) inputTails.delete(session);
+    });
+    return current;
+  }
+
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/xterm',           express.static(path.join(__dirname, 'node_modules/@xterm/xterm')));
@@ -368,7 +391,7 @@ function createApp({ sessionsApi } = {}) {
       sessionsApi.destroy(req.params.id, (ok) => res.json({ ok }));
     });
 
-    app.post('/send', requireSession, (req, res) => {
+    app.post('/send', requireSession, (req, res, next) => {
       const { text } = req.body;
       if (typeof text !== 'string' || !text.length)
         return res.status(400).json({ error: 'text required' });
@@ -378,9 +401,12 @@ function createApp({ sessionsApi } = {}) {
       const payload = req.body.bracketedPaste === true
         ? '\x1b[200~' + text.replace(/\x1b/g, '') + '\x1b[201~'
         : text;
-      req.session.pty.write(payload);
-      req.session.pty.write('\r');
-      res.json({ ok: true });
+      const input = inputFor(req.session.provider, shellOverride);
+      enqueueInput(req.session, async () => {
+        req.session.pty.write(payload);
+        if (input.submitDelayMs) await delay(input.submitDelayMs);
+        req.session.pty.write(input.submitSequence);
+      }).then(() => res.json({ ok: true }), next);
     });
 
     app.post('/key', requireSession, (req, res) => {
@@ -392,10 +418,10 @@ function createApp({ sessionsApi } = {}) {
         return res.json({ ok: true });
       }
       const sequences = {
-        escape: '\x1b', tab: '\t', enter: '\r',
+        escape: '\x1b', tab: '\t',
         left: '\x1b[D', right: '\x1b[C', up: '\x1b[A', down: '\x1b[B',
       };
-      const seq = sequences[key];
+      const seq = key === 'enter' ? inputFor(req.session.provider, shellOverride).submitSequence : sequences[key];
       if (!seq) return res.status(400).json({ error: 'unknown key' });
       sessionsApi.noteInput(req.session);
       req.session.pty.write(seq);
@@ -528,11 +554,12 @@ function createSessionsApi({
     const env = {};
     if (caps.resumeConversation) {
       const sidFile = store.sidPath(id);
-      if (provider === 'claude') {
+      const sessionKind = sessionKindFor(provider);
+      if (sessionKind === 'claude') {
         env.PD_CLAUDE_PROJECTS_DIR = projectsDir;
         if (sidFile) env.PD_SID_FILE = sidFile;
         if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
-      } else if (provider === 'codex' && sidFile) {
+      } else if (sessionKind === 'codex' && sidFile) {
         env.PD_CODEX_SID_FILE = sidFile;
         if (store.dir) env.PD_STATE_DIR = store.dir;
       }

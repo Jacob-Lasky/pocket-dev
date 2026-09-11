@@ -59,7 +59,7 @@ test('a repainting tab with no transcript never raises the attention badge', asy
   await waitForConnection(page);
 
   const claudeId = await activeSessionId(page);
-  await newSessionWithProvider(page, 'Codex');
+  await newSessionWithProvider(page, 'Codex DG');
   const codexId = await activeSessionId(page);
   expect(codexId).not.toBe(claudeId);
 
@@ -73,7 +73,7 @@ test('a repainting tab with no transcript never raises the attention badge', asy
 
   const row = (await serverRows(page)).find(r => r.id === codexId);
   expect(row.provider).toBe('codex');
-  expect(row.providerLabel).toBe('Codex');
+  expect(row.providerLabel).toBe('Codex (Deepgram)');
   expect(row.statusTracked).toBe(false);
   expect(row.unread).toBe(false);
 
@@ -90,7 +90,7 @@ test('its row says it has no status, and the summary does not call the list quie
   await waitForConnection(page);
 
   const claudeId = await activeSessionId(page);
-  await newSessionWithProvider(page, 'Codex');
+  await newSessionWithProvider(page, 'Codex DG');
   const codexId = await activeSessionId(page);
   await switchToRow(page, 0);
   await waitForRepaint(page, codexId);
@@ -99,7 +99,7 @@ test('its row says it has no status, and the summary does not call the list quie
 
   // Named for what it IS, so the tab is legible rather than a bare id.
   await expect.poll(() => rowFor(page, codexId).locator('.sl-title').textContent(), { timeout: 8000 })
-    .toBe(`Codex · ${codexId}`);
+    .toBe(`Codex (Deepgram) · ${codexId}`);
   await expect(rowFor(page, codexId).locator('.sl-status')).toHaveAttribute('data-state', 'opaque');
   await expect(rowFor(page, codexId).locator('.sl-status')).toContainText('Status not tracked');
   await expect(rowFor(page, codexId)).toHaveAttribute('data-unread', 'false');
@@ -117,22 +117,28 @@ test('the picker starts the harness its label names, and nothing else', async ({
   await gotoTest(page, pdServerClaudeStub);
   await waitForConnection(page);
 
-  // Both buttons exist and say which harness they start. A cycling chip would
+  // All three buttons exist and say which harness/account route they start. A cycling chip would
   // carry hidden state a phone user has to read before tapping, and a mis-tap
   // starts the wrong harness on the wrong billing account.
   await openSessionList(page);
-  await expect(page.locator('#sl-bar >> text=+ Claude')).toHaveCount(1);
-  await expect(page.locator('#sl-bar >> text=+ Codex')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '+ Claude', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '+ Codex DG', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '+ Codex GPT', exact: true })).toHaveCount(1);
   await page.keyboard.press('Escape');
 
   await newSession(page);
   const claudeTab = await activeSessionId(page);
-  await newSessionWithProvider(page, 'Codex');
+  await newSessionWithProvider(page, 'Codex DG');
   const codexTab = await activeSessionId(page);
+  await newSessionWithProvider(page, 'Codex GPT');
+  const codexChatgptTab = await activeSessionId(page);
 
   const rows = await serverRows(page);
   expect(rows.find(r => r.id === claudeTab).provider).toBe('claude');
   expect(rows.find(r => r.id === codexTab).provider).toBe('codex');
+  expect(rows.find(r => r.id === codexChatgptTab).provider).toBe('codex-chatgpt');
+  expect(rows.find(r => r.id === codexChatgptTab).providerLabel).toBe('Codex (ChatGPT)');
+  expect(rows.find(r => r.id === codexChatgptTab).statusTracked).toBe(false);
   // The Claude tab keeps a tracked status, so this did not flatten the list.
   expect(rows.find(r => r.id === claudeTab).statusTracked).toBe(true);
 });
