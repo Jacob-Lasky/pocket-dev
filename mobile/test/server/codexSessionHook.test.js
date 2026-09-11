@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +18,25 @@ function runHook({ id = UUID_A, file, event = 'SessionStart' } = {}) {
     env,
     input: JSON.stringify({ session_id: id, hook_event_name: event }),
     encoding: 'utf8',
+  });
+}
+
+function runHookWithStalePidTemp(file) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(CODEX_HOOK_PATH, [], {
+      env: { ...spawnEnv({ HOME: home }), PD_CODEX_SID_FILE: file },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', status => resolve({ status, stdout, stderr }));
+
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.${child.pid}.tmp`, 'stale');
+    child.stdin.end(JSON.stringify({ session_id: UUID_A, hook_event_name: 'SessionStart' }));
   });
 }
 
@@ -59,6 +78,15 @@ describe('the managed Codex SessionStart hook', () => {
     expect(runHook({ id: UUID_B, file }).status).toBe(0);
     expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_A}\n`);
     expect(fs.readdirSync(sidDir)).toEqual(['main-1.uuid']);
+  });
+
+  it('publishes the root even when a previous container left its PID temp behind', async () => {
+    const file = path.join(sidDir, 'main-1.uuid');
+    const result = await runHookWithStalePidTemp(file);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_A}\n`);
   });
 
   it('does nothing outside a pocket-dev tab', () => {

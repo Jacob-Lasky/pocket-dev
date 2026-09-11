@@ -115,6 +115,15 @@ describe('binding a pre-upgrade Codex tab', () => {
       .toBe(`${CHILD_UUID}\n`);
   });
 
+  it('atomically replaces a stale binding with the verified root', () => {
+    const sidDir = path.join(home, '.pocket-dev', 'sids');
+    fs.mkdirSync(sidDir, { recursive: true });
+    fs.writeFileSync(path.join(sidDir, 'main-1.uuid'), `${MIDDLE_UUID}\n`);
+    const result = run();
+    expect(result.status).toBe(0);
+    expect(fs.readFileSync(path.join(sidDir, 'main-1.uuid'), 'utf8')).toBe(`${ROOT_UUID}\n`);
+  });
+
   it('fails closed without exposing ids when App Server cannot validate the thread', () => {
     const result = run({ PD_TEST_APP_SERVER_ERROR: '1' });
     expect(result.status).not.toBe(0);
