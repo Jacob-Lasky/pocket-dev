@@ -410,14 +410,7 @@ function createApp({ sessionsApi } = {}) {
     });
 
     app.post('/refresh', requireSession, (req, res) => {
-      // tmux refresh-client targets clients, not sessions. List clients of
-      // this session, then refresh each. SAFE_ID guard in requireSession
-      // guarantees no shell metacharacters in `req.session.id`.
-      exec(
-        `tmux list-clients -t '${req.session.id}' -F '#{client_name}' | xargs -r -I{} tmux refresh-client -t {}`,
-        { shell: '/bin/bash' },
-        (err) => res.json({ ok: !err }),
-      );
+      refreshTmuxSession(req.session.id, (err) => res.json({ ok: !err }));
     });
   }
 
@@ -444,6 +437,23 @@ function killTmuxSession(id, cb) {
   execFile('tmux', ['kill-session', '-t', id], cb);
 }
 
+// A replay buffer is terminal BYTE HISTORY, not a screen snapshot. Once its
+// bounded prefix has been dropped, a full-screen TUI's remaining cursor deltas
+// cannot reconstruct the state they were written against. tmux still owns the
+// authoritative current screen, so repaint every attached client from there.
+//
+// tmux refresh-client targets clients, not sessions. List the clients attached
+// to this session, then refresh each. Callers resolve ids from the guarded
+// session map, but validate here too because this helper owns interpolation.
+function refreshTmuxSession(id, cb = () => {}, run = exec) {
+  if (!SAFE_ID.test(id)) return cb(new Error('invalid session id'));
+  run(
+    `tmux list-clients -t '${id}' -F '#{client_name}' | xargs -r -I{} tmux refresh-client -t {}`,
+    { shell: '/bin/bash' },
+    cb,
+  );
+}
+
 // Close code for "this session does not exist any more". The browser's
 // ws.onclose branches on it: 4404 means stop reconnecting and re-read the
 // roster, anything else means a transient hiccup worth retrying in two seconds.
@@ -456,11 +466,12 @@ function killTmuxSession(id, cb) {
 const GONE_CODE = 4404;
 
 function createSessionsApi({
-  store       = nullSessionStore,
-  spawnPty    = spawnTmuxPty,
-  killSession = killTmuxSession,
-  projectsDir = PROJECTS_DIR,
-  logger      = console,
+  store          = nullSessionStore,
+  spawnPty       = spawnTmuxPty,
+  killSession    = killTmuxSession,
+  refreshSession = refreshTmuxSession,
+  projectsDir    = PROJECTS_DIR,
+  logger         = console,
 } = {}) {
   const sessions = new Map();
   let nextSeq = 1;
@@ -1044,6 +1055,13 @@ function createSessionsApi({
     ws.pdFrames = frames;
     if (state.replayBuffer.length > 0) {
       ws.send(frames ? JSON.stringify({ type: 'replay', data: state.replayBuffer }) : state.replayBuffer);
+      // Queue the authoritative screen AFTER the replay suffix. WebSocket
+      // ordering and the browser's write queue preserve that order, so a TUI
+      // reconnect always ends on tmux's complete current frame even when the
+      // bounded byte history began halfway through a differential repaint.
+      refreshSession(sessionId, (err) => {
+        if (err) logger.warn(`[${sessionId}] replay refresh failed: ${err.message}`);
+      });
     }
 
     ws.on('message', data => {
@@ -1081,6 +1099,7 @@ module.exports = {
   buildSessionCommand,
   createApp,
   createSessionsApi,
+  refreshTmuxSession,
   TMUX_CONF_PATH,
   LAUNCHER_PATH,
   CODEX_LAUNCHER_PATH,

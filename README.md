@@ -112,7 +112,9 @@ The bind address is handled for you: `entrypoint.sh` resolves the container's ow
 
 Each browser tab is a tmux session, and the set of them is recorded under `PD_STATE_DIR` (`/home/claude/.pocket-dev`). When the server comes back up it restores that roster before it starts listening, so an open browser reconnects into the same tabs on its own.
 
-Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. Typing `/exit` still gives you a fresh conversation. Only the first launch after pocket-dev respawns the tab resumes.
+On every reconnect, pocket-dev replays recent terminal bytes and then asks tmux to repaint its authoritative current screen. The second step matters for Claude, Codex, and other full-screen terminal apps because their bounded byte history can begin inside a differential frame and cannot reconstruct a screen by itself.
+
+Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
 
 Claude receives an id chosen by its launcher. Codex reports its id through the supported `SessionStart` hook installed as a managed system hook, and pocket-dev resumes it with an explicit `codex resume SESSION_ID`. Codex tabs still share the normal `CODEX_HOME`, so config, credentials, packages, plugins, and skills remain in one place. The explicit per-tab id is what prevents two restored tabs from selecting the same most-recent conversation.
 

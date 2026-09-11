@@ -69,6 +69,15 @@ function fakePty() {
   return proc;
 }
 
+function fakeWs(onSend = () => {}) {
+  return {
+    readyState: 1,
+    send(data) { onSend(data); },
+    on() {},
+    close() {},
+  };
+}
+
 let dir, projectsDir, spawned, logger, kills;
 
 // EVERY api built in this file must get this. The real killSession runs
@@ -84,10 +93,11 @@ function fakeKill() {
   return (id, cb) => { kills.push(id); cb(null); };
 }
 
-function makeApi() {
+function makeApi({ refreshSession = () => {} } = {}) {
   const store = createSessionStore({ dir, logger });
   const api = createSessionsApi({
     killSession: fakeKill(),
+    refreshSession,
     store,
     projectsDir,
     logger,
@@ -180,6 +190,43 @@ describe('roster persistence', () => {
     const { api, store } = makeApi();
     const state = api.create();
     expect(spawned[0].env.PD_SID_FILE).toBe(store.sidPath(state.id));
+  });
+});
+
+describe('terminal replay', () => {
+  it.each([
+    ['framed', true, data => JSON.parse(data).type],
+    ['raw', false, () => 'raw'],
+  ])('follows %s replay bytes with the authoritative current tmux screen', (_label, frames, sentType) => {
+    const events = [];
+    const { api } = makeApi({ refreshSession: id => events.push(`refresh:${id}`) });
+    const state = api.create();
+    spawned[0].proc.emit('context-dependent TUI tail');
+
+    api.attachWs(fakeWs(data => events.push(`send:${sentType(data)}`)), state.id, { frames });
+
+    expect(events).toEqual([`send:${frames ? 'replay' : 'raw'}`, `refresh:${state.id}`]);
+  });
+
+  it('does not repaint an empty session that had no replay bytes', () => {
+    const refreshSession = vi.fn();
+    const { api } = makeApi({ refreshSession });
+    const state = api.create();
+
+    api.attachWs(fakeWs(), state.id, { frames: true });
+
+    expect(refreshSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the socket attached and logs when the authoritative repaint fails', () => {
+    const refreshError = new Error('tmux unavailable');
+    const { api } = makeApi({ refreshSession: (_id, done) => done(refreshError) });
+    const state = api.create();
+    spawned[0].proc.emit('context-dependent TUI tail');
+
+    api.attachWs(fakeWs(), state.id, { frames: true });
+
+    expect(logger.warn).toHaveBeenCalledWith(`[${state.id}] replay refresh failed: tmux unavailable`);
   });
 });
 

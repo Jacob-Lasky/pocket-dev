@@ -1,5 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import { spawn, execFile as execFileCb } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -28,7 +29,10 @@ async function pickPort() {
 // Spawn a Node child running the given script with PORT set, and resolve once
 // it logs the given ready string. Reject if it exits early or doesn't log
 // within timeoutMs.
-async function spawnReady({ scriptPath, env, readySubstring, timeoutMs = 5000 }) {
+// Tower is a shared build host and can be CPU-saturated by unrelated media or
+// test jobs. A readiness wait must tolerate scheduling delay while still
+// failing immediately if the child process exits.
+async function spawnReady({ scriptPath, env, readySubstring, timeoutMs = 15000 }) {
   const proc = spawn('node', [scriptPath], { env, stdio: 'pipe' });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Server did not start within ${timeoutMs}ms`)), timeoutMs);
@@ -115,6 +119,64 @@ function ptyServerFixture({ prefix, shellCmd }) {
   };
 }
 
+async function useSessionsApiServer(sessionsApi, use) {
+  const server = http.createServer(createApp({ sessionsApi }));
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'http://localhost');
+    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, url.searchParams.get('session'), {
+      frames: url.searchParams.get('frames') === '1',
+    }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await use({ port, baseURL: `http://127.0.0.1:${port}` });
+  for (const { id } of sessionsApi.list()) sessionsApi.destroy(id);
+  for (const ws of wss.clients) ws.terminate();
+  await new Promise(resolve => server.close(resolve));
+  wss.close();
+}
+
+const truncatedTuiBaseFrame = [
+  '\x1b[2J\x1b[HQuick safety check',
+  'Review this folder before continuing.',
+  '',
+  'Claude Code can read, edit, and execute files here.',
+  '',
+  'Enter to confirm. Esc to cancel.',
+].join('\r\n');
+const truncatedTuiMarker = '\x1b[20;1H\x1b[KREPLAY WINDOW TRIMMED';
+const truncatedTuiTail = Array.from(
+  { length: 30000 },
+  (_, i) => `\x1b[20;1H\x1b[K${String(i).padStart(20, '0')}`,
+).join('') + truncatedTuiMarker;
+
+function truncatedTuiPty() {
+  const proc = new EventEmitter();
+  let input = '';
+  proc.onData = handler => {
+    proc.on('data', handler);
+    return { dispose: () => proc.off('data', handler) };
+  };
+  proc.onExit = handler => {
+    proc.on('exit', handler);
+    return { dispose: () => proc.off('exit', handler) };
+  };
+  proc.resize = () => {};
+  proc.kill = () => {};
+  proc.write = data => {
+    input += data;
+    let end;
+    while ((end = input.indexOf('\r')) >= 0) {
+      const command = input.slice(0, end);
+      input = input.slice(end + 1);
+      if (command === 'draw') proc.emit('data', truncatedTuiBaseFrame);
+      if (command === 'trim') proc.emit('data', truncatedTuiTail);
+    }
+  };
+  return proc;
+}
+
 export const test = base.extend({
   // Uses `cat` as a deterministic SHELL_CMD so typing `hello\n` in #cmd-input
   // echoes `hello\n` back into the buffer.
@@ -127,22 +189,11 @@ export const test = base.extend({
         name: 'xterm-256color', cols: 120, rows: 40, env: process.env,
       }),
       killSession: (_id, done) => done(),
+      // This fixture deliberately has no tmux client. Do not let a reconnect
+      // fall through to the real refresh command and touch a developer session.
+      refreshSession: (_id, done) => done(),
     });
-    const server = http.createServer(createApp({ sessionsApi }));
-    const wss = new WebSocketServer({ noServer: true });
-    server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url, 'http://localhost');
-      wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, url.searchParams.get('session'), {
-        frames: url.searchParams.get('frames') === '1',
-      }));
-    });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const port = server.address().port;
-    await use({ port, baseURL: `http://127.0.0.1:${port}` });
-    for (const { id } of sessionsApi.list()) sessionsApi.destroy(id);
-    for (const ws of wss.clients) ws.terminate();
-    await new Promise(resolve => server.close(resolve));
-    wss.close();
+    await useSessionsApiServer(sessionsApi, use);
   },
 
   // SHELL_CMD replays a captured real Claude TUI frame (alt-screen,
@@ -152,6 +203,22 @@ export const test = base.extend({
     prefix: 'pdframe',
     shellCmd: `bash ${path.resolve(__dirname, 'replay-claude-frame.sh')}`,
   }),
+
+  // The fake outer PTY makes the reconnect contract deterministic: the replay
+  // suffix contains row deltas only, while refresh emits the authoritative
+  // complete screen that a real tmux client owns.
+  pdServerTruncatedTuiFrame: async ({}, use) => {
+    let pty;
+    const sessionsApi = createSessionsApi({
+      spawnPty: () => (pty = truncatedTuiPty()),
+      killSession: (_id, done) => done(),
+      refreshSession: (_id, done) => {
+        pty.emit('data', truncatedTuiBaseFrame + truncatedTuiMarker);
+        done();
+      },
+    });
+    await useSessionsApiServer(sessionsApi, use);
+  },
 
   // SHELL_CMD enables SGR mouse tracking (as Claude does) then idles. Exercises
   // scroll.js's wheel-forwarding branch: touch-drag on a mouse-tracking session
