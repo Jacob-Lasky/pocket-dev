@@ -3,135 +3,44 @@
 // existed. A tool can run inside a multi-agent child thread, so resolve its
 // supported App Server record before choosing the resumable conversation.
 const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
+const { withCodexAppServer } = require('./codexAppServer');
 const { SAFE_ID, UUID_RE } = require('./safeId');
 
 const APP_SERVER_TIMEOUT_MS = 10_000;
-const MAX_PROTOCOL_LINE_BYTES = 1024 * 1024;
 const MAX_PARENT_DEPTH = 32;
 
-function stop(child) {
-  child.stdin.end();
-  child.kill('SIGTERM');
-}
-
 function resolveResumeId(threadId) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('codex', ['app-server', '--stdio'], {
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    let buffer = '';
-    let settled = false;
+  return withCodexAppServer({
+    clientInfo: {
+      name: 'pocket-dev-codex-migration',
+      title: 'pocket-dev Codex migration',
+      version: '1',
+    },
+    timeoutMs: APP_SERVER_TIMEOUT_MS,
+  }, async (request) => {
     let currentThreadId = threadId;
-    let readRequestId = 2;
     const visited = new Set([threadId]);
 
-    const timeout = setTimeout(() => finish(new Error('timeout')), APP_SERVER_TIMEOUT_MS);
-
-    function finish(error, result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      stop(child);
-      if (error) reject(error);
-      else resolve(result);
-    }
-
-    function send(message) {
-      child.stdin.write(`${JSON.stringify(message)}\n`);
-    }
-
-    function acceptThread(message, expectedId) {
-      if (message.error) throw new Error('app-server error');
-      const thread = message.result?.thread;
-      if (!thread || thread.id !== expectedId || !UUID_RE.test(thread.sessionId || '')) {
+    for (;;) {
+      const result = await request('thread/read', {
+        threadId: currentThreadId,
+        includeTurns: false,
+      });
+      const thread = result?.thread;
+      if (!thread || thread.id !== currentThreadId || !UUID_RE.test(thread.sessionId || '')) {
         throw new Error('invalid thread record');
       }
       if (thread.parentThreadId != null && !UUID_RE.test(thread.parentThreadId)) {
         throw new Error('invalid parent thread');
       }
-      return thread;
+      if (thread.parentThreadId == null) return thread.id;
+      if (visited.size >= MAX_PARENT_DEPTH || visited.has(thread.parentThreadId)) {
+        throw new Error('invalid parent chain');
+      }
+      currentThreadId = thread.parentThreadId;
+      visited.add(currentThreadId);
     }
-
-    function readThread() {
-      send({
-        method: 'thread/read',
-        id: readRequestId,
-        params: { threadId: currentThreadId, includeTurns: false },
-      });
-    }
-
-    function receive(message) {
-      if (message.id === 1) {
-        if (message.error) throw new Error('initialize failed');
-        send({ method: 'initialized', params: {} });
-        readThread();
-        return;
-      }
-
-      if (message.id === readRequestId) {
-        const thread = acceptThread(message, currentThreadId);
-        if (thread.parentThreadId == null) {
-          finish(null, thread.id);
-          return;
-        }
-
-        if (visited.size >= MAX_PARENT_DEPTH || visited.has(thread.parentThreadId)) {
-          throw new Error('invalid parent chain');
-        }
-        currentThreadId = thread.parentThreadId;
-        visited.add(currentThreadId);
-        readRequestId += 1;
-        readThread();
-      }
-    }
-
-    child.once('error', error => finish(error));
-    child.stdin.on('error', error => finish(error));
-    child.once('exit', () => {
-      if (!settled) finish(new Error('app-server exited'));
-    });
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', chunk => {
-      if (settled) return;
-      buffer += chunk;
-
-      for (;;) {
-        const newline = buffer.indexOf('\n');
-        if (newline < 0) break;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        if (!line.trim()) continue;
-        if (Buffer.byteLength(line) > MAX_PROTOCOL_LINE_BYTES) {
-          finish(new Error('protocol line too large'));
-          return;
-        }
-        try {
-          receive(JSON.parse(line));
-        } catch (error) {
-          finish(error);
-          return;
-        }
-        if (settled) return;
-      }
-      if (Buffer.byteLength(buffer) > MAX_PROTOCOL_LINE_BYTES) {
-        finish(new Error('protocol line too large'));
-      }
-    });
-
-    send({
-      method: 'initialize',
-      id: 1,
-      params: {
-        clientInfo: {
-          name: 'pocket-dev-codex-migration',
-          title: 'pocket-dev Codex migration',
-          version: '1',
-        },
-        capabilities: { experimentalApi: true },
-      },
-    });
   });
 }
 

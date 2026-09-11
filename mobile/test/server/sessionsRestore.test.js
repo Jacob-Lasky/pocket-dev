@@ -13,6 +13,7 @@ import { archivedNotice as archived } from '../fixtures/rc-notices.js';
 // exercised without a real tmux or a real Claude.
 
 const UUID = '6d7657b2-2e36-4a45-a083-4c300969650d';
+const UUID_2 = '7e8768c3-3f47-4b56-b194-5d411a7a761e';
 
 // Every knob server.js reads at module level. A test asking for one of these
 // must see ONLY the one it asked for.
@@ -93,7 +94,11 @@ function fakeKill() {
   return (id, cb) => { kills.push(id); cb(null); };
 }
 
-function makeApi({ refreshSession = () => {} } = {}) {
+function makeApi({
+  refreshSession = () => {},
+  codexTurnStatus = () => 'unknown',
+  codexTurnStatuses = (threadIds) => threadIds.map(codexTurnStatus),
+} = {}) {
   const store = createSessionStore({ dir, logger });
   const api = createSessionsApi({
     killSession: fakeKill(),
@@ -101,6 +106,7 @@ function makeApi({ refreshSession = () => {} } = {}) {
     store,
     projectsDir,
     logger,
+    codexTurnStatuses,
     spawnPty: (opts) => {
       const proc = fakePty();
       spawned.push({ ...opts, proc });
@@ -847,23 +853,114 @@ describe('the provider a session runs', () => {
     expect(said).toContain('Codex (Deepgram) session with no transcript status');
   });
 
-  it('does not hand a Claude continuation prompt to Codex', () => {
-    // Codex can resume, but pocket-dev cannot classify its transcript as busy.
-    // The Claude continuation prompt must therefore stay off its command line.
+  it.each([
+    ['codex', 'interrupted'],
+    ['codex', 'inProgress'],
+    ['codex-chatgpt', 'interrupted'],
+    ['codex-chatgpt', 'inProgress'],
+  ])(
+    'continues a %s turn whose last status is %s after a clean restart',
+    (provider, lastTurnStatus) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+      second.api.restore({ autoContinue: true });
+      const spawn = spawned[spawned.length - 1];
+      expect(spawn.env.PD_RESUME_PROMPT).toBe('continue please');
+      expect(spawn.command).not.toContain('pd-claude-session');
+      expect(spawn.command).toContain('pd-codex-session');
+    },
+  );
+
+  it('reads every restored Codex status through one bounded batch', () => {
+    const first = makeApi();
+    const dg = first.api.create('main-1', { provider: 'codex' });
+    const chatgpt = first.api.create('main-2', { provider: 'codex-chatgpt' });
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(dg.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(dg.id), UUID);
+    fs.writeFileSync(store.sidPath(chatgpt.id), UUID_2);
+    const lookup = vi.fn(() => ['interrupted', 'completed']);
+
+    const second = makeApi({ codexTurnStatuses: lookup });
+    second.api.restore({ autoContinue: true });
+
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledWith([UUID, UUID_2]);
+    const restoredSpawns = spawned.slice(-2);
+    expect(restoredSpawns[0].env.PD_RESUME_PROMPT).toBe('continue please');
+    expect(restoredSpawns[1].env.PD_RESUME_PROMPT).toBeUndefined();
+  });
+
+  it('restores every Codex tab without a prompt when the batch lookup throws', () => {
     const first = makeApi();
     const state = first.api.create('main-1', { provider: 'codex' });
     const store = createSessionStore({ dir, logger });
     fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
     fs.writeFileSync(store.sidPath(state.id), UUID);
-    writeTranscript(UUID, BUSY);
 
-    const second = makeApi();
-    second.api.restore();
-    const spawn = spawned[spawned.length - 1];
-    expect(spawn.env.PD_RESUME_PROMPT).toBeUndefined();
-    expect(spawn.command).not.toContain('pd-claude-session');
-    expect(spawn.command).toContain('pd-codex-session');
+    const second = makeApi({ codexTurnStatuses: () => { throw new Error('status failed'); } });
+    expect(second.api.restore({ autoContinue: true })).toEqual(['main-1']);
+    expect(spawned.at(-1).env.PD_RESUME_PROMPT).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'failed to read Codex turn statuses, restoring without continuation',
+    );
   });
+
+  it('does not invoke Codex status lookup for a Claude-only restore', () => {
+    const first = makeApi();
+    first.api.create('main-1', { provider: 'claude' });
+    const lookup = vi.fn(() => { throw new Error('should not run'); });
+
+    const second = makeApi({ codexTurnStatuses: lookup });
+    expect(second.api.restore()).toEqual(['main-1']);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'failed to read Codex turn statuses, restoring without continuation',
+    );
+  });
+
+  it.each(['codex', 'codex-chatgpt'])(
+    'warns an interrupted %s turn after an unexpected restart',
+    (provider) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => 'interrupted' });
+      second.api.restore({ autoContinue: false });
+      const spawn = spawned[spawned.length - 1];
+      expect(spawn.env.PD_RESUME_PROMPT).toContain('unexpected shutdown');
+    },
+  );
+
+  it.each([
+    ['codex', 'completed'],
+    ['codex', 'failed'],
+    ['codex', 'unknown'],
+    ['codex-chatgpt', 'completed'],
+    ['codex-chatgpt', 'failed'],
+    ['codex-chatgpt', 'unknown'],
+  ])(
+    'does not nudge a %s turn whose last status is %s',
+    (provider, lastTurnStatus) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+      second.api.restore({ autoContinue: true });
+      expect(spawned[spawned.length - 1].env.PD_RESUME_PROMPT).toBeUndefined();
+    },
+  );
 
   it('hands each provider only its own launcher environment', () => {
     const { api } = makeApi();
