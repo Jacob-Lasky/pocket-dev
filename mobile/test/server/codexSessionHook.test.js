@@ -58,6 +58,7 @@ describe('the managed Codex SessionStart hook', () => {
     expect(runHook({ id: UUID_A, file }).status).toBe(0);
     expect(runHook({ id: UUID_B, file }).status).toBe(0);
     expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_A}\n`);
+    expect(fs.readdirSync(sidDir)).toEqual(['main-1.uuid']);
   });
 
   it('does nothing outside a pocket-dev tab', () => {

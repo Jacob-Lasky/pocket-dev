@@ -43,7 +43,16 @@ process.stdin.on('end', () => {
   try {
     fs.mkdirSync(sidDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, `${event.session_id}\n`, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, resolvedTarget);
+    // The launcher deletes the old binding before a genuinely fresh TUI starts,
+    // so the first SessionStart is the root we must preserve. Later lifecycle
+    // events in the same TUI can carry a non-resumable multi-agent identity.
+    // linkSync publishes the complete temp inode without replacing that root.
+    try {
+      fs.linkSync(tmp, resolvedTarget);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    fs.rmSync(tmp);
   } catch {
     try { fs.rmSync(tmp, { force: true }); } catch {}
     process.exit(1);
