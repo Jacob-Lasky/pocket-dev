@@ -46,6 +46,8 @@ Only for the first deploy that carries the Codex `SessionStart` hook. A Codex ta
 
 Bind immediately before the recreate: if that Codex process exits after binding and before the deploy, its replacement is a different conversation and needs binding again, because the pre-upgrade restart loop cannot update the file. Claude tabs need nothing here — their launcher has always recorded an id. `CLAUDE.md` under "Session restore" has the reasoning.
 
+The helper is also the way to REPAIR a tab that is already bound to the wrong id — a pre-upgrade hook could overwrite a valid root with a later, non-resumable compact id, which shows up as a restored tab coming back blank. It is the only external caller allowed to replace an existing binding (it passes `PD_CODEX_REPLACE_BINDING=1` to the hook writer, because its App Server walk has already verified the root). Ordinary startup, resume and compact events preserve the established root; the official `clear` source replaces it because `/clear` intentionally starts a new conversation. Re-running the helper against a bad tab overwrites the stale id atomically, and running it against a correctly bound tab is harmless.
+
 ## Verifying the deploy
 
 After redeploy:
