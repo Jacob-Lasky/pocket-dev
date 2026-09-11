@@ -53,6 +53,13 @@ describe('the managed Codex SessionStart hook', () => {
     expect(fs.readFileSync(fileB, 'utf8').trim()).toBe(UUID_B);
   });
 
+  it('keeps the first root binding when a later SessionStart reports another id', () => {
+    const file = path.join(sidDir, 'main-1.uuid');
+    expect(runHook({ id: UUID_A, file }).status).toBe(0);
+    expect(runHook({ id: UUID_B, file }).status).toBe(0);
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_A}\n`);
+  });
+
   it('does nothing outside a pocket-dev tab', () => {
     const result = runHook({ file: undefined });
     expect(result.status).toBe(0);
