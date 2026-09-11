@@ -217,9 +217,9 @@ RUN groupadd -g 281 docker || true && \
 # the e2e suite against a pnpm install, which loads those assets over /xterm.
 RUN corepack enable pnpm
 COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-trust-workspace && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace && \
     pnpm install --prod --frozen-lockfile && \
-    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-trust-workspace && \
+    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace && \
     mkdir -p /etc/codex && \
     cp /mobile/codex-requirements.toml /etc/codex/requirements.toml && \
     chown -R claude:users /mobile

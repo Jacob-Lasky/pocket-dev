@@ -61,7 +61,7 @@ describe('pd-codex-session', () => {
     fs.writeFileSync(sidFile, `${UUID_A}\n`);
 
     const calls = runLauncher();
-    expect(calls[0]).toBe(`resume ${UUID_A} --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol`);
+    expect(calls[0]).toBe(`resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A}`);
     expect(calls.length).toBeGreaterThan(1);
     expect(calls[1]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol');
     expect(calls[1]).not.toContain(UUID_A);
@@ -73,9 +73,19 @@ describe('pd-codex-session', () => {
 
     const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: 'continue please' });
     expect(calls[0]).toBe(
-      `resume ${UUID_A} continue please --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol`,
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} continue please`,
     );
     expect(calls[1]).not.toContain('continue please');
+  }, 15000);
+
+  it('keeps a dash-leading restore prompt positional', () => {
+    fs.mkdirSync(path.dirname(sidFile), { recursive: true });
+    fs.writeFileSync(sidFile, `${UUID_A}\n`);
+
+    const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: '--help' });
+    expect(calls[0]).toBe(
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} --help`,
+    );
   }, 15000);
 
   it('does not let two restored tabs converge on one conversation', () => {
@@ -89,9 +99,9 @@ describe('pd-codex-session', () => {
     fs.writeFileSync(argvLog, '');
     const callsB = runLauncher(sidFileB);
 
-    expect(callsA[0]).toContain(`resume ${UUID_A}`);
+    expect(callsA[0]).toContain(`-- ${UUID_A}`);
     expect(callsA[0]).not.toContain(UUID_B);
-    expect(callsB[0]).toContain(`resume ${UUID_B}`);
+    expect(callsB[0]).toContain(`-- ${UUID_B}`);
     expect(callsB[0]).not.toContain(UUID_A);
   }, 20000);
 
