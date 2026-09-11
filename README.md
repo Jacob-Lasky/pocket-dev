@@ -116,7 +116,7 @@ On every reconnect, pocket-dev replays recent terminal bytes and then asks tmux 
 
 Each Claude or Codex tab is also bound to its own stable conversation id, so a restored tab resumes the conversation it was having rather than opening a blank one. If Claude was waiting on you, it comes back and goes on waiting. Typing `/exit` still gives you a fresh conversation — only a respawn resumes.
 
-Claude receives an id chosen by its launcher. Codex reports its id through the supported `SessionStart` hook installed as a managed system hook, and pocket-dev resumes it with an explicit `codex resume SESSION_ID`. Codex tabs still share the normal `CODEX_HOME`, so config, credentials, packages, plugins, and skills remain in one place. The explicit per-tab id is what prevents two restored tabs from selecting the same most-recent conversation.
+Claude receives an id chosen by its launcher. Codex reports its id through the supported `SessionStart` hook installed as a managed system hook, and pocket-dev resumes it with an explicit `codex resume SESSION_ID`. Codex tabs still share the normal `CODEX_HOME`, so config, credentials, packages, plugins, and skills remain in one place. The explicit per-tab id is what prevents two restored tabs from selecting the same most-recent conversation. Only the first id a Codex tab reports is kept, so `/exit` is what gets you a fresh conversation across a restart — running `/clear` without leaving Codex does not change which conversation a restart resumes.
 
 If Claude was mid-task, what happens next depends on **how** the container went down. Codex resumes the conversation but receives no automatic prompt because pocket-dev does not parse Codex's private transcript format:
 
