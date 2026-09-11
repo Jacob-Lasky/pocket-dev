@@ -11,12 +11,12 @@ const UUID_B = '01a08f62-f9f2-7c32-b621-941ca1026065';
 
 let home, sidDir;
 
-function runHook({ id = UUID_A, file, event = 'SessionStart' } = {}) {
+function runHook({ id = UUID_A, file, event = 'SessionStart', source = 'startup' } = {}) {
   const env = spawnEnv({ HOME: home });
   if (file !== undefined) env.PD_CODEX_SID_FILE = file;
   return spawnSync(CODEX_HOOK_PATH, [], {
     env,
-    input: JSON.stringify({ session_id: id, hook_event_name: event }),
+    input: JSON.stringify({ session_id: id, hook_event_name: event, source }),
     encoding: 'utf8',
   });
 }
@@ -36,7 +36,11 @@ function runHookWithStalePidTemp(file) {
 
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(`${file}.${child.pid}.tmp`, 'stale');
-    child.stdin.end(JSON.stringify({ session_id: UUID_A, hook_event_name: 'SessionStart' }));
+    child.stdin.end(JSON.stringify({
+      session_id: UUID_A,
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    }));
   });
 }
 
@@ -72,12 +76,19 @@ describe('the managed Codex SessionStart hook', () => {
     expect(fs.readFileSync(fileB, 'utf8').trim()).toBe(UUID_B);
   });
 
-  it('keeps the first root binding when a later SessionStart reports another id', () => {
+  it('keeps the root binding when a later compact SessionStart reports another id', () => {
     const file = path.join(sidDir, 'main-1.uuid');
     expect(runHook({ id: UUID_A, file }).status).toBe(0);
-    expect(runHook({ id: UUID_B, file }).status).toBe(0);
+    expect(runHook({ id: UUID_B, file, source: 'compact' }).status).toBe(0);
     expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_A}\n`);
     expect(fs.readdirSync(sidDir)).toEqual(['main-1.uuid']);
+  });
+
+  it('atomically rebinds when clear intentionally starts a new conversation', () => {
+    const file = path.join(sidDir, 'main-1.uuid');
+    expect(runHook({ id: UUID_A, file }).status).toBe(0);
+    expect(runHook({ id: UUID_B, file, source: 'clear' }).status).toBe(0);
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${UUID_B}\n`);
   });
 
   it('publishes the root even when a previous container left its PID temp behind', async () => {
