@@ -169,7 +169,11 @@ async function main() {
       PD_CODEX_SID_FILE: sidFile,
       PD_CODEX_REPLACE_BINDING: '1',
     },
-    input: JSON.stringify({ session_id: resumeId, hook_event_name: 'SessionStart' }),
+    input: JSON.stringify({
+      session_id: resumeId,
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    }),
     encoding: 'utf8',
     stdio: ['pipe', 'ignore', 'ignore'],
   });

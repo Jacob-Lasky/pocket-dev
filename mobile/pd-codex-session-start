@@ -7,6 +7,8 @@ const path = require('path');
 const { randomBytes } = require('node:crypto');
 const { SAFE_ID, UUID_RE } = require('./safeId');
 
+const SESSION_START_SOURCES = new Set(['startup', 'resume', 'clear', 'compact']);
+
 const target = process.env.PD_CODEX_SID_FILE;
 
 if (!target) process.exit(0);
@@ -36,7 +38,9 @@ process.stdin.on('end', () => {
   } catch {
     process.exit(1);
   }
-  if (event?.hook_event_name !== 'SessionStart' || !UUID_RE.test(event?.session_id || '')) {
+  if (event?.hook_event_name !== 'SessionStart'
+      || !UUID_RE.test(event?.session_id || '')
+      || !SESSION_START_SOURCES.has(event?.source)) {
     process.exit(1);
   }
 
@@ -44,9 +48,10 @@ process.stdin.on('end', () => {
   try {
     fs.mkdirSync(sidDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, `${event.session_id}\n`, { mode: 0o600, flag: 'wx' });
-    if (process.env.PD_CODEX_REPLACE_BINDING === '1') {
+    if (process.env.PD_CODEX_REPLACE_BINDING === '1' || event.source === 'clear') {
       // The one-time migration helper has already resolved and verified the
-      // root, so it must repair an existing stale binding atomically.
+      // root, while clear intentionally starts a new conversation in-place.
+      // Both must replace the previous binding atomically.
       fs.renameSync(tmp, resolvedTarget);
     } else {
       // The launcher deletes the old binding before a genuinely fresh TUI

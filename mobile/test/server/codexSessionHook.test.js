@@ -109,6 +109,7 @@ describe('the managed Codex SessionStart hook', () => {
   it('rejects invalid hook input and any destination outside the state directory', () => {
     const outside = path.join(home, 'outside.uuid');
     expect(runHook({ id: 'not-a-uuid', file: path.join(sidDir, 'main-1.uuid') }).status).not.toBe(0);
+    expect(runHook({ file: path.join(sidDir, 'main-1.uuid'), source: 'unknown' }).status).not.toBe(0);
     expect(runHook({ file: outside }).status).not.toBe(0);
     expect(runHook({ file: path.join(sidDir, '../escape.uuid') }).status).not.toBe(0);
     expect(runHook({ file: path.join(sidDir, 'bad name.uuid') }).status).not.toBe(0);
