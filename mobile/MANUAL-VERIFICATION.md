@@ -41,6 +41,7 @@ Composer:
 ## Session restore across a restart (needs a real Claude; the e2e fixture runs `cat` and has no conversation to resume)
 - [ ] Open two or three tabs. In one, ask Claude something long-running so it is mid-tool-call; in another, let it finish and sit waiting on you.
 - [ ] `docker restart pocket-dev` without touching the browser. Every tab comes back under the same id, and the page reconnects on its own (no reload, dots go green).
+- [ ] After enough Claude or Codex output to exceed the replay window, reload a phone at the same orientation and width. The current frame remains coherent, with no duplicated banner or interleaved paragraph fragments, and switching to desktop mode is not needed to repair it.
 - [ ] The tab that was mid-work resumes its conversation and picks the work back up on its own, having been asked "continue please" exactly once (it arrives as Claude's first message, not as keystrokes — check the transcript shows one such user turn, not two).
 - [ ] The tab that was waiting on you resumes its conversation and just sits there. Nothing is typed into it.
 - [ ] No tab comes back sitting on "Quick safety check: is this a project you trust?" — pd-trust-workspace clears that at boot. If one does, restore still worked but every tab needs a keypress, so treat it as a regression.
