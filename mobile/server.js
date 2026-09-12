@@ -621,6 +621,14 @@ function createSessionsApi({
       pty: ptyProc,
       replayBuffer: '',
       clients: new Set(),
+      // One PTY has one grid, so one connected browser owns resize authority.
+      // Publishing dimensions keeps every parser coherent, but it does not
+      // stop a passive phone and an active desktop from overwriting each other.
+      // The first grid-capable connection starts as owner. A later connection
+      // must claim explicitly before fitting, because merely reconnecting in a
+      // hidden tab must not steal authority from the browser being used.
+      // Legacy clients can resize only while no grid-capable owner exists.
+      gridOwner: null,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       // The unread axis, server-side so every device agrees.
@@ -1159,9 +1167,10 @@ function createSessionsApi({
       try { ws.close(GONE_CODE, 'session not found'); } catch {}
       return;
     }
-    state.clients.add(ws);
     ws.pdFrames = frames;
     ws.pdGrid = frames && grid;
+    state.clients.add(ws);
+    if (ws.pdGrid && !state.gridOwner) state.gridOwner = ws;
     // Grid comes before replay: replay bytes may contain cursor addressing and
     // wrapping decisions made for the PTY's current dimensions.
     sendGrid(ws, state);
@@ -1181,10 +1190,13 @@ function createSessionsApi({
       if (msg.startsWith('{')) {
         try {
           const parsed = JSON.parse(msg);
-          if (parsed.type === 'resize'
+          if (parsed.type === 'claim-grid') {
+            if (ws.pdGrid) state.gridOwner = ws;
+          } else if (parsed.type === 'resize'
               && Number.isInteger(parsed.cols) && Number.isInteger(parsed.rows)
               && parsed.cols >= 1 && parsed.rows >= 1
-              && parsed.cols <= MAX_GRID_DIMENSION && parsed.rows <= MAX_GRID_DIMENSION) {
+              && parsed.cols <= MAX_GRID_DIMENSION && parsed.rows <= MAX_GRID_DIMENSION
+              && (!state.gridOwner || state.gridOwner === ws)) {
             const newCols = parsed.cols;
             const newRows = parsed.rows;
             if (newCols !== state.cols || newRows !== state.rows) {
@@ -1203,7 +1215,12 @@ function createSessionsApi({
       }
     });
 
-    ws.on('close', () => state.clients.delete(ws));
+    ws.on('close', () => {
+      state.clients.delete(ws);
+      if (state.gridOwner === ws) {
+        state.gridOwner = [...state.clients].reverse().find(client => client.pdGrid) || null;
+      }
+    });
   }
 
   return { create, restore, destroy, get, list, describe, markViewed, noteInput, attachWs };

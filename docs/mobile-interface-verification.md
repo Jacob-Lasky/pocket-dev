@@ -57,6 +57,32 @@ Shared-grid regression evidence recorded 2026-09-12:
   phone and 1100 px desktop attached to one session. Both final screenshots
   stamp the same authoritative grid on visibly different viewports.
 
+Residual rendering follow-up recorded 2026-09-12:
+
+- On broken `13049b0`, 252 output frames reached the browser while only one
+  `term.write` was submitted when xterm's first parser timer was held. Serial
+  submission behind each callback converted xterm's batched stream into one
+  browser-timer turn per frame.
+- Adjacent output is now submitted after one structural barrier, while reset,
+  grid and resize still wait for all prior callbacks. The connected witness
+  passed in Chromium and WebKit without increasing its timeout.
+- A second server witness proved that any connected browser could still mutate
+  the one PTY grid. The first grid-capable socket owns resize authority until a
+  later active foreground client claims before every fit; later connections
+  cannot steal it merely by reconnecting, stale and passive local fits are
+  ignored, owner close transfers authority, and pre-grid clients retain
+  compatibility.
+- The combined browser witness passed three of three cases in Chromium and
+  WebKit. It transfers ownership phone to desktop and back, switches sessions
+  while a claim is queued, exercises two simultaneously focused devices,
+  verifies claim precedes resize, and requires both exact screens to match the
+  shared grid.
+- The complete post-fix suite passed 567 unit and server checks plus 229 browser
+  checks across Chromium, Firefox and WebKit, with 26 expected platform or
+  opt-in artifact skips. The WebKit phone and desktop screenshots both show one
+  exact `128 x 43` current frame with no retained rows. The focused desktop
+  keeps ownership when the passive phone reconnects.
+
 The first CI matrix passed 216 browser tests and exposed one WebKit console
 error: it rejects the `interactive-widget` viewport key. That key was removed;
 the existing visualViewport resize handler remains responsible for keyboard
@@ -66,12 +92,13 @@ Named bug witnesses and mutation evidence:
 
 - `sessionsRestore.test.js` and `multi-client-grid.spec.js`: two clients at
   different viewport sizes previously retained different xterm grids while
-  sharing one resized PTY. The server witness now requires a grid broadcast
-  before the PTY resize and keeps pre-grid framed clients on their understood
-  protocol. The browser witness holds the first of 252 old-grid chunks while a
-  second client resizes, then requires queue order, one coherent repaint, and
-  the same exact screen after reconnect. Bypassing the queue made the phone
-  change from `43 x 33` to `128 x 43` while the old chunk was still held.
+  sharing one resized PTY, and could continue overwriting one another after
+  publication was added. The server witness now requires ownership before a
+  resize, grid broadcast before PTY mutation, transfer on close, and pre-grid
+  compatibility. The browser witness holds xterm's parser timer across more
+  than 250 old-grid chunks while a second client resizes, then requires batched
+  submission, focus-driven ownership in both directions, exact coherent screens,
+  and the same contract after reconnect.
 - `live-selection.spec.js`: ordinary drag failed before the pointer bridge and
   passed after it. Cold review also verified that forcing Alt on Linux causes
   rectangular selection; the implementation uses Shift there and Option on Mac.
