@@ -36,6 +36,8 @@ Composer:
 ## Alt-screen / scroll behavior
 - [ ] Run a real Claude Code session for 5+ minutes including long responses, tool calls, and exits.
 - [ ] Keep the same session open on a phone and desktop at different viewport sizes. Send several long responses, resize each browser in turn, and confirm both clients keep one coherent frame with no duplicated or interleaved rows.
+- [ ] With both still attached, put the phone in the background (switch app, or lock it) and keep working on the desktop. Rotating or waking the phone must NOT snap the desktop to the phone's grid: only the browser you are actually using claims it. Then focus the phone and confirm the grid moves to it, and that the desktop follows rather than keeping its own dimensions. CI can only stub `document.hasFocus`, so real focus across two devices is provable here alone.
+- [ ] Leave a session streaming a long response with the browser in the background for a minute, then come back. The pane must be at the end of the output, not fast-forwarding through a visible backlog — that replay-speed catch-up is the throttled-parser-timer regression, and it looks like a slow terminal rather than an error.
 - [ ] Scroll back through the session (drag in Live): no duplicated chunks, reaches the top of Claude's transcript, returns cleanly to the bottom.
 - [ ] When Claude exits and restarts (the per-session restart loop, `loopCommand` or `pd-claude-session`), prior plain-shell output stays in xterm scrollback (outer alternate-screen-off behavior).
 
