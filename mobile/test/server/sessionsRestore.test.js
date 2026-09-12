@@ -71,11 +71,13 @@ function fakePty() {
 }
 
 function fakeWs(onSend = () => {}) {
+  const handlers = new Map();
   return {
     readyState: 1,
     send(data) { onSend(data); },
-    on() {},
+    on(event, handler) { handlers.set(event, handler); },
     close() {},
+    receive(data) { handlers.get('message')?.(Buffer.from(data)); },
   };
 }
 
@@ -233,6 +235,22 @@ describe('terminal replay', () => {
     api.attachWs(fakeWs(), state.id, { frames: true });
 
     expect(logger.warn).toHaveBeenCalledWith(`[${state.id}] replay refresh failed: tmux unavailable`);
+  });
+
+  it('announces a shared PTY grid to every framed client before resizing it', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true });
+    api.attachWs(second, state.id, { frames: true });
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
   });
 });
 
