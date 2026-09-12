@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { STATUSES, WANTS_USER, TURN_SETTLED, USER_INPUT_TOOLS } from '../../claudeSession.js';
-import { GONE_CODE } from '../../server.js';
+import { GONE_CODE, MAX_GRID_DIMENSION } from '../../server.js';
 import { PROVIDER_IDS, resolveCapabilities, statusTracked } from '../../providers.js';
 import { rowState, wantsUser, STATE_TEXT } from '../../public/js/attention.js';
 
@@ -205,5 +205,16 @@ describe('the "session is gone" close code: server producer vs browser consumer'
     // transport itself and would make a network event look like a removal.
     expect(GONE_CODE).toBeGreaterThanOrEqual(4000);
     expect(GONE_CODE).toBeLessThanOrEqual(4999);
+  });
+});
+
+describe('shared terminal grid: server producer vs browser consumer', () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
+
+  it('uses one upper bound on both sides of the grid protocol', () => {
+    const match = indexHtml.match(/const MAX_GRID_DIMENSION = (\d+);/);
+    expect(match, 'index.html has no grid ceiling to read').toBeTruthy();
+    expect(Number(match[1])).toBe(MAX_GRID_DIMENSION);
+    expect(MAX_GRID_DIMENSION).toBe(1000);
   });
 });

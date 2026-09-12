@@ -71,11 +71,13 @@ function fakePty() {
 }
 
 function fakeWs(onSend = () => {}) {
+  const handlers = new Map();
   return {
     readyState: 1,
     send(data) { onSend(data); },
-    on() {},
+    on(event, handler) { handlers.set(event, handler); },
     close() {},
+    receive(data) { handlers.get('message')?.(Buffer.from(data)); },
   };
 }
 
@@ -201,17 +203,18 @@ describe('roster persistence', () => {
 
 describe('terminal replay', () => {
   it.each([
-    ['framed', true, data => JSON.parse(data).type],
-    ['raw', false, () => 'raw'],
-  ])('follows %s replay bytes with the authoritative current tmux screen', (_label, frames, sentType) => {
+    ['grid-capable framed', { frames: true, grid: true }, data => JSON.parse(data).type, ['grid', 'replay']],
+    ['legacy framed', { frames: true }, data => JSON.parse(data).type, ['replay']],
+    ['raw', { frames: false }, () => 'raw', ['raw']],
+  ])('follows %s replay bytes with the authoritative current tmux screen', (_label, capabilities, sentType, sends) => {
     const events = [];
     const { api } = makeApi({ refreshSession: id => events.push(`refresh:${id}`) });
     const state = api.create();
     spawned[0].proc.emit('context-dependent TUI tail');
 
-    api.attachWs(fakeWs(data => events.push(`send:${sentType(data)}`)), state.id, { frames });
+    api.attachWs(fakeWs(data => events.push(`send:${sentType(data)}`)), state.id, capabilities);
 
-    expect(events).toEqual([`send:${frames ? 'replay' : 'raw'}`, `refresh:${state.id}`]);
+    expect(events).toEqual([...sends.map(type => `send:${type}`), `refresh:${state.id}`]);
   });
 
   it('does not repaint an empty session that had no replay bytes', () => {
@@ -233,6 +236,45 @@ describe('terminal replay', () => {
     api.attachWs(fakeWs(), state.id, { frames: true });
 
     expect(logger.warn).toHaveBeenCalledWith(`[${state.id}] replay refresh failed: tmux unavailable`);
+  });
+
+  it('announces a shared PTY grid to every grid-capable framed client before resizing it', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
+  });
+
+  it.each([
+    ['non-numeric', JSON.stringify({ type: 'resize', cols: 'oops', rows: 'oops' })],
+    ['fractional', JSON.stringify({ type: 'resize', cols: 12.5, rows: 8.5 })],
+    ['zero', JSON.stringify({ type: 'resize', cols: 0, rows: 0 })],
+    ['larger than the protocol ceiling', JSON.stringify({ type: 'resize', cols: 1001, rows: 1001 })],
+    ['malformed JSON', '{"type":"resize"'],
+  ])('rejects a %s resize without poisoning the shared grid', (_label, message) => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    second.receive(message);
+
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([120, 40]);
   });
 });
 
