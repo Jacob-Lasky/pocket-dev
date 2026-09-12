@@ -72,13 +72,18 @@ function fakePty() {
 
 function fakeWs(onSend = () => {}) {
   const handlers = new Map();
-  return {
+  const ws = {
     readyState: 1,
     send(data) { onSend(data); },
     on(event, handler) { handlers.set(event, handler); },
     close() {},
     receive(data) { handlers.get('message')?.(Buffer.from(data)); },
+    disconnect() {
+      ws.readyState = 3;
+      handlers.get('close')?.();
+    },
   };
+  return ws;
 }
 
 let dir, projectsDir, spawned, logger, kills;
@@ -249,9 +254,66 @@ describe('terminal replay', () => {
     api.attachWs(second, state.id, { frames: true, grid: true });
     events.length = 0;
 
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
     second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
 
     expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
+  });
+
+  it('keeps the current grid owner until another client claims explicitly', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:90x30']);
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([90, 30]);
+
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
+    events.length = 0;
+
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([132, 51]);
+  });
+
+  it('hands a closed owner to the newest remaining grid client and keeps legacy resize working', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    const legacy = fakeWs();
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    api.attachWs(legacy, state.id, { frames: true });
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual([]);
+
+    second.disconnect();
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual(['first:grid', 'pty:90x30']);
+    events.length = 0;
+
+    first.disconnect();
+    legacy.receive(JSON.stringify({ type: 'resize', cols: 100, rows: 35 }));
+    expect(events).toEqual(['pty:100x35']);
   });
 
   it.each([

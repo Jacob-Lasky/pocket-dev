@@ -189,7 +189,6 @@ function liveGridPty() {
   const proc = new EventEmitter();
   let cols = 120;
   let rows = 40;
-  let armed = false;
   let streamed = false;
   let currentFrame = liveGridFrame(cols, rows, 'INITIAL GRID FRAME');
 
@@ -204,8 +203,7 @@ function liveGridPty() {
   proc.resize = (newCols, newRows) => {
     cols = newCols;
     rows = newRows;
-    if (!armed) return;
-    armed = false;
+    if (!streamed) return;
     currentFrame = liveGridFrame(cols, rows, 'NEW GRID FRAME');
     // node-pty may emit a TUI repaint synchronously from resize(). The server
     // must have broadcast the new grid before this chunk reaches browsers.
@@ -213,9 +211,12 @@ function liveGridPty() {
   };
   proc.kill = () => {};
   proc.write = data => {
+    if (data.includes('ready')) {
+      proc.emit('data', currentFrame);
+      return;
+    }
     if (streamed || !data.includes('stream')) return;
     streamed = true;
-    armed = true;
     // Model a long streamed turn as many differential chunks. The first chunk
     // is held by the browser test while a second client resizes the shared PTY.
     proc.emit('data', '\x1b[2J\x1b[HOLD-STREAM-BEGIN');

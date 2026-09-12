@@ -541,6 +541,7 @@
     // Duplicated across the JSON boundary by necessity. statusContract.test.js
     // ties this value to the server's protocol ceiling.
     const MAX_GRID_DIMENSION = 1000;
+    const isForegroundBrowser = () => document.visibilityState === 'visible' && document.hasFocus();
 
     const stackEl     = document.getElementById('terminal-stack');
     const connDot     = document.getElementById('conn-dot');
@@ -656,8 +657,16 @@
           });
         });
 
-        this.terminalQueue = Promise.resolve();
-        this.outputReplies = null;
+        // Structural terminal changes are barriers, but adjacent output writes
+        // are submitted together after the same barrier. DO NOT put every
+        // output callback on one Promise chain. xterm already preserves byte
+        // order in its WriteBuffer, and serialising submission would turn its
+        // one batched parser timer into one browser timer per WebSocket frame.
+        // A background browser throttles those timers and can then strand grid,
+        // reset, and repaint barriers behind an arbitrarily long byte backlog.
+        this.terminalBarrier = Promise.resolve();
+        this.terminalWrites = Promise.resolve();
+        this.outputReplyQueue = [];
         // xterm 5.5's public onData mixes keyboard/paste/mouse input with
         // automatic terminal replies. Its internal onUserInput fires directly
         // before onData for human input. Keep this one version-sensitive hook
@@ -669,8 +678,9 @@
           userInput = false;
           // Focus reports originate outside the parser and aren't tagged by
           // xterm as user input. They must not join a terminal reply batch.
-          if (!human && this.outputReplies && data !== '\x1b[I' && data !== '\x1b[O') {
-            this.outputReplies.push(data);
+          const output = this.outputReplyQueue[0];
+          if (!human && output && data !== '\x1b[I' && data !== '\x1b[O') {
+            output.replies.push(data);
           } else this.sendRaw(data);
         });
         this.term.onScroll(() => { if (activeId === this.id) updateScrollBtn(); });
@@ -721,12 +731,51 @@
       // makes later cursor addresses land on the wrong cells, which presents
       // as old rows swallowing the next streamed frame.
       enqueueTerminalOperation(operation) {
-        this.terminalQueue = this.terminalQueue.then(operation).catch(err => {
+        const next = Promise.all([this.terminalBarrier, this.terminalWrites]).then(operation).catch(err => {
           // One failed resize must not leave the promise rejected forever and
           // silently skip every later reset, replay and output frame.
           console.error(`[${this.id}] terminal operation failed`, err);
         });
-        return this.terminalQueue;
+        this.terminalBarrier = next;
+        this.terminalWrites = next;
+        return next;
+      }
+
+      // Submit adjacent writes to xterm immediately after the same structural
+      // barrier. Their callbacks remain individually tracked, so a later grid
+      // or reset still waits for every prior chunk to finish parsing. xterm
+      // invokes write callbacks in byte order, which also advances the reply
+      // capture queue one original frame at a time.
+      enqueueTerminalWrite(data, { ws, reply }) {
+        const barrier = this.terminalBarrier;
+        const write = barrier.then(() => new Promise((resolve, reject) => {
+          if (this.ws !== ws) { resolve(); return; }
+          const output = { replies: [], reply, ws };
+          this.outputReplyQueue.push(output);
+          try {
+            this.term.write(data, () => {
+              const completed = this.outputReplyQueue.shift();
+              if (completed !== output) {
+                const index = this.outputReplyQueue.indexOf(output);
+                if (index >= 0) this.outputReplyQueue.splice(index, 1);
+                console.error(`[${this.id}] terminal reply order changed`);
+              }
+              if (output.reply && output.replies.length && ws.readyState === WebSocket.OPEN) {
+                ws.send(output.replies.join(''));
+              }
+              resolve();
+            });
+          } catch (err) {
+            const index = this.outputReplyQueue.indexOf(output);
+            if (index >= 0) this.outputReplyQueue.splice(index, 1);
+            reject(err);
+          }
+        }));
+        const settled = write.catch(err => {
+          console.error(`[${this.id}] terminal operation failed`, err);
+        });
+        this.terminalWrites = Promise.all([this.terminalWrites, settled]).then(() => undefined);
+        return settled;
       }
 
       // Translate a one-finger vertical drag into scrolling. The listeners are
@@ -892,7 +941,7 @@
             // authoritative repaint and installFollowGuard do the repair.
           });
           this.setStatus('connected');
-          if (activeId === this.id) {
+          if (activeId === this.id && isForegroundBrowser()) {
             this.fitAndResize();
             acquireWakeLock();
           }
@@ -917,26 +966,15 @@
             return;
           } else if (frame?.type === 'replay' || frame?.type === 'output') {
             str = frame.data;
-            // Serialize writes so each automatic reply belongs to exactly one
-            // original output chunk. Human typing bypasses this queue.
-            this.enqueueTerminalOperation(() => new Promise(resolve => {
-              if (this.ws !== ws) { resolve(); return; }
-              const replies = this.outputReplies = [];
-              this.term.write(str, () => {
-                this.outputReplies = null;
-                if (frame.reply && replies.length && ws.readyState === WebSocket.OPEN) {
-                  ws.send(replies.join(''));
-                }
-                resolve();
-              });
-            }));
+            // Keep a reply batch per original frame while allowing xterm to
+            // batch adjacent writes internally. Replay replies are captured
+            // and discarded because historical terminal queries must never be
+            // answered. Human typing bypasses this queue.
+            this.enqueueTerminalWrite(str, { ws, reply: frame.reply === true });
           } else {
             // Compatibility with an older raw-byte server. It still belongs
             // on the same queue as reset, fit and framed output.
-            this.enqueueTerminalOperation(() => new Promise(resolve => {
-              if (this.ws !== ws) { resolve(); return; }
-              this.term.write(str, resolve);
-            }));
+            this.enqueueTerminalWrite(str, { ws, reply: true });
           }
           // Arriving bytes NEVER mark a session unread here.
           //
@@ -997,7 +1035,25 @@
       }
 
       fitAndResize() {
+        // ResizeObserver and viewport events can still run in a hidden tab or
+        // an unfocused desktop window. A passive client must not resize its
+        // local parser unless it is also going to claim and publish that grid;
+        // otherwise a rejected server resize leaves this xterm interpreting
+        // the shared cursor-addressed stream at different dimensions.
+        if (activeId !== this.id || !isForegroundBrowser()) return;
         this.enqueueTerminalOperation(() => {
+          // Foreground state can change while this operation waits for prior
+          // xterm callbacks. Recheck at execution time so a stale queued claim
+          // cannot steal authority after another browser receives focus or the
+          // user switches this browser to a different session.
+          if (activeId !== this.id || !isForegroundBrowser()) return;
+          // Every active foreground fit claims first. Focus is local to each
+          // device, so two browsers can both truthfully report focused; a fit
+          // without a claim could change only this parser while the server
+          // rejects its resize, recreating a split grid.
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'claim-grid' }));
+          }
           this.fitAddon.fit();
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: 'resize', cols: this.term.cols, rows: this.term.rows }));
@@ -1460,7 +1516,16 @@
     // Coming back to a backgrounded tab is exactly when a restart is most
     // likely to have happened without us noticing.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') scheduleResync();
+      if (document.visibilityState === 'visible') {
+        sessions.get(activeId)?.fitAndResize();
+        scheduleResync();
+      }
+    });
+
+    // Two desktop windows can both remain visible. Focus is the unambiguous
+    // signal that this browser is now the active grid authority.
+    window.addEventListener('focus', () => {
+      sessions.get(activeId)?.fitAndResize();
     });
 
     document.addEventListener('keydown', (e) => {
