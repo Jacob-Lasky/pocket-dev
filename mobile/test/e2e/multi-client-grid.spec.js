@@ -137,7 +137,10 @@ test('long old-grid chunks finish before resize, repaint, and reconnect', async 
   expect(await copyText(phonePage)).not.toContain('NEW GRID FRAME');
 
   await phonePage.evaluate(() => window.__oldGridGate.release());
-  await expect.poll(async () => [await grid(phonePage), await grid(desktopPage)])
+  // The held write deliberately leaves 252 chunks ahead of the grid change.
+  // Two-core CI can take longer than Playwright's 5-second polling default to
+  // drain them, and the exact-screen checks below still prove convergence.
+  await expect.poll(async () => [await grid(phonePage), await grid(desktopPage)], { timeout: 45000 })
     .toEqual([desktopFit, desktopFit]);
   await expect.poll(() => copyText(phonePage), { timeout: 45000 }).toContain('NEW GRID FRAME');
   const expectedRows = [
