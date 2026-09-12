@@ -1137,9 +1137,11 @@ function createSessionsApi({
   }
 
   // A session has one PTY grid even when several browsers are attached. Every
-  // framed client must parse the shared byte stream at that same size. Send
-  // the grid before pty.resize(), because the resize can synchronously make
-  // the TUI repaint with cursor addresses that only make sense on the new
+  // grid-capable framed client must parse the shared byte stream at that same
+  // size. Legacy framed clients deliberately stay on the old protocol during
+  // a rolling update, because an unknown JSON frame renders as terminal text.
+  // Send the grid before pty.resize(), because the resize can synchronously
+  // make the TUI repaint with cursor addresses that only make sense on the new
   // grid.
   function sendGrid(ws, state) {
     if (ws.pdGrid && ws.readyState === 1) {

@@ -238,7 +238,7 @@ describe('terminal replay', () => {
     expect(logger.warn).toHaveBeenCalledWith(`[${state.id}] replay refresh failed: tmux unavailable`);
   });
 
-  it('announces a shared PTY grid to every framed client before resizing it', () => {
+  it('announces a shared PTY grid to every grid-capable framed client before resizing it', () => {
     const events = [];
     const { api } = makeApi();
     const state = api.create();
