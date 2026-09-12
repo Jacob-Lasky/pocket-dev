@@ -126,6 +126,7 @@ async function useSessionsApiServer(sessionsApi, use) {
     const url = new URL(req.url, 'http://localhost');
     wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, url.searchParams.get('session'), {
       frames: url.searchParams.get('frames') === '1',
+      grid: url.searchParams.get('grid') === '1',
     }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -177,6 +178,57 @@ function truncatedTuiPty() {
   return proc;
 }
 
+const liveGridFrame = (cols, rows, label) => [
+  `\x1b[2J\x1b[H${label}`,
+  `shared grid ${cols} x ${rows}`,
+  'the newest response owns this whole screen',
+  'no rows from the previous response remain',
+].join('\r\n');
+
+function liveGridPty() {
+  const proc = new EventEmitter();
+  let cols = 120;
+  let rows = 40;
+  let armed = false;
+  let streamed = false;
+  let currentFrame = liveGridFrame(cols, rows, 'INITIAL GRID FRAME');
+
+  proc.onData = handler => {
+    proc.on('data', handler);
+    return { dispose: () => proc.off('data', handler) };
+  };
+  proc.onExit = handler => {
+    proc.on('exit', handler);
+    return { dispose: () => proc.off('exit', handler) };
+  };
+  proc.resize = (newCols, newRows) => {
+    cols = newCols;
+    rows = newRows;
+    if (!armed) return;
+    armed = false;
+    currentFrame = liveGridFrame(cols, rows, 'NEW GRID FRAME');
+    // node-pty may emit a TUI repaint synchronously from resize(). The server
+    // must have broadcast the new grid before this chunk reaches browsers.
+    proc.emit('data', currentFrame);
+  };
+  proc.kill = () => {};
+  proc.write = data => {
+    if (streamed || !data.includes('stream')) return;
+    streamed = true;
+    armed = true;
+    // Model a long streamed turn as many differential chunks. The first chunk
+    // is held by the browser test while a second client resizes the shared PTY.
+    proc.emit('data', '\x1b[2J\x1b[HOLD-STREAM-BEGIN');
+    for (let i = 0; i < 250; i += 1) {
+      proc.emit('data', `\x1b[12;1H\x1b[2Kold response chunk ${String(i).padStart(4, '0')} ${'x'.repeat(180)}`);
+    }
+    currentFrame = liveGridFrame(cols, rows, 'OLD GRID FRAME');
+    proc.emit('data', currentFrame);
+  };
+  proc.repaint = () => proc.emit('data', currentFrame);
+  return proc;
+}
+
 export const test = base.extend({
   // Uses `cat` as a deterministic SHELL_CMD so typing `hello\n` in #cmd-input
   // echoes `hello\n` back into the buffer.
@@ -214,6 +266,22 @@ export const test = base.extend({
       killSession: (_id, done) => done(),
       refreshSession: (_id, done) => {
         pty.emit('data', truncatedTuiBaseFrame + truncatedTuiMarker);
+        done();
+      },
+    });
+    await useSessionsApiServer(sessionsApi, use);
+  },
+
+  // The fake outer PTY reproduces a live multi-client race. One browser is
+  // still parsing many old-grid chunks when another resizes the shared PTY;
+  // resize emits the new-grid repaint synchronously, as node-pty can.
+  pdServerLiveGrid: async ({}, use) => {
+    let pty;
+    const sessionsApi = createSessionsApi({
+      spawnPty: () => (pty = liveGridPty()),
+      killSession: (_id, done) => done(),
+      refreshSession: (_id, done) => {
+        pty.repaint();
         done();
       },
     });

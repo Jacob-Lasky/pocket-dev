@@ -47,6 +47,16 @@ Reconnect regression evidence recorded 2026-09-10:
   with one coherent frame only because the authoritative tmux repaint follows
   the context-dependent suffix.
 
+Shared-grid regression evidence recorded 2026-09-12:
+
+- The pre-fix server witness received only `pty:132x51`; after the change it
+  receives `first:grid`, `second:grid`, then `pty:132x51`.
+- All 565 unit/server tests passed. The matching Playwright 1.61.1 container
+  passed 153 Chromium/Firefox browser tests with 15 expected platform skips.
+- `multi-client-grid.spec.js` passed in Chromium and Firefox with a 390 px
+  phone and 1100 px desktop attached to one session. Both final screenshots
+  stamp the same authoritative grid on visibly different viewports.
+
 The first CI matrix passed 216 browser tests and exposed one WebKit console
 error: it rejects the `interactive-widget` viewport key. That key was removed;
 the existing visualViewport resize handler remains responsible for keyboard
@@ -54,6 +64,14 @@ geometry. The console-error test was kept intact.
 
 Named bug witnesses and mutation evidence:
 
+- `sessionsRestore.test.js` and `multi-client-grid.spec.js`: two clients at
+  different viewport sizes previously retained different xterm grids while
+  sharing one resized PTY. The server witness now requires a grid broadcast
+  before the PTY resize and keeps pre-grid framed clients on their understood
+  protocol. The browser witness holds the first of 252 old-grid chunks while a
+  second client resizes, then requires queue order, one coherent repaint, and
+  the same exact screen after reconnect. Bypassing the queue made the phone
+  change from `43 x 33` to `128 x 43` while the old chunk was still held.
 - `live-selection.spec.js`: ordinary drag failed before the pointer bridge and
   passed after it. Cold review also verified that forcing Alt on Linux causes
   rectangular selection; the implementation uses Shift there and Option on Mac.

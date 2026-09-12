@@ -61,6 +61,10 @@ const MAX_REPLAY_BYTES = 512 * 1024;
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
+// Bounds xterm's visible allocation to one million cells while remaining far
+// above any real browser viewport. This crosses the grid wire protocol, so
+// statusContract.test.js ties it to the browser's copy.
+const MAX_GRID_DIMENSION = 1000;
 
 const TMUX_CONF_PATH = path.join(__dirname, 'tmux.conf');
 const LAUNCHER_PATH       = path.join(__dirname, 'pd-claude-session');
@@ -1132,7 +1136,22 @@ function createSessionsApi({
     return rows;
   }
 
-  function attachWs(ws, sessionId, { frames = false } = {}) {
+  // A session has one PTY grid even when several browsers are attached. Every
+  // framed client must parse the shared byte stream at that same size. Send
+  // the grid before pty.resize(), because the resize can synchronously make
+  // the TUI repaint with cursor addresses that only make sense on the new
+  // grid.
+  function sendGrid(ws, state) {
+    if (ws.pdGrid && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'grid', cols: state.cols, rows: state.rows }));
+    }
+  }
+
+  function broadcastGrid(state) {
+    for (const ws of state.clients) sendGrid(ws, state);
+  }
+
+  function attachWs(ws, sessionId, { frames = false, grid = false } = {}) {
     const state = sessions.get(sessionId);
     if (!state) {
       try { ws.close(GONE_CODE, 'session not found'); } catch {}
@@ -1140,6 +1159,10 @@ function createSessionsApi({
     }
     state.clients.add(ws);
     ws.pdFrames = frames;
+    ws.pdGrid = frames && grid;
+    // Grid comes before replay: replay bytes may contain cursor addressing and
+    // wrapping decisions made for the PTY's current dimensions.
+    sendGrid(ws, state);
     if (state.replayBuffer.length > 0) {
       ws.send(frames ? JSON.stringify({ type: 'replay', data: state.replayBuffer }) : state.replayBuffer);
       // Queue the authoritative screen AFTER the replay suffix. WebSocket
@@ -1156,12 +1179,16 @@ function createSessionsApi({
       if (msg.startsWith('{')) {
         try {
           const parsed = JSON.parse(msg);
-          if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-            const newCols = Math.max(1, parsed.cols);
-            const newRows = Math.max(1, parsed.rows);
+          if (parsed.type === 'resize'
+              && Number.isInteger(parsed.cols) && Number.isInteger(parsed.rows)
+              && parsed.cols >= 1 && parsed.rows >= 1
+              && parsed.cols <= MAX_GRID_DIMENSION && parsed.rows <= MAX_GRID_DIMENSION) {
+            const newCols = parsed.cols;
+            const newRows = parsed.rows;
             if (newCols !== state.cols || newRows !== state.rows) {
               state.cols = newCols;
               state.rows = newRows;
+              broadcastGrid(state);
               state.pty.resize(newCols, newRows);
             }
           }
@@ -1195,6 +1222,7 @@ module.exports = {
   readCodexTurnStatuses,
   readCodexTurnStatus,
   SAFE_ID,
+  MAX_GRID_DIMENSION,
 };
 
 if (require.main === module) {
@@ -1246,7 +1274,10 @@ function startServer() {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId, { frames: url.searchParams.get('frames') === '1' }));
+    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId, {
+      frames: url.searchParams.get('frames') === '1',
+      grid: url.searchParams.get('grid') === '1',
+    }));
   });
 
   server.listen(PORT, '0.0.0.0', () =>

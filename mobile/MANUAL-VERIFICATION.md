@@ -35,6 +35,7 @@ Composer:
 
 ## Alt-screen / scroll behavior
 - [ ] Run a real Claude Code session for 5+ minutes including long responses, tool calls, and exits.
+- [ ] Keep the same session open on a phone and desktop at different viewport sizes. Send several long responses, resize each browser in turn, and confirm both clients keep one coherent frame with no duplicated or interleaved rows.
 - [ ] Scroll back through the session (drag in Live): no duplicated chunks, reaches the top of Claude's transcript, returns cleanly to the bottom.
 - [ ] When Claude exits and restarts (the per-session restart loop, `loopCommand` or `pd-claude-session`), prior plain-shell output stays in xterm scrollback (outer alternate-screen-off behavior).
 

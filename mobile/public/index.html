@@ -538,6 +538,9 @@
     // Shared decoder for binary WS frames (server sends strings, so this is the
     // rare path) — hoisted so we don't allocate one per message.
     const wsDecoder = new TextDecoder();
+    // Duplicated across the JSON boundary by necessity. statusContract.test.js
+    // ties this value to the server's protocol ceiling.
+    const MAX_GRID_DIMENSION = 1000;
 
     const stackEl     = document.getElementById('terminal-stack');
     const connDot     = document.getElementById('conn-dot');
@@ -653,7 +656,7 @@
           });
         });
 
-        this.writeQueue = Promise.resolve();
+        this.terminalQueue = Promise.resolve();
         this.outputReplies = null;
         // xterm 5.5's public onData mixes keyboard/paste/mouse input with
         // automatic terminal replies. Its internal onUserInput fires directly
@@ -711,6 +714,19 @@
       // Send raw bytes straight to the pty (same channel keystrokes use).
       sendRaw(seq) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(seq);
+      }
+
+      // xterm operations are ordered against one another, not only against
+      // output chunks. A grid change or reset racing a differential TUI write
+      // makes later cursor addresses land on the wrong cells, which presents
+      // as old rows swallowing the next streamed frame.
+      enqueueTerminalOperation(operation) {
+        this.terminalQueue = this.terminalQueue.then(operation).catch(err => {
+          // One failed resize must not leave the promise rejected forever and
+          // silently skip every later reset, replay and output frame.
+          console.error(`[${this.id}] terminal operation failed`, err);
+        });
+        return this.terminalQueue;
       }
 
       // Translate a one-finger vertical drag into scrolling. The listeners are
@@ -851,7 +867,7 @@
 
       connect() {
         const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${wsProto}//${location.host}/ws?session=${encodeURIComponent(this.id)}&frames=1`);
+        const ws = new WebSocket(`${wsProto}//${location.host}/ws?session=${encodeURIComponent(this.id)}&frames=1&grid=1`);
         this.ws = ws;
         this.setStatus('connecting');
 
@@ -863,37 +879,47 @@
           // the server's buffer, which is also what makes a post-restart
           // reattach repaint cleanly instead of painting a fresh Claude frame
           // over the pre-restart one.
-          this.term.reset();
+          this.enqueueTerminalOperation(() => {
+            if (this.ws !== ws) return;
+            this.term.reset();
+            // A reattach always starts following, whatever the pane was doing
+            // before the socket dropped. reset() empties the buffer but does
+            // not reliably clear xterm's "the user scrolled up" state.
+            this.follow = true;
+            this.term.scrollToBottom();
+            // This does not repair a stale frame by itself. The empty buffer
+            // makes scrollToBottom() move zero rows; replay followed by the
+            // authoritative repaint and installFollowGuard do the repair.
+          });
           this.setStatus('connected');
           if (activeId === this.id) {
             this.fitAndResize();
             acquireWakeLock();
           }
-          // A reattach always starts following, whatever the pane was doing
-          // before the socket dropped. reset() empties the buffer but does not
-          // reliably clear xterm's "the user scrolled up" state, so this clears
-          // it explicitly and re-arms the follow guard.
-          //
-          // This pair is NOT sufficient on its own, and it is worth being
-          // precise about why, because it was once believed to be the whole
-          // fix. At this point the buffer is empty from reset(), so
-          // scrollToBottom() resolves to scrollLines(0): it clears the flag and
-          // moves nothing. Everything that actually unpins the pane happens
-          // AFTER this, once the replay and the resize repaint land. That is
-          // installFollowGuard's job.
-          this.follow = true;
-          this.term.scrollToBottom();
         };
 
         ws.onmessage = e => {
           let str = typeof e.data === 'string' ? e.data : wsDecoder.decode(e.data);
           let frame;
           try { frame = JSON.parse(str); } catch { /* Legacy server sends raw terminal bytes. */ }
-          if (frame?.type === 'replay' || frame?.type === 'output') {
+          if (frame?.type === 'grid') {
+            this.enqueueTerminalOperation(() => {
+              if (this.ws !== ws) return;
+              if (!Number.isInteger(frame.cols) || !Number.isInteger(frame.rows)
+                  || frame.cols < 1 || frame.rows < 1
+                  || frame.cols > MAX_GRID_DIMENSION || frame.rows > MAX_GRID_DIMENSION) return;
+              const cols = frame.cols;
+              const rows = frame.rows;
+              if (cols !== this.term.cols || rows !== this.term.rows) {
+                this.term.resize(cols, rows);
+              }
+            });
+            return;
+          } else if (frame?.type === 'replay' || frame?.type === 'output') {
             str = frame.data;
             // Serialize writes so each automatic reply belongs to exactly one
             // original output chunk. Human typing bypasses this queue.
-            this.writeQueue = this.writeQueue.then(() => new Promise(resolve => {
+            this.enqueueTerminalOperation(() => new Promise(resolve => {
               if (this.ws !== ws) { resolve(); return; }
               const replies = this.outputReplies = [];
               this.term.write(str, () => {
@@ -904,7 +930,14 @@
                 resolve();
               });
             }));
-          } else this.term.write(str);
+          } else {
+            // Compatibility with an older raw-byte server. It still belongs
+            // on the same queue as reset, fit and framed output.
+            this.enqueueTerminalOperation(() => new Promise(resolve => {
+              if (this.ws !== ws) { resolve(); return; }
+              this.term.write(str, resolve);
+            }));
+          }
           // Arriving bytes NEVER mark a session unread here.
           //
           // This used to optimistically set unread = true for any background
@@ -964,10 +997,12 @@
       }
 
       fitAndResize() {
-        this.fitAddon.fit();
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: 'resize', cols: this.term.cols, rows: this.term.rows }));
-        }
+        this.enqueueTerminalOperation(() => {
+          this.fitAddon.fit();
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'resize', cols: this.term.cols, rows: this.term.rows }));
+          }
+        });
       }
 
       setFontSize(px) {
