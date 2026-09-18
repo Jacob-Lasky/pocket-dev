@@ -9,7 +9,7 @@ Two GitHub Actions workflows run on every push:
 | Workflow | Trigger | Job |
 |---|---|---|
 | `test.yml` | push to `main`, every PR | vitest (unit + server) + Playwright e2e on Chromium + Firefox |
-| `docker-publish.yml` | push to `main`, tags `v*`, manual dispatch, weekly `cron: '0 6 * * 1'` | builds `linux/amd64` + `linux/arm64`, pushes `ghcr.io/jacob-lasky/pocket-dev:latest` (plus PR / branch / version tags) |
+| `docker-publish.yml` | push to `main`, tags `v*`, manual dispatch, weekly `cron: '0 6 * * 1'` | builds `linux/amd64`, pushes `ghcr.io/jacob-lasky/pocket-dev:latest` (plus PR / branch / version tags) |
 
 `test.yml` blocks merge on failure. `docker-publish.yml` only runs against `main` and tags — PRs build but don't push.
 
@@ -21,7 +21,7 @@ It publishes `latest` and **does not deploy**. Taking a new image on Tower means
 
 1. Branch off `main`, commit, push, open PR.
 2. Wait for `test.yml` green. Iterate until it is.
-3. Merge to `main` — squash-merge is fine. `docker-publish.yml` fires on the merge commit, builds the multi-arch image, pushes to GHCR. Typical end-to-end: ~5 minutes.
+3. Merge to `main` — squash-merge is fine. `docker-publish.yml` fires on the merge commit, builds the amd64 image, pushes to GHCR. Typical end-to-end: ~5 minutes.
 
 ## Deploying on Tower
 
