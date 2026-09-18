@@ -15,7 +15,7 @@ Two GitHub Actions workflows run on every push:
 
 **The weekly run exists to move the UNPINNED tools** (`claude` via install.sh, `codex` via `npm -g`, `gh` via apt stable), which otherwise only advance when someone merges something. It passes `no-cache` for the `schedule` event only: a layer's cache key comes from the Dockerfile instruction, not from what npm would resolve today, so a cached scheduled build would ship the same versions as last week. Push and PR builds keep the cache, which matters because this image compiles node-pty natively.
 
-It publishes `latest` and **does not deploy**. Taking a new image on Tower means recreating the container, which ends every tmux session, so the pickup is deliberately manual — or, for codex specifically, the `pocket-dev-codex-update` Tower user script, which reinstalls it as root inside the running container without touching the sessions. `CLAUDE.md` under "Codex, the second model in the container" has the reasoning.
+It publishes `latest` and **does not deploy**. Taking a new image on Tower means recreating the container, which ends every tmux session, so the pickup is deliberately manual — or, for codex's image fallback specifically, the `pocket-dev-codex-update` Tower user script, which reinstalls it as root inside the running container without touching the sessions (the standalone install in `~/bin`, which is what a tab actually runs, updates itself at runtime and needs neither). `CLAUDE.md` under "Codex, the second model in the container" has the reasoning.
 
 ## Shipping a change
 
