@@ -13,6 +13,7 @@ import { archivedNotice as archived } from '../fixtures/rc-notices.js';
 // exercised without a real tmux or a real Claude.
 
 const UUID = '6d7657b2-2e36-4a45-a083-4c300969650d';
+const UUID_2 = '7e8768c3-3f47-4b56-b194-5d411a7a761e';
 
 // Every knob server.js reads at module level. A test asking for one of these
 // must see ONLY the one it asked for.
@@ -70,12 +71,19 @@ function fakePty() {
 }
 
 function fakeWs(onSend = () => {}) {
-  return {
+  const handlers = new Map();
+  const ws = {
     readyState: 1,
     send(data) { onSend(data); },
-    on() {},
+    on(event, handler) { handlers.set(event, handler); },
     close() {},
+    receive(data) { handlers.get('message')?.(Buffer.from(data)); },
+    disconnect() {
+      ws.readyState = 3;
+      handlers.get('close')?.();
+    },
   };
+  return ws;
 }
 
 let dir, projectsDir, spawned, logger, kills;
@@ -93,7 +101,11 @@ function fakeKill() {
   return (id, cb) => { kills.push(id); cb(null); };
 }
 
-function makeApi({ refreshSession = () => {} } = {}) {
+function makeApi({
+  refreshSession = () => {},
+  codexTurnStatus = () => 'unknown',
+  codexTurnStatuses = (threadIds) => threadIds.map(codexTurnStatus),
+} = {}) {
   const store = createSessionStore({ dir, logger });
   const api = createSessionsApi({
     killSession: fakeKill(),
@@ -101,6 +113,7 @@ function makeApi({ refreshSession = () => {} } = {}) {
     store,
     projectsDir,
     logger,
+    codexTurnStatuses,
     spawnPty: (opts) => {
       const proc = fakePty();
       spawned.push({ ...opts, proc });
@@ -195,17 +208,18 @@ describe('roster persistence', () => {
 
 describe('terminal replay', () => {
   it.each([
-    ['framed', true, data => JSON.parse(data).type],
-    ['raw', false, () => 'raw'],
-  ])('follows %s replay bytes with the authoritative current tmux screen', (_label, frames, sentType) => {
+    ['grid-capable framed', { frames: true, grid: true }, data => JSON.parse(data).type, ['grid', 'replay']],
+    ['legacy framed', { frames: true }, data => JSON.parse(data).type, ['replay']],
+    ['raw', { frames: false }, () => 'raw', ['raw']],
+  ])('follows %s replay bytes with the authoritative current tmux screen', (_label, capabilities, sentType, sends) => {
     const events = [];
     const { api } = makeApi({ refreshSession: id => events.push(`refresh:${id}`) });
     const state = api.create();
     spawned[0].proc.emit('context-dependent TUI tail');
 
-    api.attachWs(fakeWs(data => events.push(`send:${sentType(data)}`)), state.id, { frames });
+    api.attachWs(fakeWs(data => events.push(`send:${sentType(data)}`)), state.id, capabilities);
 
-    expect(events).toEqual([`send:${frames ? 'replay' : 'raw'}`, `refresh:${state.id}`]);
+    expect(events).toEqual([...sends.map(type => `send:${type}`), `refresh:${state.id}`]);
   });
 
   it('does not repaint an empty session that had no replay bytes', () => {
@@ -227,6 +241,102 @@ describe('terminal replay', () => {
     api.attachWs(fakeWs(), state.id, { frames: true });
 
     expect(logger.warn).toHaveBeenCalledWith(`[${state.id}] replay refresh failed: tmux unavailable`);
+  });
+
+  it('announces a shared PTY grid to every grid-capable framed client before resizing it', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
+  });
+
+  it('keeps the current grid owner until another client claims explicitly', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:90x30']);
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([90, 30]);
+
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
+    second.receive(JSON.stringify({ type: 'resize', cols: 132, rows: 51 }));
+    expect(events).toEqual(['first:grid', 'second:grid', 'pty:132x51']);
+    events.length = 0;
+
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([132, 51]);
+  });
+
+  it('hands a closed owner to the newest remaining grid client and keeps legacy resize working', () => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    const legacy = fakeWs();
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    api.attachWs(legacy, state.id, { frames: true });
+    events.length = 0;
+
+    second.receive(JSON.stringify({ type: 'claim-grid' }));
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual([]);
+
+    second.disconnect();
+    first.receive(JSON.stringify({ type: 'resize', cols: 90, rows: 30 }));
+    expect(events).toEqual(['first:grid', 'pty:90x30']);
+    events.length = 0;
+
+    first.disconnect();
+    legacy.receive(JSON.stringify({ type: 'resize', cols: 100, rows: 35 }));
+    expect(events).toEqual(['pty:100x35']);
+  });
+
+  it.each([
+    ['non-numeric', JSON.stringify({ type: 'resize', cols: 'oops', rows: 'oops' })],
+    ['fractional', JSON.stringify({ type: 'resize', cols: 12.5, rows: 8.5 })],
+    ['zero', JSON.stringify({ type: 'resize', cols: 0, rows: 0 })],
+    ['larger than the protocol ceiling', JSON.stringify({ type: 'resize', cols: 1001, rows: 1001 })],
+    ['malformed JSON', '{"type":"resize"'],
+  ])('rejects a %s resize without poisoning the shared grid', (_label, message) => {
+    const events = [];
+    const { api } = makeApi();
+    const state = api.create();
+    spawned[0].proc.resize = (cols, rows) => events.push(`pty:${cols}x${rows}`);
+    const first = fakeWs(data => events.push(`first:${JSON.parse(data).type}`));
+    const second = fakeWs(data => events.push(`second:${JSON.parse(data).type}`));
+    api.attachWs(first, state.id, { frames: true, grid: true });
+    api.attachWs(second, state.id, { frames: true, grid: true });
+    events.length = 0;
+
+    second.receive(message);
+
+    expect(events).toEqual([]);
+    expect([state.cols, state.rows]).toEqual([120, 40]);
   });
 });
 
@@ -847,23 +957,114 @@ describe('the provider a session runs', () => {
     expect(said).toContain('Codex (Deepgram) session with no transcript status');
   });
 
-  it('does not hand a Claude continuation prompt to Codex', () => {
-    // Codex can resume, but pocket-dev cannot classify its transcript as busy.
-    // The Claude continuation prompt must therefore stay off its command line.
+  it.each([
+    ['codex', 'interrupted'],
+    ['codex', 'inProgress'],
+    ['codex-chatgpt', 'interrupted'],
+    ['codex-chatgpt', 'inProgress'],
+  ])(
+    'continues a %s turn whose last status is %s after a clean restart',
+    (provider, lastTurnStatus) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+      second.api.restore({ autoContinue: true });
+      const spawn = spawned[spawned.length - 1];
+      expect(spawn.env.PD_RESUME_PROMPT).toBe('continue please');
+      expect(spawn.command).not.toContain('pd-claude-session');
+      expect(spawn.command).toContain('pd-codex-session');
+    },
+  );
+
+  it('reads every restored Codex status through one bounded batch', () => {
+    const first = makeApi();
+    const dg = first.api.create('main-1', { provider: 'codex' });
+    const chatgpt = first.api.create('main-2', { provider: 'codex-chatgpt' });
+    const store = createSessionStore({ dir, logger });
+    fs.mkdirSync(path.dirname(store.sidPath(dg.id)), { recursive: true });
+    fs.writeFileSync(store.sidPath(dg.id), UUID);
+    fs.writeFileSync(store.sidPath(chatgpt.id), UUID_2);
+    const lookup = vi.fn(() => ['interrupted', 'completed']);
+
+    const second = makeApi({ codexTurnStatuses: lookup });
+    second.api.restore({ autoContinue: true });
+
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledWith([UUID, UUID_2]);
+    const restoredSpawns = spawned.slice(-2);
+    expect(restoredSpawns[0].env.PD_RESUME_PROMPT).toBe('continue please');
+    expect(restoredSpawns[1].env.PD_RESUME_PROMPT).toBeUndefined();
+  });
+
+  it('restores every Codex tab without a prompt when the batch lookup throws', () => {
     const first = makeApi();
     const state = first.api.create('main-1', { provider: 'codex' });
     const store = createSessionStore({ dir, logger });
     fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
     fs.writeFileSync(store.sidPath(state.id), UUID);
-    writeTranscript(UUID, BUSY);
 
-    const second = makeApi();
-    second.api.restore();
-    const spawn = spawned[spawned.length - 1];
-    expect(spawn.env.PD_RESUME_PROMPT).toBeUndefined();
-    expect(spawn.command).not.toContain('pd-claude-session');
-    expect(spawn.command).toContain('pd-codex-session');
+    const second = makeApi({ codexTurnStatuses: () => { throw new Error('status failed'); } });
+    expect(second.api.restore({ autoContinue: true })).toEqual(['main-1']);
+    expect(spawned.at(-1).env.PD_RESUME_PROMPT).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'failed to read Codex turn statuses, restoring without continuation',
+    );
   });
+
+  it('does not invoke Codex status lookup for a Claude-only restore', () => {
+    const first = makeApi();
+    first.api.create('main-1', { provider: 'claude' });
+    const lookup = vi.fn(() => { throw new Error('should not run'); });
+
+    const second = makeApi({ codexTurnStatuses: lookup });
+    expect(second.api.restore()).toEqual(['main-1']);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'failed to read Codex turn statuses, restoring without continuation',
+    );
+  });
+
+  it.each(['codex', 'codex-chatgpt'])(
+    'warns an interrupted %s turn after an unexpected restart',
+    (provider) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => 'interrupted' });
+      second.api.restore({ autoContinue: false });
+      const spawn = spawned[spawned.length - 1];
+      expect(spawn.env.PD_RESUME_PROMPT).toContain('unexpected shutdown');
+    },
+  );
+
+  it.each([
+    ['codex', 'completed'],
+    ['codex', 'failed'],
+    ['codex', 'unknown'],
+    ['codex-chatgpt', 'completed'],
+    ['codex-chatgpt', 'failed'],
+    ['codex-chatgpt', 'unknown'],
+  ])(
+    'does not nudge a %s turn whose last status is %s',
+    (provider, lastTurnStatus) => {
+      const first = makeApi();
+      const state = first.api.create('main-1', { provider });
+      const store = createSessionStore({ dir, logger });
+      fs.mkdirSync(path.dirname(store.sidPath(state.id)), { recursive: true });
+      fs.writeFileSync(store.sidPath(state.id), UUID);
+
+      const second = makeApi({ codexTurnStatus: () => lastTurnStatus });
+      second.api.restore({ autoContinue: true });
+      expect(spawned[spawned.length - 1].env.PD_RESUME_PROMPT).toBeUndefined();
+    },
+  );
 
   it('hands each provider only its own launcher environment', () => {
     const { api } = makeApi();

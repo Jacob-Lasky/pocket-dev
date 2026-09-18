@@ -5,9 +5,9 @@ const os       = require('os');
 const path     = require('path');
 const pty      = require('node-pty');
 const { setTimeout: delay } = require('node:timers/promises');
-const { exec, execFile } = require('child_process');
+const { exec, execFile, spawnSync } = require('child_process');
 const { WebSocketServer } = require('ws');
-const { SAFE_ID } = require('./safeId');
+const { SAFE_ID, UUID_RE } = require('./safeId');
 const { createSessionStore, nullSessionStore } = require('./sessionStore');
 const {
   PROVIDER_IDS, DEFAULT_PROVIDER, isProvider, labelFor,
@@ -15,6 +15,7 @@ const {
   commandFor: providerCommand, resolveCapabilities, statusTracked,
 } = require('./providers');
 const claudeSession = require('./claudeSession');
+const { normalizeCodexTurnStatus, classifyCodexTurnStatus } = require('./codexTurnStatus');
 
 const SESSION_BASE = process.env.TMUX_SESSION || 'main';
 // Remote Control is on by default, so a session can also be driven from
@@ -60,20 +61,25 @@ const MAX_REPLAY_BYTES = 512 * 1024;
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
+// Bounds xterm's visible allocation to one million cells while remaining far
+// above any real browser viewport. This crosses the grid wire protocol, so
+// statusContract.test.js ties it to the browser's copy.
+const MAX_GRID_DIMENSION = 1000;
 
 const TMUX_CONF_PATH = path.join(__dirname, 'tmux.conf');
 const LAUNCHER_PATH       = path.join(__dirname, 'pd-claude-session');
 const CODEX_LAUNCHER_PATH = path.join(__dirname, 'pd-codex-session');
 const CODEX_HOOK_PATH     = path.join(__dirname, 'pd-codex-session-start');
+const CODEX_STATUS_PATH   = path.join(__dirname, 'pd-codex-thread-status');
 
 // One HOME authority. It is also the cwd every session is spawned with, which
 // matters for resume: `claude --resume` only finds conversations belonging to
 // the current directory's project.
 const HOME = process.env.HOME || os.homedir();
 
-// Where the session roster and the per-session Claude uuids live. Bind-mount
-// this to survive a container RECREATE (an image update); without a mount it
-// still survives a restart, which is the common case.
+// Where the session roster and per-session provider conversation ids live.
+// Bind-mount this to survive a container RECREATE (an image update); without a
+// mount it still survives a restart, which is the common case.
 const STATE_DIR    = process.env.PD_STATE_DIR || path.join(HOME, '.pocket-dev');
 const PROJECTS_DIR = process.env.PD_CLAUDE_PROJECTS_DIR || path.join(HOME, '.claude', 'projects');
 
@@ -83,9 +89,9 @@ const PROJECTS_DIR = process.env.PD_CLAUDE_PROJECTS_DIR || path.join(HOME, '.cla
 // PD_RESUME=0 turns it off outright.
 //
 // This is now only the KNOB. Whether a given session gets resume is a
-// per-provider question, because the transcript resume reads is Claude's: see
-// CAPABILITIES below, which folds this knob together with SHELL_CMD and the
-// provider's own declaration.
+// per-provider question. Claude uses its transcript and Codex uses one
+// restore-time App Server status read; CAPABILITIES folds this knob together
+// with SHELL_CMD and the provider's own declaration.
 const RESUME_KNOB = process.env.PD_RESUME !== '0';
 
 // Give a NEW tab's Remote Control session a real name once Claude has worked
@@ -211,13 +217,13 @@ const AUTO_NAME_QUIET_MS = 10_000;
 // What a restored session that was mid-turn is asked, so it picks the work back
 // up instead of sitting there waiting for a human who thinks it is still going.
 //
-// It is handed to Claude as a command-line prompt (`claude --resume <id> "..."`)
-// rather than typed into the terminal. Measured 2026-07-24 against the real
-// thing: typing it in loses the race, because a resuming Claude paints, pauses
-// while it initialises, then repaints, and anything typed into that gap is
-// swallowed with no error. There is no ready signal to wait for, so DO NOT
-// "fix" this by writing to the pty after a settle timeout. The command-line
-// prompt is queued by Claude itself and survives even the workspace-trust gate.
+// Each launcher passes it as the provider's resume prompt rather than typing it
+// into the terminal. Measured 2026-07-24 against real Claude: typing it in loses
+// the race, because a resuming TUI paints, pauses while it initialises, then
+// repaints, and anything typed into that gap is swallowed with no error. There
+// is no ready signal to wait for, so DO NOT "fix" this by writing to the pty
+// after a settle timeout. A command-line prompt is owned by the provider and
+// survives even the workspace-trust gate.
 const RESUME_PROMPT = process.env.PD_RESUME_NUDGE ?? 'continue please';
 
 // The same situation, except the container DIED rather than being restarted on
@@ -325,6 +331,35 @@ function spawnTmuxPty({ session, command, env, cols, rows }) {
     cwd:  HOME,
     env:  { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   });
+}
+
+// Classify persisted Codex turns in one bounded helper invocation without
+// loading or resuming their threads. Ids travel on stdin, never argv, and both
+// stderr and malformed output fail closed so diagnostics cannot leak them.
+function readCodexTurnStatuses(threadIds) {
+  if (!Array.isArray(threadIds) || !threadIds.length) return [];
+  const statuses = threadIds.map(() => 'unknown');
+  const valid = threadIds
+    .map((threadId, index) => ({ threadId, index }))
+    .filter(({ threadId }) => UUID_RE.test(threadId || ''));
+  if (!valid.length) return statuses;
+  const result = spawnSync(CODEX_STATUS_PATH, [], {
+    input: `${valid.map(({ threadId }) => threadId).join('\n')}\n`,
+    encoding: 'utf8',
+    timeout: 12_000,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  if (result.status !== 0 || result.error) return statuses;
+  const resolved = result.stdout.trimEnd().split('\n');
+  if (resolved.length !== valid.length) return statuses;
+  valid.forEach(({ index }, resolvedIndex) => {
+    statuses[index] = normalizeCodexTurnStatus(resolved[resolvedIndex]);
+  });
+  return statuses;
+}
+
+function readCodexTurnStatus(threadId) {
+  return readCodexTurnStatuses([threadId])[0] || 'unknown';
 }
 
 function createApp({ sessionsApi, shellOverride = Boolean(SHELL_CMD) } = {}) {
@@ -498,6 +533,7 @@ function createSessionsApi({
   refreshSession = refreshTmuxSession,
   projectsDir    = PROJECTS_DIR,
   logger         = console,
+  codexTurnStatuses = readCodexTurnStatuses,
 } = {}) {
   const sessions = new Map();
   let nextSeq = 1;
@@ -527,8 +563,8 @@ function createSessionsApi({
     }
   }
 
-  // `resumePrompt` is passed through to pd-claude-session, which appends it to
-  // `claude --resume` when (and only when) it actually resumes a conversation.
+  // `resumePrompt` is passed through to the provider launcher, which appends it
+  // only when its first iteration actually resumes a conversation.
   function create(id = nextSessionId(), { resumePrompt = null, provider = DEFAULT_PROVIDER } = {}) {
     if (sessions.has(id)) return sessions.get(id);
     // Before anything else, and it THROWS rather than defaulting: the provider
@@ -562,6 +598,7 @@ function createSessionsApi({
       } else if (sessionKind === 'codex' && sidFile) {
         env.PD_CODEX_SID_FILE = sidFile;
         if (store.dir) env.PD_STATE_DIR = store.dir;
+        if (resumePrompt) env.PD_RESUME_PROMPT = resumePrompt;
       }
     }
 
@@ -584,6 +621,14 @@ function createSessionsApi({
       pty: ptyProc,
       replayBuffer: '',
       clients: new Set(),
+      // One PTY has one grid, so one connected browser owns resize authority.
+      // Publishing dimensions keeps every parser coherent, but it does not
+      // stop a passive phone and an active desktop from overwriting each other.
+      // The first grid-capable connection starts as owner. A later connection
+      // must claim explicitly before fitting, because merely reconnecting in a
+      // hidden tab must not steal authority from the browser being used.
+      // Legacy clients can resize only while no grid-capable owner exists.
+      gridOwner: null,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       // The unread axis, server-side so every device agrees.
@@ -725,11 +770,12 @@ function createSessionsApi({
   // restarted, container did not) the `new-session -A` in buildTmuxSpawnArgs
   // reattaches to it with its scrollback and running Claude intact; if the
   // container restarted, tmux is gone and the same call creates it fresh, with
-  // pd-claude-session resuming the conversation from its recorded uuid. Either
+  // the provider launcher resuming the conversation from its recorded uuid. Either
   // way the tabs come back under the SAME ids, so a browser left open across
   // the outage reconnects into them instead of showing dead panes.
   function restore({ autoContinue = false } = {}) {
     const restored = [];
+    const records = [];
     for (const entry of store.load()) {
       try {
         // Read the uuid BEFORE spawning: the launcher may mint a new one, and
@@ -740,9 +786,33 @@ function createSessionsApi({
         // Two independent reads could disagree if a turn landed between them,
         // and the session would then look newly-finished the first time anyone
         // opened the list after a restart.
-        const caps   = capsFor(entry.provider);
+        const caps = capsFor(entry.provider);
         const uuid = caps.resumeConversation ? store.readSid(entry.id) : null;
-        const status = caps.transcriptStatus ? metaFor(uuid).status : 'unknown';
+        records.push({ entry, caps, uuid, codexStatus: 'unknown' });
+      } catch (err) {
+        logger.warn(`failed to restore session ${entry.id}: ${err.message}`);
+      }
+    }
+
+    const codexRecords = records.filter(({ entry, uuid }) => (
+      sessionKindFor(entry.provider) === 'codex' && uuid
+    ));
+    if (codexRecords.length) {
+      try {
+        const statuses = codexTurnStatuses(codexRecords.map(({ uuid }) => uuid));
+        codexRecords.forEach((record, index) => {
+          record.codexStatus = normalizeCodexTurnStatus(statuses?.[index]);
+        });
+      } catch {
+        logger.warn('failed to read Codex turn statuses, restoring without continuation');
+      }
+    }
+
+    for (const { entry, caps, uuid, codexStatus } of records) {
+      try {
+        const status = caps.transcriptStatus
+          ? metaFor(uuid).status
+          : classifyCodexTurnStatus(codexStatus);
 
         // 'unknown' never prompts — see claudeSession.js. Only a conversation
         // we can positively see was mid-turn gets asked to carry on; one that
@@ -763,15 +833,17 @@ function createSessionsApi({
         // the artifact for restore (see the lines below) and silence there
         // reads as a session that was skipped rather than one that has no
         // conversation to have an opinion about.
-        if (!caps.transcriptStatus) {
-          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} session with no transcript status, restored as-is`);
-        } else if (status !== 'busy') {
+        if (status === 'busy' && autoContinue) {
+          logger.log(`session ${entry.id}: was mid-turn, resuming with "${resumePrompt}"`);
+        } else if (status === 'busy') {
+          logger.log(`session ${entry.id}: was mid-turn but the last shutdown was NOT clean, resuming without continuing the work`);
+        } else if (caps.transcriptStatus) {
           if (status === 'idle')   logger.log(`session ${entry.id}: was waiting on the user, restored as-is`);
           if (status === 'asking') logger.log(`session ${entry.id}: was waiting for an answer to a question, restored as-is`);
-        } else if (autoContinue) {
-          logger.log(`session ${entry.id}: was mid-turn, resuming with "${resumePrompt}"`);
+        } else if (status === 'settled') {
+          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} last turn ${codexStatus}, restored as-is`);
         } else {
-          logger.log(`session ${entry.id}: was mid-turn but the last shutdown was NOT clean, resuming without continuing the work`);
+          logger.log(`session ${entry.id}: ${labelFor(entry.provider)} session with no transcript status, restored as-is`);
         }
       } catch (err) {
         // One bad session must not stop the server from coming up.
@@ -1072,14 +1144,36 @@ function createSessionsApi({
     return rows;
   }
 
-  function attachWs(ws, sessionId, { frames = false } = {}) {
+  // A session has one PTY grid even when several browsers are attached. Every
+  // grid-capable framed client must parse the shared byte stream at that same
+  // size. Legacy framed clients deliberately stay on the old protocol during
+  // a rolling update, because an unknown JSON frame renders as terminal text.
+  // Send the grid before pty.resize(), because the resize can synchronously
+  // make the TUI repaint with cursor addresses that only make sense on the new
+  // grid.
+  function sendGrid(ws, state) {
+    if (ws.pdGrid && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'grid', cols: state.cols, rows: state.rows }));
+    }
+  }
+
+  function broadcastGrid(state) {
+    for (const ws of state.clients) sendGrid(ws, state);
+  }
+
+  function attachWs(ws, sessionId, { frames = false, grid = false } = {}) {
     const state = sessions.get(sessionId);
     if (!state) {
       try { ws.close(GONE_CODE, 'session not found'); } catch {}
       return;
     }
-    state.clients.add(ws);
     ws.pdFrames = frames;
+    ws.pdGrid = frames && grid;
+    state.clients.add(ws);
+    if (ws.pdGrid && !state.gridOwner) state.gridOwner = ws;
+    // Grid comes before replay: replay bytes may contain cursor addressing and
+    // wrapping decisions made for the PTY's current dimensions.
+    sendGrid(ws, state);
     if (state.replayBuffer.length > 0) {
       ws.send(frames ? JSON.stringify({ type: 'replay', data: state.replayBuffer }) : state.replayBuffer);
       // Queue the authoritative screen AFTER the replay suffix. WebSocket
@@ -1096,12 +1190,19 @@ function createSessionsApi({
       if (msg.startsWith('{')) {
         try {
           const parsed = JSON.parse(msg);
-          if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-            const newCols = Math.max(1, parsed.cols);
-            const newRows = Math.max(1, parsed.rows);
+          if (parsed.type === 'claim-grid') {
+            if (ws.pdGrid) state.gridOwner = ws;
+          } else if (parsed.type === 'resize'
+              && Number.isInteger(parsed.cols) && Number.isInteger(parsed.rows)
+              && parsed.cols >= 1 && parsed.rows >= 1
+              && parsed.cols <= MAX_GRID_DIMENSION && parsed.rows <= MAX_GRID_DIMENSION
+              && (!state.gridOwner || state.gridOwner === ws)) {
+            const newCols = parsed.cols;
+            const newRows = parsed.rows;
             if (newCols !== state.cols || newRows !== state.rows) {
               state.cols = newCols;
               state.rows = newRows;
+              broadcastGrid(state);
               state.pty.resize(newCols, newRows);
             }
           }
@@ -1114,7 +1215,12 @@ function createSessionsApi({
       }
     });
 
-    ws.on('close', () => state.clients.delete(ws));
+    ws.on('close', () => {
+      state.clients.delete(ws);
+      if (state.gridOwner === ws) {
+        state.gridOwner = [...state.clients].reverse().find(client => client.pdGrid) || null;
+      }
+    });
   }
 
   return { create, restore, destroy, get, list, describe, markViewed, noteInput, attachWs };
@@ -1131,7 +1237,11 @@ module.exports = {
   LAUNCHER_PATH,
   CODEX_LAUNCHER_PATH,
   CODEX_HOOK_PATH,
+  CODEX_STATUS_PATH,
+  readCodexTurnStatuses,
+  readCodexTurnStatus,
   SAFE_ID,
+  MAX_GRID_DIMENSION,
 };
 
 if (require.main === module) {
@@ -1183,7 +1293,10 @@ function startServer() {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId, { frames: url.searchParams.get('frames') === '1' }));
+    wss.handleUpgrade(req, socket, head, ws => sessionsApi.attachWs(ws, sessionId, {
+      frames: url.searchParams.get('frames') === '1',
+      grid: url.searchParams.get('grid') === '1',
+    }));
   });
 
   server.listen(PORT, '0.0.0.0', () =>

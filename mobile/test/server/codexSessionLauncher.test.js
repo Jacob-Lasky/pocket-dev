@@ -12,12 +12,13 @@ const RUN_SECONDS = '2.5s';
 
 let home, stubDir, argvLog, sidFile;
 
-function runLauncher(file = sidFile) {
+function runLauncher(file = sidFile, extraEnv = {}) {
   const env = spawnEnv({
     HOME: home,
     PATH: `${stubDir}:${process.env.PATH}`,
     PD_ARGV_LOG: argvLog,
     PD_CODEX_SID_FILE: file,
+    ...extraEnv,
   });
 
   spawnSync('timeout', [
@@ -60,10 +61,31 @@ describe('pd-codex-session', () => {
     fs.writeFileSync(sidFile, `${UUID_A}\n`);
 
     const calls = runLauncher();
-    expect(calls[0]).toBe(`resume ${UUID_A} --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol`);
+    expect(calls[0]).toBe(`resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A}`);
     expect(calls.length).toBeGreaterThan(1);
     expect(calls[1]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol');
     expect(calls[1]).not.toContain(UUID_A);
+  }, 15000);
+
+  it('passes a restore prompt to the resumed Codex turn only', () => {
+    fs.mkdirSync(path.dirname(sidFile), { recursive: true });
+    fs.writeFileSync(sidFile, `${UUID_A}\n`);
+
+    const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: 'continue please' });
+    expect(calls[0]).toBe(
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} continue please`,
+    );
+    expect(calls[1]).not.toContain('continue please');
+  }, 15000);
+
+  it('keeps a dash-leading restore prompt positional', () => {
+    fs.mkdirSync(path.dirname(sidFile), { recursive: true });
+    fs.writeFileSync(sidFile, `${UUID_A}\n`);
+
+    const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: '--help' });
+    expect(calls[0]).toBe(
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} --help`,
+    );
   }, 15000);
 
   it('does not let two restored tabs converge on one conversation', () => {
@@ -77,9 +99,9 @@ describe('pd-codex-session', () => {
     fs.writeFileSync(argvLog, '');
     const callsB = runLauncher(sidFileB);
 
-    expect(callsA[0]).toContain(`resume ${UUID_A}`);
+    expect(callsA[0]).toContain(`-- ${UUID_A}`);
     expect(callsA[0]).not.toContain(UUID_B);
-    expect(callsB[0]).toContain(`resume ${UUID_B}`);
+    expect(callsB[0]).toContain(`-- ${UUID_B}`);
     expect(callsB[0]).not.toContain(UUID_A);
   }, 20000);
 

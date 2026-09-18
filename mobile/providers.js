@@ -193,10 +193,11 @@ const PROVIDERS = new Map([
     command: 'codex-dg --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
     remoteControlArgs: null,
     // Resume is supported through Codex's SessionStart hook and explicit
-    // `codex resume SESSION_ID`. The other capabilities stay off because they
-    // read Claude's transcript format, which Codex does not write. Do not infer
-    // them from Codex's legacy rollout files. Codex ships a migration away from
-    // that format, so it is not a stable integration boundary.
+    // `codex resume SESSION_ID`. The user-facing transcript capabilities stay
+    // off because they need continuous metadata that Codex does not expose to
+    // this terminal session. Restore separately reads one supported persisted
+    // turn status through App Server. Do not infer either from Codex's legacy
+    // rollout files, which are not a stable integration boundary.
     capabilities: CODEX_CAPABILITIES,
   }],
 

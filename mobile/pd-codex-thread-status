@@ -1,0 +1,61 @@
+#!/usr/bin/env node
+// Read persisted Codex turn statuses without resuming or loading their threads.
+// Thread ids enter only through stdin and no diagnostic channel is exposed.
+const fs = require('node:fs');
+const { withCodexAppServer } = require('./codexAppServer');
+const { normalizeCodexTurnStatus } = require('./codexTurnStatus');
+const { UUID_RE } = require('./safeId');
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+function timeoutMs() {
+  const candidate = Number.parseInt(process.env.PD_CODEX_STATUS_TIMEOUT_MS, 10);
+  return Number.isInteger(candidate) && candidate >= 10 && candidate <= 60_000
+    ? candidate
+    : DEFAULT_TIMEOUT_MS;
+}
+
+async function readStatuses(threadIds) {
+  return withCodexAppServer({
+    clientInfo: {
+      name: 'pocket-dev-codex-turn-status',
+      title: 'pocket-dev Codex turn status',
+      version: '1',
+    },
+    timeoutMs: timeoutMs(),
+  }, (request) => Promise.all(threadIds.map(async (threadId) => {
+    try {
+      const result = await request('thread/turns/list', {
+        threadId,
+        limit: 1,
+        sortDirection: 'desc',
+        itemsView: 'notLoaded',
+      });
+      if (!Array.isArray(result?.data) || result.data.length > 1) return 'unknown';
+      return normalizeCodexTurnStatus(result.data[0]?.status);
+    } catch {
+      // One unreadable thread must not hide usable statuses for the other tabs.
+      return 'unknown';
+    }
+  })));
+}
+
+async function main() {
+  let statuses = [];
+  try {
+    const threadIds = fs.readFileSync(0, 'utf8').split(/\s+/).filter(Boolean);
+    statuses = threadIds.map(() => 'unknown');
+    const valid = threadIds
+      .map((threadId, index) => ({ threadId, index }))
+      .filter(({ threadId }) => UUID_RE.test(threadId));
+    if (valid.length) {
+      const resolved = await readStatuses(valid.map(({ threadId }) => threadId));
+      valid.forEach(({ index }, resolvedIndex) => {
+        statuses[index] = normalizeCodexTurnStatus(resolved[resolvedIndex]);
+      });
+    }
+  } catch {}
+  if (statuses.length) process.stdout.write(`${statuses.join('\n')}\n`);
+}
+
+void main();
