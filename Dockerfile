@@ -101,10 +101,10 @@ RUN mkdir -p /etc/apt/keyrings \
 #
 # npm -g into /usr/local, NOT into $HOME. The home is a bind mount that ships
 # EMPTY (see the relocation block near the end of this file), so anything
-# image-owned written under /home/claude is masked at runtime. Do NOT "fix" that
-# by installing into ~/bin instead: that prefix is for CLIs a SESSION installs
-# for itself, it sits EARLIER on PATH than /usr/local/bin, and a stale copy left
-# there would permanently shadow the image's own and never update again.
+# image-owned written under /home/claude is masked at runtime. entrypoint.sh
+# separately installs the managed standalone release that Remote Control needs;
+# its ~/bin launcher is persistent and intentionally wins on PATH. Do not put
+# this image fallback there, where it would become a second writer.
 #
 # Deliberately UNPINNED, the same call already made for `claude` (install.sh)
 # and `gh` (apt stable), so the tool tracks upstream instead of freezing at
@@ -120,15 +120,14 @@ RUN mkdir -p /etc/apt/keyrings \
 # Dockerfile makes this a cache HIT and the version does not move. Observed:
 # the running container sat on 0.153.0 while upstream was 0.153.4.
 #
-# Two things now make the claim true, and BOTH are needed:
+# Two things keep the image fallback current:
 #   1. A weekly `schedule:` build in docker-publish.yml that passes
 #      `no-cache: true` for that event only, so this layer actually re-resolves.
 #   2. `pocket-dev-codex-update`, a Tower user script that runs
-#      `npm install -g` as root INSIDE the running container, because codex has
-#      no self-update of its own and a recreate would end the tmux sessions.
-# Claude needs neither: install.sh puts it in a uid-99-writable prefix with its
-# own updater, so it self-updates at runtime. Codex cannot, since this npm -g
-# lands in root-owned /usr/local while the container runs as uid 99.
+#      `npm install -g` as root INSIDE the running container, because this
+#      fallback is root-owned and a recreate would end the tmux sessions.
+# The active standalone Codex release is uid-99-owned and self-updates
+# independently; the npm route remains the first-boot fallback.
 #
 # Roughly 300 MB, nearly all of it two Rust binaries (258 MB codex, 50 MB
 # codex-code-mode-host; measured on 0.147.0). npm resolves only the linux-x64

@@ -115,6 +115,12 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
+  # This is the identity of the persistent standalone install, not merely an
+  # argument to its first bootstrap. Export it so Codex's in-process updater
+  # uses the same launcher directory instead of defaulting to the image-owned
+  # ~/.local/bin and misclassifying the existing ~/bin launcher as a conflict.
+  export CODEX_INSTALL_DIR="$HOME/bin"
+
   # Codex removes its arg0 helper directories with their .lock files still
   # open. shfs FUSE keeps an unlinked open file as .fuse_hidden*, so rmdir
   # fails with ENOTEMPTY and each startup leaves more stale directories.
@@ -172,9 +178,9 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # against an IP address.
   CODEX_STANDALONE="$HOME/.codex/packages/standalone/current/bin/codex"
   if [ "${PD_CODEX_RC:-1}" != "0" ] && [ ! -x "$CODEX_STANDALONE" ]; then
-    # The installer, not curl, must receive the destination. pipefail keeps a
-    # failed download from looking like a successful empty shell script.
-    if (set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | CODEX_INSTALL_DIR="$HOME/bin" sh >/dev/null 2>&1); then
+    # The installer inherits the exported persistent destination. pipefail
+    # keeps a failed download from looking like a successful empty shell script.
+    if (set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | sh >/dev/null 2>&1); then
       echo "pocket-dev: installed the standalone codex (remote control needs it)" >&2
     else
       echo "pocket-dev: standalone codex install failed; remote control unavailable," >&2
