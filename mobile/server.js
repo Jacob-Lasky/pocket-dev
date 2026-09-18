@@ -242,16 +242,16 @@ const CRASH_PROMPT = process.env.PD_CRASH_NUDGE ?? (
 
 // Variables a session needs that may not be in the tmux SERVER's environment.
 //
-// LAVISH_AXI_HOST is resolved at boot by entrypoint.sh, so it is in this
-// process's environment and in a tmux server this process started. It is NOT in
-// one that was already running, and by the comment in buildTmuxSpawnArgs that is
-// the environment `new-session` actually inherits: a `docker exec tmux` before
-// the first web session is enough to produce a tmux server without it, after
-// which every session binds Lavish to loopback and its published port refuses
-// connections. Forwarding by PREFIX rather than by a list of names so that a
-// second runtime-resolved Lavish variable cannot reintroduce this by being
-// forgotten.
+// LAVISH_AXI_HOST and CODEX_INSTALL_DIR are resolved at boot by entrypoint.sh,
+// so they are in this process's environment and in a tmux server this process
+// started. They are NOT in one that was already running, and by the comment in
+// buildTmuxSpawnArgs that is the environment `new-session` actually inherits: a
+// `docker exec tmux` before the first web session is enough to produce a tmux
+// server without them. Forwarding Lavish by PREFIX keeps a second
+// runtime-resolved variable from being forgotten. The Codex installer directory
+// is one exact identity and must not broaden into unrelated CODEX secrets.
 const SESSION_ENV_PREFIX = 'LAVISH_';
+const SESSION_ENV_KEYS = new Set(['PATH', 'CODEX_INSTALL_DIR']);
 
 function sessionEnvForwards(source = process.env) {
   const out = {};
@@ -259,7 +259,7 @@ function sessionEnvForwards(source = process.env) {
     // Resolve the same harness binaries as the launching server, even when a
     // different process started tmux first. Otherwise a test stub PATH (or an
     // updated installed tool) is silently replaced by tmux's stale PATH.
-    if ((key === 'PATH' || key.startsWith(SESSION_ENV_PREFIX)) && value !== undefined) out[key] = value;
+    if ((SESSION_ENV_KEYS.has(key) || key.startsWith(SESSION_ENV_PREFIX)) && value !== undefined) out[key] = value;
   }
   return out;
 }

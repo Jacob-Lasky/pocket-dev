@@ -39,8 +39,8 @@ function buildSkeleton() {
   fs.writeFileSync(path.join(skel, '.config/fish/config.fish'), '# fish\n');
 }
 
-function run(env = {}) {
-  return spawnSync('bash', [SCRIPT, 'true'], {
+function run(env = {}, args = ['true']) {
+  return spawnSync('bash', [SCRIPT, ...args], {
     env: spawnEnv({
       HOME: home,
       PD_SKEL_DIR: skel,
@@ -160,6 +160,12 @@ describe('entrypoint.sh seeding, executed', () => {
     expect(run().status).toBe(0);
     expect(fs.realpathSync(tmp)).toBe(path.join(cache, '.codex-tmp'));
     expect(fs.statSync(tmp).mode & 0o777).toBe(0o700);
+  });
+
+  it('exports the persistent Codex installer destination to child processes', () => {
+    const res = run({}, ['bash', '-c', 'printf %s "$CODEX_INSTALL_DIR"']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe(path.join(home, 'bin'));
   });
 
   it('passes the persistent launcher directory to the standalone installer', () => {

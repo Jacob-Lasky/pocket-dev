@@ -8,6 +8,15 @@ describe('buildTmuxSpawnArgs', () => {
     expect(i).toBeGreaterThan(0);
     expect(args[i - 1]).toBe('-e');
   });
+
+  it('forwards the persistent Codex installer destination past a stale tmux server', () => {
+    const args = buildTmuxSpawnArgs('test', 'codex', {
+      envSource: { CODEX_INSTALL_DIR: '/home/claude/bin' },
+    });
+    const i = args.indexOf('CODEX_INSTALL_DIR=/home/claude/bin');
+    expect(i).toBeGreaterThan(0);
+    expect(args[i - 1]).toBe('-e');
+  });
   it('returns args that load mobile/tmux.conf via -f', () => {
     const args = buildTmuxSpawnArgs('main', "echo hi");
     const fIdx = args.indexOf('-f');

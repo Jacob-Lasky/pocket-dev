@@ -141,7 +141,7 @@ describe('the command line a provider selects', () => {
     // CLAUDE.md's rule is about a `codex` WRAPPER ON PATH, because
     // --dangerously-bypass-approvals-and-sandbox OUTRANKS an explicit
     // `-s read-only`. This registry shadows nothing on PATH, so /second-opinion
-    // still resolves /usr/local/bin/codex and keeps its sandbox. What must stay
+    // still resolves the managed launcher and keeps its sandbox. What must stay
     // true is that the bypass is confined to the interactive session command and
     // never paired with a sandbox flag that it would silently overrule.
     expect(commandFor('codex')).not.toContain('-s read-only');

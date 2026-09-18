@@ -136,10 +136,10 @@ const PROVIDERS = new Map([
     // explicit `-s read-only` and would hand every /second-opinion consult write
     // access to the tree it is reviewing while the consult still asked for
     // read-only. This is a command line pocket-dev builds for one interactive
-    // session; it shadows nothing on PATH, so `codex exec -s read-only` from
-    // inside a session resolves to /usr/local/bin/codex exactly as before and
-    // the consult keeps its sandbox. The constraint that comment protects is
-    // therefore satisfied, which is the only reason this is allowed to differ.
+    // session; it shadows nothing on PATH, so a later `codex exec -s read-only`
+    // resolves the managed launcher normally and the consult keeps its sandbox.
+    // The constraint that comment protects is therefore satisfied, which is the
+    // only reason this is allowed to differ.
     //
     // What it buys: parity with the Claude tab, which already runs
     // --dangerously-skip-permissions. A tab that stops for an approval on every
