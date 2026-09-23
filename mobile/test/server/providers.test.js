@@ -91,15 +91,17 @@ describe('the command line a provider selects', () => {
     expect(commandFor('claude', { remoteControl: false })).toContain('claude --dangerously-skip-permissions');
   });
 
-  it('PINS the model to the newest Sol rather than inheriting the account default', () => {
+  it('pins Codex DG to GPT-6 Sol through the Deepgram API route', () => {
     // The tab must run the tier the owner asked for, and inheriting does not
     // give it. Measured 2026-09-08: the account default is `gpt-6-astra`, which
     // is the Fable-tier model (confirmed by Jake), while the standing
     // preference is Sol, the Opus-tier one. Those are different rungs, so
     // "no -m tracks latest" was true and still produced the wrong model.
     //
-    // 5.6 is the newest Sol that EXISTS: `gpt-6-sol` returns the same 400 as a
-    // deliberately bogus model id, so there is no gpt-6 Sol to move up to.
+    // Rechecked 2026-09-23 with the Deepgram API profile and a bogus model
+    // control: gpt-6-sol completed, while the bogus id failed. The profile
+    // sets high reasoning effort; codex-dg refuses config overrides because
+    // they can redirect billing.
     //
     // An earlier version of this suite asserted the OPPOSITE -- that no -m is
     // passed -- justified by "it would fight the model seeded into
@@ -110,13 +112,12 @@ describe('the command line a provider selects', () => {
     // any -m string without validating it, so `-m sol` prints a plausible
     // banner and is not a model. The must-fail-control recipe is in
     // ~/.claude/skills/second-opinion/SKILL.md <model_choice>.
-    // The wrapper and the pin are ONE decision: Sol exists on the Deepgram API
-    // account and does NOT exist on the ChatGPT seat, so pinning it is only
-    // correct while the command routes through codex-dg. Asserting both here is
-    // what stops someone "simplifying" the wrapper away and leaving a pin that
-    // 400s every tab, which is exactly what happened once.
+    // The wrapper and the pin are one decision: the live probe established
+    // Sol availability on the Deepgram API account. It did not establish
+    // availability on the separate ChatGPT seat. Asserting both here stops a
+    // route change from silently moving the tab onto another account.
     expect(commandFor('codex')).toMatch(/^codex-dg\b/);
-    expect(commandFor('codex')).toContain('-m gpt-5.6-sol');
+    expect(commandFor('codex')).toContain('-m gpt-6-sol');
   });
 
   it('offers a ChatGPT-authenticated Codex command for account apps', () => {

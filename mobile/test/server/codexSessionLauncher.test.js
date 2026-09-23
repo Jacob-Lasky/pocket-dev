@@ -23,7 +23,7 @@ function runLauncher(file = sidFile, extraEnv = {}) {
 
   spawnSync('timeout', [
     RUN_SECONDS, CODEX_LAUNCHER_PATH,
-    'codex-dg', '--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-5.6-sol',
+    'codex-dg', '--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-6-sol',
   ], { env, encoding: 'utf8' });
 
   return fs.readFileSync(argvLog, 'utf8').trim().split('\n').filter(Boolean);
@@ -52,7 +52,7 @@ describe('pd-codex-session', () => {
 
   it('starts fresh when the tab has no recorded session id', () => {
     const calls = runLauncher();
-    expect(calls[0]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol');
+    expect(calls[0]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-6-sol');
     expect(calls[0]).not.toContain('resume');
   }, 15000);
 
@@ -61,9 +61,9 @@ describe('pd-codex-session', () => {
     fs.writeFileSync(sidFile, `${UUID_A}\n`);
 
     const calls = runLauncher();
-    expect(calls[0]).toBe(`resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A}`);
+    expect(calls[0]).toBe(`resume --dangerously-bypass-approvals-and-sandbox -m gpt-6-sol -- ${UUID_A}`);
     expect(calls.length).toBeGreaterThan(1);
-    expect(calls[1]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol');
+    expect(calls[1]).toBe('--dangerously-bypass-approvals-and-sandbox -m gpt-6-sol');
     expect(calls[1]).not.toContain(UUID_A);
   }, 15000);
 
@@ -73,7 +73,7 @@ describe('pd-codex-session', () => {
 
     const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: 'continue please' });
     expect(calls[0]).toBe(
-      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} continue please`,
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-6-sol -- ${UUID_A} continue please`,
     );
     expect(calls[1]).not.toContain('continue please');
   }, 15000);
@@ -84,7 +84,7 @@ describe('pd-codex-session', () => {
 
     const calls = runLauncher(sidFile, { PD_RESUME_PROMPT: '--help' });
     expect(calls[0]).toBe(
-      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -- ${UUID_A} --help`,
+      `resume --dangerously-bypass-approvals-and-sandbox -m gpt-6-sol -- ${UUID_A} --help`,
     );
   }, 15000);
 
