@@ -158,20 +158,13 @@ const PROVIDERS = new Map([
     // which sets model_provider). Bare `codex` uses the ChatGPT OAuth seat
     // instead, which is a different account and a different bill.
     //
-    // IT ALSO DECIDES WHICH MODELS EXIST, and that is not obvious. Model
-    // availability is per-ACCOUNT, measured with a bogus id as the control:
-    //
-    //   on the ChatGPT seat   sol 400 "not supported"   astra 400   terra OK (default)
-    //   on the Deepgram API   sol OK                    astra OK    terra OK
-    //   bogus id, both paths  400 / "does not exist"  (so the control is live)
-    //
-    // So `-m gpt-5.6-sol` is only correct BECAUSE this line runs through
-    // codex-dg. An earlier version pinned Sol on bare `codex` and 400d every
-    // tab within the hour, on a seat that has no Sol. The pin and the wrapper
-    // are ONE decision: change either and re-run the probe in
-    // ~/.claude/skills/second-opinion/SKILL.md <model_choice> before believing
-    // the result. A candidate returning the same error as a bogus id does not
-    // exist on that account.
+    // Model availability depends on the account. On 2026-09-23, a real
+    // Deepgram API request to gpt-6-sol completed while a deliberately bogus
+    // model id failed. Keep the Sol pin paired with codex-dg; an earlier pin
+    // on bare codex failed on the ChatGPT account. Re-run the control in
+    // ~/.claude/skills/second-opinion/SKILL.md <model_choice> before changing
+    // either half. The Deepgram profile sets high reasoning effort, and this
+    // command must not override that profile with a shared base setting.
     //
     // codex-dg REFUSES -c/--config/-p/--profile (exit 2) because those outrank
     // the profile and would silently move billing back. It passes everything
@@ -190,7 +183,7 @@ const PROVIDERS = new Map([
     // adding it here would stop the tab starting at all. The interactive trust
     // gate is answerable in the TUI, which is the right place for a tab a human
     // is sitting in.
-    command: 'codex-dg --dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol',
+    command: 'codex-dg --dangerously-bypass-approvals-and-sandbox -m gpt-6-sol',
     remoteControlArgs: null,
     // Resume is supported through Codex's SessionStart hook and explicit
     // `codex resume SESSION_ID`. The user-facing transcript capabilities stay
