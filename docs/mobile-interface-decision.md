@@ -70,3 +70,5 @@ replay boundary to prevent old handshakes becoming prompt text.
 That protocol uses one documented xterm 5.5 internal input-provenance hook,
 covered by browser tests. A chat migration would additionally require retaining
 the old launch path and verifying conversation recovery.
+
+<!-- probe: docs-bot live verification of the claude-opus-5-5 pin (PR #86). -->
