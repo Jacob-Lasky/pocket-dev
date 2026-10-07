@@ -79,19 +79,26 @@ describe('renderTerminalText (buffer walk → plain text)', () => {
 });
 
 describe('selectedTerminalText', () => {
-  it('removes the TUI margin after a drag starts on the first line of text', async () => {
+  it('joins selected rows with one space after a drag starts inside the first row', async () => {
     const term = await makeTerm(40);
     await write(term, '    first line\r\n    second line\r\n      nested line');
     term.select(4, 0, 2 * term.cols + 13);
     expect(term.getSelection()).toBe('first line\n    second line\n      nested line');
-    expect(selectedTerminalText(term)).toBe('first line\nsecond line\n  nested line');
+    expect(selectedTerminalText(term)).toBe('first line second line nested line');
   });
 
-  it('preserves spacing inside a line and blank lines', async () => {
+  it('preserves spacing inside rows while omitting blank rows', async () => {
     const term = await makeTerm(40);
     await write(term, '    a  b\r\n\r\n      c  d');
     term.selectLines(0, 2);
-    expect(selectedTerminalText(term)).toBe('a  b\n\n  c  d');
+    expect(selectedTerminalText(term)).toBe('a  b c  d');
+  });
+
+  it('keeps words continuous across soft-wrapped rows', async () => {
+    const term = await makeTerm(10);
+    await write(term, 'abcdefghijklmnop');
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe('abcdefghijklmnop');
   });
 
   it('leaves rectangular selection columns aligned', async () => {
@@ -131,17 +138,17 @@ describe('real Claude frame (closes the cat/alt-screen test gap)', () => {
 });
 
 describe('cleanCopyText', () => {
-  it('removes a shared visual margin while keeping relative indentation', () => {
+  it('joins rows as prose without terminal indentation', () => {
     expect(cleanCopyText('    first line\n    second line\n      nested line'))
-      .toBe('first line\nsecond line\n  nested line');
+      .toBe('first line second line nested line');
   });
 
-  it('strips CRs and trailing whitespace per line', () => {
-    expect(cleanCopyText('a   \r\nb\t\r\n')).toBe('a\nb');
+  it('joins CRLF rows and removes edge whitespace', () => {
+    expect(cleanCopyText('a   \r\nb\t\r\n')).toBe('a b');
   });
 
-  it('collapses runs of blank lines to a single blank', () => {
-    expect(cleanCopyText('a\n\n\n\nb')).toBe('a\n\nb');
+  it('omits blank rows rather than pasting paragraph breaks', () => {
+    expect(cleanCopyText('a\n\n\n\nb')).toBe('a b');
   });
 
   it('drops leading and trailing blank lines', () => {
@@ -150,5 +157,6 @@ describe('cleanCopyText', () => {
 
   it('preserves internal spacing', () => {
     expect(cleanCopyText('a   b   c')).toBe('a   b   c');
+    expect(cleanCopyText('a\tb\n  c\td')).toBe('a\tb c\td');
   });
 });

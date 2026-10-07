@@ -126,7 +126,7 @@ test('xterm programmatic selection auto-copies via onSelectionChange', async ({ 
     .toContain('drag-select-marker');
 });
 
-test('multiline selection copies text without the shared terminal margin', async ({ pdServer, page }) => {
+test('multiline selection copies as one line across every copy path', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
   await page.bringToFront();
@@ -135,7 +135,7 @@ test('multiline selection copies text without the shared terminal margin', async
   )));
   await page.evaluate(() => window.term.select(4, 0, 2 * window.term.cols + 13));
 
-  const expected = 'first line\nsecond line\n  nested line';
+  const expected = 'first line second line nested line';
   await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
   await page.evaluate(() => navigator.clipboard.writeText('native-copy-sentinel'));
   const nativeCopy = await page.evaluate(() => {
@@ -146,7 +146,20 @@ test('multiline selection copies text without the shared terminal margin', async
   await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
   await page.click('#copy-btn');
   await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
-  await page.screenshot({ path: path.resolve('test-artifacts/copy-clean-selection.png') });
+  await page.locator('#cmd-input').fill(await readClipboard(page));
+  await expect(page.locator('#cmd-input')).toHaveValue(expected);
+  await page.screenshot({ path: path.resolve('test-artifacts/copy-single-line.png') });
+});
+
+test('Copy button joins visible terminal rows when nothing is selected', async ({ pdServer, page }) => {
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await page.bringToFront();
+  await page.evaluate(() => new Promise(done => window.term.write(
+    '\x1b[2J\x1b[H    first line\r\n\r\n      second  line', done,
+  )));
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe('first line second  line');
 });
 
 test('Alt drag keeps rectangular selection columns aligned when copied', async ({ pdServer, page }) => {

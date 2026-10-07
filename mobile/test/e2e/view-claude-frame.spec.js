@@ -80,6 +80,6 @@ test('Copy grabs the visible window as clean text (chromium clipboard)', async (
   expect(clip).toContain('Quick safety check: Is this a project you created');
   expect(clip).not.toContain('\x1b');
   expect(clip).not.toMatch(/\[\d+G/);
-  // No runs of 3+ blank lines (cleanCopyText collapses them).
-  expect(clip).not.toMatch(/\n\n\n/);
+  // Terminal row breaks do not become Slack paste breaks.
+  expect(clip).not.toContain('\n');
 });
