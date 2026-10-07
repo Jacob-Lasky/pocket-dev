@@ -1,4 +1,5 @@
 import { test, expect, gotoTest, waitForConnection, sendAndWaitForEcho } from './fixtures.js';
+import path from 'node:path';
 
 // Playwright doesn't expose clipboard-read / clipboard-write permissions in
 // Firefox (they're chromium-only). Run the entire clipboard E2E suite under
@@ -123,6 +124,54 @@ test('xterm programmatic selection auto-copies via onSelectionChange', async ({ 
   await page.evaluate(() => window.term.selectAll());
   await expect.poll(() => readClipboard(page), { timeout: 8000 })
     .toContain('drag-select-marker');
+});
+
+test('multiline selection copies text without the shared terminal margin', async ({ pdServer, page }) => {
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await page.bringToFront();
+  await page.evaluate(() => new Promise(done => window.term.write(
+    '\x1b[2J\x1b[H    first line\r\n    second line\r\n      nested line', done,
+  )));
+  await page.evaluate(() => window.term.select(4, 0, 2 * window.term.cols + 13));
+
+  const expected = 'first line\nsecond line\n  nested line';
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
+  await page.evaluate(() => navigator.clipboard.writeText('native-copy-sentinel'));
+  const nativeCopy = await page.evaluate(() => {
+    window.term.focus();
+    return document.execCommand('copy');
+  });
+  expect(nativeCopy).toBe(true);
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(expected);
+  await page.screenshot({ path: path.resolve('test-artifacts/copy-clean-selection.png') });
+});
+
+test('Alt drag keeps rectangular selection columns aligned when copied', async ({ pdServer, page }) => {
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await page.bringToFront();
+  await page.evaluate(() => new Promise(done => window.term.write(
+    '\x1b[2J\x1b[H    alpha\r\n    bravo', done,
+  )));
+  const grid = await page.evaluate(() => {
+    const rect = document.querySelector('.terminal-pane.active .xterm-screen').getBoundingClientRect();
+    return { x: rect.x, y: rect.y, cellWidth: rect.width / window.term.cols,
+      cellHeight: rect.height / window.term.rows };
+  });
+  await page.keyboard.down('Alt');
+  await page.mouse.move(grid.x + 2.5 * grid.cellWidth, grid.y + .5 * grid.cellHeight);
+  await page.mouse.down();
+  await page.mouse.move(grid.x + 9.5 * grid.cellWidth, grid.y + 1.5 * grid.cellHeight, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  const raw = await page.evaluate(() => window.term.getSelection());
+  expect(raw).toMatch(/^  alpha\n  bravo$/);
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(raw);
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(raw);
 });
 
 test('HTTP fallback path: when navigator.clipboard rejects, execCommand runs', async ({ pdServer, page }) => {
