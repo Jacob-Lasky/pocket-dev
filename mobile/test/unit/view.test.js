@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Terminal } from '@xterm/xterm';
-import { renderTerminalText, cleanCopyText } from '../../public/js/view.js';
+import { renderTerminalText, cleanCopyText, selectedTerminalText } from '../../public/js/view.js';
 
 // ── Buffer walk: the actual bug fixes ───────────────────────────────────────
 // These run a REAL xterm under the test DOM so we exercise the parsed buffer,
@@ -75,6 +75,30 @@ describe('renderTerminalText (buffer walk → plain text)', () => {
     expect(text).toContain('line-9');
     expect(text).not.toContain('line-10');
     expect(text).not.toContain('line-19');
+  });
+});
+
+describe('selectedTerminalText', () => {
+  it('removes the TUI margin after a drag starts on the first line of text', async () => {
+    const term = await makeTerm(40);
+    await write(term, '    first line\r\n    second line\r\n      nested line');
+    term.select(4, 0, 2 * term.cols + 13);
+    expect(term.getSelection()).toBe('first line\n    second line\n      nested line');
+    expect(selectedTerminalText(term)).toBe('first line\nsecond line\n  nested line');
+  });
+
+  it('preserves spacing inside a line and blank lines', async () => {
+    const term = await makeTerm(40);
+    await write(term, '    a  b\r\n\r\n      c  d');
+    term.selectLines(0, 2);
+    expect(selectedTerminalText(term)).toBe('a  b\n\n  c  d');
+  });
+
+  it('leaves rectangular selection columns aligned', async () => {
+    const term = await makeTerm(40);
+    await write(term, '    alpha\r\n    bravo');
+    term.selectLines(0, 1);
+    expect(selectedTerminalText(term, { columnSelectMode: true })).toBe(term.getSelection());
   });
 });
 

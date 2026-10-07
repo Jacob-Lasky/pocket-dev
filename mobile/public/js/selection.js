@@ -2,6 +2,7 @@
 // one owner. Desktop drags use xterm's built-in forced-selection gesture.
 // Touch adds a long press and handles through the public selection API.
 import { clipboardWrite } from './clipboard.js';
+import { selectedTerminalText } from './view.js';
 
 export class LiveSelection {
   constructor({ term, pane, mouseTracking }) {
@@ -9,6 +10,7 @@ export class LiveSelection {
     this.pane = pane;
     this.screen = pane.querySelector('.xterm-screen');
     this.mouseTracking = mouseTracking;
+    this.columnSelecting = false;
     this.touchSelecting = false;
     this.synthetic = new WeakSet();
     this.abort = new AbortController();
@@ -18,7 +20,7 @@ export class LiveSelection {
     this.menu.hidden = true;
     for (const [label, action] of [
       ['Copy', async () => {
-        const ok = await clipboardWrite(term.getSelection());
+        const ok = await clipboardWrite(this.copyText());
         this.menu.firstChild.textContent = ok ? 'Copied' : 'Try again';
       }],
       ['Done', () => this.clear()],
@@ -69,6 +71,10 @@ export class LiveSelection {
     this.renderSubscription = term.onRender(() => this.update());
   }
 
+  copyText() {
+    return selectedTerminalText(this.term, { columnSelectMode: this.columnSelecting });
+  }
+
   emitMouse(type, event, force = false) {
     const copy = new MouseEvent(type, {
       bubbles: true, cancelable: true, view: window,
@@ -86,6 +92,10 @@ export class LiveSelection {
 
   mouseDown(e) {
     if (this.synthetic.has(e) || !this.screen.contains(e.target)) return;
+    if (!e.sourceCapabilities?.firesTouchEvents && Date.now() - (this.lastTouch || 0) >= 700) {
+      // Alt on non-Mac selects columns in xterm. Preserve their alignment.
+      this.columnSelecting = e.altKey && !/Mac/.test(navigator.platform);
+    }
     if (this.touchSelecting) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -137,6 +147,7 @@ export class LiveSelection {
 
   touchStart(e) {
     this.cancelPress();
+    this.columnSelecting = false;
     this.lastTouch = Date.now();
     if (e.touches.length !== 1 || e.target.closest('.selection-tools, .selection-handle')) return false;
     // Mobile text editing belongs to the visible composer. Focusing xterm's

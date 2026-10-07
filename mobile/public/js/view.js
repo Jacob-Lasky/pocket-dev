@@ -17,6 +17,28 @@ export function renderTerminalText(term, { viewportOnly = false } = {}) {
   return lines.join('\n');
 }
 
+// Remove only the margin shared by the selected lines. The first line of a
+// drag may start inside a row, while later lines include their full left edge.
+// Keep spacing within lines and indentation relative to that shared margin.
+function removeSharedMargin(lines, { firstLinePartial = false } = {}) {
+  if (lines.length < 2) return lines;
+  const start = firstLinePartial ? 1 : 0;
+  const content = lines.slice(start).filter(line => /\S/.test(line));
+  if (!content.length) return lines;
+  const margin = Math.min(...content.map(line => /^[ \t]*/.exec(line)[0].length));
+  if (!margin) return lines;
+  return lines.map((line, index) => index < start ? line : line.slice(margin));
+}
+
+export function selectedTerminalText(term, { columnSelectMode = false } = {}) {
+  const text = term?.getSelection() || '';
+  // A rectangular selection uses leading spaces to keep its columns aligned.
+  if (columnSelectMode) return text;
+  const position = term?.getSelectionPosition();
+  const firstLinePartial = position?.start.x > 0 && position.start.y < position.end.y;
+  return removeSharedMargin(text.split('\n'), { firstLinePartial }).join('\n');
+}
+
 // Normalise copied text: strip CRs, trim trailing whitespace per line, collapse
 // runs of blank lines to a single blank, and drop leading/trailing blanks. This
 // is the "just the text, correct spacing, no junk" cleanup for the Copy button.
@@ -35,5 +57,5 @@ export function cleanCopyText(text) {
   }
   while (out.length && out[0] === '') out.shift();
   while (out.length && out[out.length - 1] === '') out.pop();
-  return out.join('\n');
+  return removeSharedMargin(out).join('\n');
 }

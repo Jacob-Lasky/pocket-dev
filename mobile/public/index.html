@@ -644,14 +644,14 @@
 
         this.term.onSelectionChange(() => {
           if (activeId !== this.id) return;
-          if (this.term.hasSelection() && !this.selection?.touchSelecting) clipboardWrite(this.term.getSelection());
+          if (this.term.hasSelection() && !this.selection?.touchSelecting) clipboardWrite(this.selection.copyText());
         });
         this.term.attachCustomKeyEventHandler(e => {
           if (maybeHandlePrefix(e)) return false;
           return maybeInterceptCopyKey(e, {
             hasSelection: () => this.term.hasSelection(),
             copy:         () => {
-              clipboardWrite(this.term.getSelection());
+              clipboardWrite(this.selection.copyText());
               this.term.clearSelection();
             },
           });
@@ -692,6 +692,12 @@
         // (fed every output chunk) tells the touch handler which case we're in.
         this.mouse = { track: false, sgr: false };
         this.selection = new LiveSelection({ term: this.term, pane: this.pane, mouseTracking: () => this.mouse.track });
+        this.term.element.addEventListener('copy', e => {
+          if (!this.term.hasSelection() || !e.clipboardData) return;
+          e.clipboardData.setData('text/plain', this.selection.copyText());
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }, { capture: true });
         // Does this pane track the bottom of its buffer? See installFollowGuard.
         this.follow = true;
         this.installTouchScroll();
@@ -1553,13 +1559,12 @@
     }
 
     // Copy helpers, scoped to the active session.
-    function activeTerm() {
-      return sessions.get(activeId)?.term || null;
-    }
-
     window.copyAllOutput = async function() {
-      const term = activeTerm();
-      const text = term ? (term.getSelection() || cleanCopyText(renderTerminalText(term, { viewportOnly: true }))) : '';
+      const session = sessions.get(activeId);
+      const term = session?.term;
+      const text = term ? (term.hasSelection()
+        ? session.selection.copyText()
+        : cleanCopyText(renderTerminalText(term, { viewportOnly: true }))) : '';
       flashCopyButton(await clipboardWrite(text));
     };
 
