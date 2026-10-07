@@ -98,8 +98,9 @@ RUN mkdir -p /etc/apt/keyrings \
 # DO NOT install plain bookworm `adb`: that is 29.0.6, which predates `adb pair`,
 # and wireless pairing is the only path that reliably approves a new key (the
 # phone measured on #88 never showed the USB RSA prompt). bookworm-backports
-# carries 34.x. Only adb is pulled from backports; every other package stays on
-# stable.
+# carries 34.x. `-t` pulls adb plus the android-* libraries it pins at exact
+# backports versions (android-libcutils and friends); nothing outside adb's own
+# dependency chain moves off stable.
 RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
     && apt-get update \
     && apt-get install -y -t bookworm-backports adb \

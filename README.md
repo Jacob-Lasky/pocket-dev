@@ -102,12 +102,21 @@ The image ships `adb` (Debian bookworm-backports, 34.x), so a session can drive 
 
 1. **The `/dev/bus/usb` bind** makes the device nodes visible. Without it the phone is in `/sys/bus/usb/devices` but `adb devices` lists nothing.
 2. **`--device-cgroup-rule='c 189:* rmw'`** lets the container open any usbfs node. The whole bus plus a rule, rather than `--device /dev/bus/usb/BBB/DDD`, is what survives a replug, reboot or USB mode switch, each of which renumbers the device.
-3. **A host udev rule** ([`host/99-pocket-dev-usb.rules`](host/99-pocket-dev-usb.rules)) giving group `users` (gid 100) write access to the nodes. They default to `root:root 0664` and the container runs as uid 99, so without it `adb` reports the phone as `no permissions`. On UnRAID, keep the file on the flash and install it from `/boot/config/go`:
+3. **A host udev rule** ([`host/99-pocket-dev-usb.rules`](host/99-pocket-dev-usb.rules)) giving group `users` (gid 100) write access to the nodes. They default to `root:root 0664` and the container runs as uid 99, so without it `adb` reports the phone as `no permissions`. On UnRAID `/etc` is rebuilt from the flash on every boot, so put the file on the flash once:
+
+   ```sh
+   mkdir -p /boot/config/udev
+   cp host/99-pocket-dev-usb.rules /boot/config/udev/      # from a checkout of this repo
+   ```
+
+   then append these two lines to `/boot/config/go` so every boot installs it, and run them once now:
 
    ```sh
    cp /boot/config/udev/99-pocket-dev-usb.rules /etc/udev/rules.d/
    udevadm control --reload && udevadm trigger --subsystem-match=usb --action=add
    ```
+
+   `ls -l /dev/bus/usb/*/` should then show group `users` on every node.
 
 **This exposes every USB device on the host**, including the UnRAID boot flash, the hubs and the RGB controller, and usbfs can reset a device or claim its interfaces. That was an accepted trade on [#88](https://github.com/Jacob-Lasky/pocket-dev/issues/88). If you do not want it, leave out all three; wireless adb (`adb pair` then `adb connect IP:PORT`) works from the bridge network with none of them.
 
