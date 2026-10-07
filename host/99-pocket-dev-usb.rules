@@ -1,0 +1,14 @@
+# Host-side half of pocket-dev's USB access (#88). Install on the Docker host,
+# not in the image: copy to /etc/udev/rules.d/ and run
+#   udevadm control --reload && udevadm trigger --subsystem-match=usb --action=add
+# On UnRAID /etc is rebuilt from the flash on every boot, so keep this file on
+# /boot/config and copy it in from /boot/config/go (README, "USB devices and adb").
+#
+# Why it exists: usbfs nodes default to root:root 0664 and pocket-dev runs as
+# uid 99 / gid 100, so the container's `c 189:* rmw` device cgroup rule lets it
+# open the nodes but file permissions still refuse the write adb needs, and adb
+# reports the phone as "no permissions". Handing every usb_device node to group
+# users (gid 100) is deliberately broad: it includes the UnRAID boot flash, an
+# exposure that was accepted on #88. Narrow it with ATTR{idVendor}=="04e8" (and
+# friends) if that decision is ever reversed.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", GROUP="users", MODE="0664"
