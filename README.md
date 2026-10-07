@@ -29,7 +29,7 @@ On a phone, swipe through the conversation. Hold a word to select it, adjust the
 
 The composer grows as you type. Return adds a line on phones; on desktop, Enter sends and Shift+Enter adds a line. Ctrl/Cmd+Enter sends on either. Drafts stay with their session across switches and reloads in the same browser tab, and remain available if delivery fails. Alt+Up/Down recalls sent messages. Multiline messages use bracketed paste when the terminal application enables it.
 
-The clipboard toolbar button copies the selected text, or the current screen if nothing is selected. Multiline copy removes a shared left margin while keeping relative indentation and spaces within each line. A full-screen agent keeps its conversation history inside the agent: scroll to the text you want first. The [interface decision](docs/mobile-interface-decision.md) records the terminal-versus-chat research and when to reconsider it.
+The clipboard toolbar button copies the selected text, or the current screen if nothing is selected. Ordinary copy joins terminal rows with one space so pasted text flows as a single line in Slack; spacing within each row stays intact. Alt-drag keeps rectangular selections on separate lines to preserve their columns. A full-screen agent keeps its conversation history inside the agent: scroll to the text you want first. The [interface decision](docs/mobile-interface-decision.md) records the terminal-versus-chat research and when to reconsider it.
 
 ## Run locally (development)
 

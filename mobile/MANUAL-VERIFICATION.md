@@ -13,8 +13,8 @@ Live-scroll — the core of the mobile experience:
 
 Live selection + copy:
 - [ ] Hold a word directly in the terminal, lift your finger, adjust both handles, tap **Copy**, then **Done**. Paste elsewhere: the selected words match. Repeat over LAN HTTP to exercise the clipboard fallback.
-- [ ] Select across several rows, including indented code, wide characters and wrapped text. Verify spaces and line breaks.
-- [ ] Start a multiline selection partway into its first row. Copy it and paste elsewhere: the repeated TUI left margin is gone, while code indentation relative to that margin and spaces within lines remain.
+- [ ] Select across several rows, including indented code, wide characters and wrapped text. Paste elsewhere: ordinary copy is one line, with one space between rows and spacing within each row intact.
+- [ ] Start a multiline selection partway into its first row. Copy it and paste elsewhere: no line breaks or TUI left margin remain.
 - [ ] Copy that selection with the browser's native Copy command as well as the pocket-dev button. On desktop, Alt-drag a rectangular selection and verify its columns remain aligned after copying.
 - [ ] Move your finger before the long-press threshold: it scrolls without selecting. Pinch still changes font size.
 - [ ] Incoming output stays live; a mouse hover does not erase selection. A grid resize dismisses handles.
@@ -32,7 +32,7 @@ Composer:
 - [ ] Mouse-wheel scrolls Claude's transcript. Ordinary drag selects multiple lines without a modifier; moving the pointer after release does not erase selection. Paste elsewhere to verify.
 - [ ] A click still operates TUI menus. Alt-drag remains rectangular selection on Linux/Windows.
 - [ ] Ctrl+C copies selected text, and interrupts when no selection exists. Ctrl+Shift+C copies without sending a terminal interrupt.
-- [ ] The clipboard button copies selected text, or the current screen when nothing is selected: real spaces, no escape/cursor codes, no big runs of blank lines.
+- [ ] The clipboard button copies selected text, or the current screen when nothing is selected: real spaces, no escape/cursor codes, and no line breaks in ordinary copy.
 - [ ] Enter sends; Shift+Enter adds a line; arrow keys edit the message; Alt+Up/Down recalls history.
 
 ## Alt-screen / scroll behavior
