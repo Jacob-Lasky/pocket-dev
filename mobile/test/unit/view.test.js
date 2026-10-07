@@ -107,6 +107,11 @@ describe('real Claude frame (closes the cat/alt-screen test gap)', () => {
 });
 
 describe('cleanCopyText', () => {
+  it('removes a shared visual margin while keeping relative indentation', () => {
+    expect(cleanCopyText('    first line\n    second line\n      nested line'))
+      .toBe('first line\nsecond line\n  nested line');
+  });
+
   it('strips CRs and trailing whitespace per line', () => {
     expect(cleanCopyText('a   \r\nb\t\r\n')).toBe('a\nb');
   });
