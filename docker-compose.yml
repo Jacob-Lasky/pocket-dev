@@ -39,6 +39,11 @@ services:
       # dir, and state starts landing in two places at once.
       - ./home:/home/claude
 
+      # Host USB bus, paired with device_cgroup_rules below. The container runs
+      # as uid 99, so the host also needs a udev rule granting gid 100 write
+      # access to usb_device nodes (README, "USB devices and adb").
+      - /dev/bus/usb:/dev/bus/usb
+
       # Docker socket. WARNING: :ro does NOT make the Docker API read-only. It
       # marks the socket file read-only and nothing else — the daemon still
       # honours run / stop / rm over it, so this mount is effectively host root
@@ -92,3 +97,15 @@ services:
     # Matches the template. An uncapped container on a host running other
     # workloads is how a runaway compile takes the whole box down.
     mem_limit: 16g
+
+    # PID 1 here does not reap orphans, so zombies pile up until the cgroup pids
+    # ceiling; at the 2048 default that surfaced as chromium "Target crashed" and
+    # Go "failed to create new OS thread", neither of which mentions pids.
+    pids_limit: 8192
+
+    # Host USB access for adb (#88). The rule lets the container open any usbfs
+    # node (char major 189); the /dev/bus/usb volume above makes the nodes
+    # visible. A per-node `devices:` entry would not survive a replug, which
+    # renumbers the device. Exposes EVERY host USB device; drop both if unwanted.
+    device_cgroup_rules:
+      - 'c 189:* rmw'

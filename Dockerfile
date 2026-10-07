@@ -91,6 +91,22 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# adb, so a session can drive an Android phone plugged into the host (#88). The
+# USB path also needs the /dev/bus/usb bind and the `c 189:* rmw` device cgroup
+# rule from the template, plus a host udev rule giving gid 100 write access to
+# usbfs nodes; README "USB devices and adb" has the whole chain.
+# DO NOT install plain bookworm `adb`: that is 29.0.6, which predates `adb pair`,
+# and wireless pairing is the only path that reliably approves a new key (the
+# phone measured on #88 never showed the USB RSA prompt). bookworm-backports
+# carries 34.x. Only adb is pulled from backports; every other package stays on
+# stable.
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
+    && apt-get update \
+    && apt-get install -y -t bookworm-backports adb \
+    && adb version \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Codex, OpenAI's coding CLI, so a session can consult a SECOND lab's model
 # without leaving the container. This is what the /second-opinion skill drives,
 # and that skill's whole value is decorrelated error: Claude reviewing Claude

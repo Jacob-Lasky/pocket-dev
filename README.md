@@ -49,6 +49,7 @@ docker compose up -d --build
 | `/mnt/user/appdata/claude-code/workspace` | `/workspace` | Claude's working directory; persists files between container recreates |
 | `/mnt/user/appdata/claude-code/home` | `/home/claude` | **The entire home, and the only state mount you need.** Claude's config and per-tab conversation ids, the `gh` token, the dgvpn registration, `~/bin` tools a session installs for itself, and credentials for anything else that writes to `~` (`aws`, `kubectl`, `fly`, `docker`). Must be owned `99:100` on the host |
 | `/var/run/docker.sock` | `/var/run/docker.sock` (`:ro`) | Access to the host's docker daemon. **`:ro` does not make the API read-only** — it only marks the socket file read-only, and the daemon still honours `run` / `stop` / `rm`. Treat this mount as host root, and drop it or front it with a filtered `docker-socket-proxy` if that is not what you want |
+| `/dev/bus/usb` | `/dev/bus/usb` | Host USB devices for `adb`. Needs `--device-cgroup-rule='c 189:* rmw'` and a host udev rule too; see [USB devices and adb](#usb-devices-and-adb). Exposes every host USB device, including the UnRAID boot flash |
 
 ### Why the home is one mount
 
@@ -94,6 +95,23 @@ The auth is deliberately not baked into the image. Copying an `auth.json` in fro
 The session picker exposes the two Codex identities separately. **Codex DG** uses `codex-dg`, the Deepgram API account and its model catalog. **Codex GPT** uses bare `codex`, the ChatGPT account and its connected apps. Install the desired plugins with `codex plugin add`, then connect their underlying apps from the ChatGPT Plugins directory; installing a plugin and authorizing its app are separate steps. Existing Codex DG sessions stay on the API account after a restart.
 
 **The two Codex installs update differently.** The standalone release in `~/bin` belongs to the container's own user, so it takes new versions at runtime the way Claude does — and it keeps landing in `~/bin` because the container exports `CODEX_INSTALL_DIR` for it, rather than letting it fall back to a directory that is wiped on the next image update. The image's `npm install -g` copy is root-owned under `/usr/local`, which the session user cannot write, so it only moves when a new image is built — and the image is only rebuilt when something is pushed. That is why `docker-publish.yml` also builds weekly on a schedule, with the layer cache disabled for that run: cached, the build would re-ship last week's codex, because a layer's cache key does not know what `npm` would resolve today. A new image still has to be picked up, which means a recreate and therefore restarting your terminal processes; to move that fallback alone without one, reinstall it as root inside the running container (`pocket-dev-codex-update` on Tower does exactly this).
+
+## USB devices and adb
+
+The image ships `adb` (Debian bookworm-backports, 34.x), so a session can drive an Android phone plugged into the server. USB access is three pieces, and each one fails in its own way when it is missing:
+
+1. **The `/dev/bus/usb` bind** makes the device nodes visible. Without it the phone is in `/sys/bus/usb/devices` but `adb devices` lists nothing.
+2. **`--device-cgroup-rule='c 189:* rmw'`** lets the container open any usbfs node. The whole bus plus a rule, rather than `--device /dev/bus/usb/BBB/DDD`, is what survives a replug, reboot or USB mode switch, each of which renumbers the device.
+3. **A host udev rule** ([`host/99-pocket-dev-usb.rules`](host/99-pocket-dev-usb.rules)) giving group `users` (gid 100) write access to the nodes. They default to `root:root 0664` and the container runs as uid 99, so without it `adb` reports the phone as `no permissions`. On UnRAID, keep the file on the flash and install it from `/boot/config/go`:
+
+   ```sh
+   cp /boot/config/udev/99-pocket-dev-usb.rules /etc/udev/rules.d/
+   udevadm control --reload && udevadm trigger --subsystem-match=usb --action=add
+   ```
+
+**This exposes every USB device on the host**, including the UnRAID boot flash, the hubs and the RGB controller, and usbfs can reset a device or claim its interfaces. That was an accepted trade on [#88](https://github.com/Jacob-Lasky/pocket-dev/issues/88). If you do not want it, leave out all three; wireless adb (`adb pair` then `adb connect IP:PORT`) works from the bridge network with none of them.
+
+**Approving the key.** The adb key lives in `~/.android`, inside the home mount, so an approval survives a recreate. The phone tested on #88 never showed the USB "Allow USB debugging?" prompt while `adb devices` read `unauthorized`; pairing over Wireless debugging (`adb pair IP:PORT CODE`) approved the same key, after which `adb reconnect offline` flipped the USB transport to `device`. mDNS does not cross the Docker bridge, so read the pairing and connect ports off the phone rather than relying on `adb mdns services`.
 
 ## Point at the thing
 
