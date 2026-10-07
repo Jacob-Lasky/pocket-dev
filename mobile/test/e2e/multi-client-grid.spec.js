@@ -181,6 +181,7 @@ test('long old-grid chunks finish before resize, repaint, and reconnect', async 
   const phoneFit = await grid(phonePage);
   const phoneInitialMessages = await sentFrameTypes(phonePage, session);
   expectClaimBeforeResize(phoneInitialMessages);
+  const initialResizes = phoneInitialMessages.filter(type => type === 'resize').length;
 
   // Keep a second local session available so the stale-claim witness can
   // switch away from the blocked session without destroying it.
@@ -189,6 +190,11 @@ test('long old-grid chunks finish before resize, repaint, and reconnect', async 
     window.tmuxLast();
   });
   await expect.poll(() => activeSessionId(phonePage)).toBe(session);
+  // Returning to this pane schedules a fit on the next animation frame. Wait
+  // for its resize to enter the terminal queue before holding parser timers,
+  // or that pending fit can split the streamed writes at an arbitrary frame.
+  await expect.poll(async () => (await sentFrameTypes(phonePage, session))
+    .filter(type => type === 'resize').length).toBeGreaterThan(initialResizes);
 
   await phonePage.evaluate(id => {
     window.__testOutputFrames = 0;
