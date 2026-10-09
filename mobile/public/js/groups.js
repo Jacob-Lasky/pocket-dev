@@ -15,9 +15,10 @@ export const UNGROUPED = '';
 // server would silently drop. test/unit/groups.test.js ties the two together.
 export const MAX_GROUPS      = 50;
 export const MAX_NAME_LENGTH = 40;
+export const MAX_SESSION_NAME_LENGTH = 80;
 
 export function emptyLayout() {
-  return { version: 1, groups: [], ungrouped: [] };
+  return { version: 1, groups: [], ungrouped: [], names: {} };
 }
 
 // Fold the live session ids into a layout for display. A session the layout
@@ -32,7 +33,32 @@ export function arrange(layout, ids) {
   const groups = layout.groups.map((g) => ({ ...g, sessions: keep(g.sessions) }));
   const ungrouped = keep(layout.ungrouped);
   const unplaced = ids.filter((id) => !placed.has(id));
-  return { version: 1, groups, ungrouped: [...ungrouped, ...unplaced] };
+  const names = {};
+  for (const [id, name] of Object.entries(layout.names || {})) if (live.has(id)) names[id] = name;
+  return { version: 1, groups, ungrouped: [...ungrouped, ...unplaced], names };
+}
+
+// sessionLayout.js's cleanName for a session name: control characters and
+// runs of whitespace collapse to one space, then it is capped.
+export function cleanSessionName(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_SESSION_NAME_LENGTH);
+}
+
+// The name a person gave a session, or undefined for "use the automatic one".
+export function sessionName(layout, id) {
+  return Object.hasOwn(layout.names || {}, id) ? layout.names[id] : undefined;
+}
+
+// Set a session's name. An empty one clears it, returning the session to its
+// conversation title, which is the only way back to automatic naming.
+export function renameSession(layout, id, name) {
+  const names = { ...(layout.names || {}) };
+  // The server's cleanName, mirrored: the optimistic render must show exactly
+  // what the save will keep, or the name visibly changes when the PUT returns.
+  const clean = cleanSessionName(name);
+  if (clean) names[id] = clean; else delete names[id];
+  return { ...layout, names };
 }
 
 // The order a person reads the list in, collapsed groups included: what the

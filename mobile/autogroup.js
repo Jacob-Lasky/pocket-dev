@@ -51,7 +51,10 @@ const clip = (s, n) => (typeof s === 'string' ? s.slice(0, n) : null);
 function buildPrompt(rows, layout) {
   const sessions = rows.map((r) => ({
     id:         r.id,
-    title:      clip(r.title, TITLE_LIMIT),
+    // A name the user gave the session says more than the generated title.
+    // Own keys only: a SAFE_ID such as `toString` would otherwise read an
+    // inherited function off the plain object and send no title at all.
+    title:      clip((layout.names && Object.hasOwn(layout.names, r.id) && layout.names[r.id]) || r.title, TITLE_LIMIT),
     lastPrompt: clip(r.lastPrompt, PROMPT_LIMIT),
     provider:   r.providerLabel || r.provider || null,
   }));
@@ -127,7 +130,7 @@ function applyAutogroup(layout, result, liveIds) {
 
   // Ungrouped keeps its order; sessions displaced from a reused group follow.
   const leftovers = [...layout.ungrouped, ...displaced].filter((id) => !placed.has(id));
-  return normalizeLayout({ groups, ungrouped: leftovers }, liveIds);
+  return normalizeLayout({ groups, ungrouped: leftovers, names: layout.names }, liveIds);
 }
 
 // The real classifier: one headless Claude call. No tools, no MCP servers, no

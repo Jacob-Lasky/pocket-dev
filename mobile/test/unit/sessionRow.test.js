@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { STATE_TEXT, rowState, isUnread, summarise, wantsUser } from '../../public/js/attention.js';
-import { UNGROUPED, emptyLayout, arrange } from '../../public/js/groups.js';
+import { UNGROUPED, emptyLayout, arrange, sessionName } from '../../public/js/groups.js';
 
 const indexHtml = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
 
@@ -47,13 +47,13 @@ function mountRenderer({ sessions, order, activeId, layout = emptyLayout(), list
   // are injected here exactly as the browser supplies them.
   const factory = new Function(
     'document', 'sessions', 'order', 'activeId', 'slRows', 'slCount', 'layout', 'listDrag', 'cancelListDrag',
-    'STATE_TEXT', 'rowState', 'isUnread', 'summarise', 'wantsUser', 'UNGROUPED', 'arrange',
-    `${sliceRowRenderer()}\nreturn { renderSessionList, buildRow, dropSessionRow, slRowEls, slGroupEls };`,
+    'STATE_TEXT', 'rowState', 'isUnread', 'summarise', 'wantsUser', 'UNGROUPED', 'arrange', 'sessionName',
+    `${sliceRowRenderer()}\nreturn { renderSessionList, buildRow, dropSessionRow, slRowEls, slGroupEls, displayName };`,
   );
   return factory(
     document, sessions, order, activeId,
     document.getElementById('sl-rows'), document.getElementById('sl-count'), layout, listDrag, cancelListDrag,
-    STATE_TEXT, rowState, isUnread, summarise, wantsUser, UNGROUPED, arrange,
+    STATE_TEXT, rowState, isUnread, summarise, wantsUser, UNGROUPED, arrange, sessionName,
   );
 }
 
@@ -375,5 +375,34 @@ describe('the list with groups', () => {
     expect(rowsEl.children).toHaveLength(0);
     // Text still lands: the summary is written either way.
     expect(document.getElementById('sl-count').textContent).toMatch(/^3 sessions/);
+  });
+});
+
+describe('session names', () => {
+  it('a name the user gave wins over the conversation title and the provider fallback, in the row', () => {
+    const sessions = new Map([
+      ['main-2', sessionFrom(CLAUDE_ROW, { id: 'main-2' })],
+      ['main-3', sessionFrom(CODEX_ROW,  { id: 'main-3' })],
+    ]);
+    const layout = { ...emptyLayout(), names: { 'main-3': 'Codex review' } };
+    const r = mountRenderer({ sessions, order: ['main-2', 'main-3'], activeId: 'main-1', layout });
+    r.renderSessionList();
+    const titles = [...document.querySelectorAll('.sl-title')].map((t) => t.textContent);
+    expect(titles).toEqual(['Provider per session', 'Codex review']);
+    expect(document.querySelector('.sl-row[data-session-id="main-3"]').getAttribute('aria-label')).toBe('Codex review. Status not tracked.');
+  });
+
+  it('displayName is null when nothing better than the id is known, so callers pick their own fallback', () => {
+    const sessions = new Map([['main-1', sessionFrom({ ...CLAUDE_ROW, title: null }, { id: 'main-1' })]]);
+    const r = mountRenderer({ sessions, order: ['main-1'], activeId: 'main-1' });
+    expect(r.displayName(sessions.get('main-1'), 'main-1')).toBeNull();
+  });
+
+  it('every row carries a rename control beside the row button, not inside it', () => {
+    const sessions = new Map([['main-2', sessionFrom(CLAUDE_ROW, { id: 'main-2' })]]);
+    mountRenderer({ sessions, order: ['main-2'], activeId: 'main-1' }).renderSessionList();
+    const item = document.querySelector('.sl-item');
+    expect(item.querySelector('.sl-row-rename')).not.toBeNull();
+    expect(item.querySelector('.sl-row .sl-row-rename')).toBeNull();
   });
 });

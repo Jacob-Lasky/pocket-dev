@@ -22,12 +22,15 @@ const { SAFE_ID } = require('./safeId');
 const LAYOUT_VERSION  = 1;
 const MAX_GROUPS      = 50;
 const MAX_NAME_LENGTH = 40;
+// A session name is longer than a group name because it replaces a
+// conversation title, and those run to a short sentence.
+const MAX_SESSION_NAME_LENGTH = 80;
 
 // Strip control characters and collapse whitespace, so a name cannot carry a
 // newline into a one-line header or an escape into a log line.
-function cleanName(name) {
+function cleanName(name, max = MAX_NAME_LENGTH) {
   if (typeof name !== 'string') return '';
-  return name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LENGTH);
+  return name.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 // `liveIds` is the server's current session ids in creation order. The result
@@ -65,7 +68,24 @@ function normalizeLayout(raw, liveIds) {
   }
   const ungrouped = take(raw?.ungrouped);
   const unplaced  = liveIds.filter((id) => !placed.has(id));
-  return { version: LAYOUT_VERSION, groups, ungrouped: [...ungrouped, ...unplaced] };
+
+  // Names a person gave sessions, by session id. Same rules as everything
+  // else here: live SAFE_ID keys only, cleaned text, and an empty name is no
+  // name, which is how clearing one returns the session to its automatic
+  // title. Pruned with the ids, so a reused id never inherits a dead tab's
+  // name. `__proto__` passes SAFE_ID (underscores are allowed) and assigning
+  // it on a plain object would set the prototype instead of a key, so it is
+  // refused by name even though no live session can carry it today.
+  const names = {};
+  const rawNames = raw?.names;
+  if (rawNames && typeof rawNames === 'object' && !Array.isArray(rawNames)) {
+    for (const id of Object.keys(rawNames)) {
+      if (!SAFE_ID.test(id) || !live.has(id) || id === '__proto__') continue;
+      const name = cleanName(rawNames[id], MAX_SESSION_NAME_LENGTH);
+      if (name) names[id] = name;
+    }
+  }
+  return { version: LAYOUT_VERSION, groups, ungrouped: [...ungrouped, ...unplaced], names };
 }
 
 // Same equality the client cares about: would rendering these two differ.
@@ -172,6 +192,6 @@ function createLayoutApi({ store = createMemoryLayoutStore(), liveIds }) {
 }
 
 module.exports = {
-  LAYOUT_VERSION, MAX_GROUPS, MAX_NAME_LENGTH,
+  LAYOUT_VERSION, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SESSION_NAME_LENGTH,
   cleanName, normalizeLayout, createLayoutStore, createMemoryLayoutStore, createLayoutApi,
 };

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   UNGROUPED, emptyLayout, arrange, displayOrder, addGroup, renameGroup, toggleGroup,
   deleteGroup, moveSession, moveGroup, newGroupId, MAX_GROUPS, MAX_NAME_LENGTH,
+  MAX_SESSION_NAME_LENGTH, renameSession, sessionName, cleanSessionName,
 } from '../../public/js/groups.js';
 import * as server from '../../sessionLayout.js';
 
@@ -20,7 +21,7 @@ const sample = () => arrange({
 
 describe('arrange', () => {
   it('is the flat creation-order list when nothing is grouped', () => {
-    expect(arrange(emptyLayout(), IDS)).toEqual({ version: 1, groups: [], ungrouped: IDS });
+    expect(arrange(emptyLayout(), IDS)).toEqual({ version: 1, groups: [], ungrouped: IDS, names: {} });
   });
 
   it('appends a session the layout has not seen to the end of Ungrouped', () => {
@@ -34,7 +35,11 @@ describe('arrange', () => {
   it('agrees with the server about every layout it produces', () => {
     // The client and the server each fold live ids into a layout. They cannot
     // share code across the wire, so this is what keeps them from drifting.
-    for (const raw of [emptyLayout(), sample(), { version: 1, groups: [], ungrouped: ['main-4', 'main-9'] }]) {
+    // One case carries names, live and dead: an arrange() that dropped names
+    // would erase every saved one on the next drag, and only a named case can
+    // see that.
+    const named = { ...sample(), names: { 'main-2': 'Billing', 'main-9': 'gone' } };
+    for (const raw of [emptyLayout(), sample(), named, { version: 1, groups: [], ungrouped: ['main-4', 'main-9'], names: {} }]) {
       expect(arrange(raw, IDS)).toEqual(normalizeLayout(raw, IDS));
     }
   });
@@ -112,6 +117,29 @@ describe('edits', () => {
     accepted(out);
   });
 
+  it('names a session, and an empty name clears it back to automatic', () => {
+    const named = renameSession(sample(), 'main-4', '  Codex review ');
+    expect(sessionName(named, 'main-4')).toBe('Codex review');
+    accepted(named);
+    const cleared = renameSession(named, 'main-4', '   ');
+    expect(sessionName(cleared, 'main-4')).toBeUndefined();
+    accepted(cleared);
+  });
+
+  it('cleans a name exactly as the server will, so the optimistic render never changes on save', () => {
+    const raw = `  a\tb\n${'x'.repeat(200)}`;
+    const out = renameSession(sample(), 'main-1', raw);
+    expect(sessionName(out, 'main-1')).toBe(cleanSessionName(raw));
+    expect(sessionName(out, 'main-1')).toHaveLength(MAX_SESSION_NAME_LENGTH);
+    accepted(out);
+  });
+
+  it('drops the name of a session that is gone, as the server does', () => {
+    const named = renameSession(sample(), 'main-4', 'x');
+    expect(arrange(named, ['main-1']).names).toEqual({});
+    expect(arrange(named, ['main-1'])).toEqual(normalizeLayout(named, ['main-1']));
+  });
+
   it('never mutates the layout it was given, which Undo depends on', () => {
     const before = sample();
     const frozen = JSON.stringify(before);
@@ -119,6 +147,7 @@ describe('edits', () => {
     moveGroup(before, 'g-b', 0);
     deleteGroup(before, 'g-a');
     toggleGroup(before, 'g-a');
+    renameSession(before, 'main-1', 'x');
     expect(JSON.stringify(before)).toBe(frozen);
   });
 });
@@ -127,6 +156,7 @@ describe('limits shared with the server', () => {
   it('match sessionLayout.js, so the browser never offers what the server drops', () => {
     expect(MAX_GROUPS).toBe(server.MAX_GROUPS);
     expect(MAX_NAME_LENGTH).toBe(server.MAX_NAME_LENGTH);
+    expect(MAX_SESSION_NAME_LENGTH).toBe(server.MAX_SESSION_NAME_LENGTH);
   });
 });
 
