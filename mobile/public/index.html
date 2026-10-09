@@ -252,6 +252,35 @@
       #sl-count { flex-basis: 100%; }
     }
 
+    #sl-tools {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px 12px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+    #sl-tools .action-btn {
+      flex: 0 0 auto;
+      height: 30px;
+      font-size: 12px;
+      padding: 0 12px;
+    }
+    #sl-tools .action-btn:disabled { opacity: 0.55; cursor: default; }
+    #sl-tools [hidden] { display: none; }
+    #sl-tools-msg {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 11px;
+      color: #8b949e;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #sl-tools-msg[data-tone="error"] { color: #ff7b72; }
+    #sl-bar { border-bottom: 0; }
+
     #sl-rows {
       flex: 1 1 auto;
       overflow-y: auto;
@@ -278,6 +307,120 @@
     }
     .sl-row:active      { background: #151c26; }
     .sl-row:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+
+    /* ── Groups and drag-to-reorder ──────────────────────────────────────
+       Each session is an <li> holding a grip and the .sl-row button side by
+       side. The grip CANNOT live inside the button: interactive content inside
+       a <button> is invalid and browsers route its events to the button. The
+       item owns the divider, so the row inside it does not draw a second one. */
+    .sl-item { display: flex; align-items: stretch; border-bottom: 1px solid #30363d; }
+    .sl-item > .sl-row { flex: 1 1 auto; min-width: 0; border-bottom: 0; padding-left: 4px; }
+
+    /* touch-action: none is what lets a finger on the grip drag instead of
+       scrolling the list; the rest of the row still scrolls normally. */
+    .sl-grip {
+      flex: 0 0 auto;
+      width: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #484f58;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Six dots, two columns of three: the conventional "this moves" mark. */
+    .sl-grip::before {
+      content: '';
+      width: 9px; height: 14px;
+      background: radial-gradient(circle, currentColor 1.4px, transparent 1.7px) 0 0 / 5px 5px;
+    }
+    .sl-grip:hover { color: #8b949e; }
+    .sl-grip:focus-visible { color: #58a6ff; outline: 2px solid #58a6ff; outline-offset: -4px; border-radius: 4px; }
+    .sl-grip.sl-grip-none { cursor: default; }
+    .sl-grip.sl-grip-none::before { content: none; }
+
+    .sl-dragging { background: #1a2230; box-shadow: inset 3px 0 0 #58a6ff; }
+    .sl-dragging .sl-grip { cursor: grabbing; color: #58a6ff; }
+    #sl-rows[data-dragging] { user-select: none; -webkit-user-select: none; }
+    /* Moving a group moves its sessions with it, so while one is in the air
+       the list shows headers only: short enough to see every drop target. */
+    #sl-rows[data-dragging="group"] .sl-item { display: none; }
+
+    .sl-group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      min-height: 40px;
+      padding-right: 6px;
+      background: #11161d;
+      border-bottom: 1px solid #30363d;
+    }
+    .sl-group-toggle {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 4px;
+      background: none;
+      border: 0;
+      color: #c9d1d9;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .sl-group-toggle:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+    .sl-group[data-group-id=""] .sl-group-toggle { cursor: default; color: #8b949e; }
+    .sl-chev { flex: 0 0 auto; color: #8b949e; font-size: 10px; transition: transform 0.15s; }
+    .sl-group[data-collapsed="true"] .sl-chev { transform: rotate(-90deg); }
+    .sl-group[data-group-id=""] .sl-chev { visibility: hidden; }
+    .sl-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sl-group-count {
+      flex: 0 0 auto;
+      font-family: 'SF Mono', Consolas, Menlo, monospace;
+      font-size: 11px;
+      font-weight: 400;
+      color: #6e7681;
+    }
+    /* A collapsed group hides its rows, so it carries their news: the same
+       green dot a row uses when something inside wants you. */
+    .sl-group-dot {
+      flex: 0 0 auto;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #3fb950;
+      box-shadow: 0 0 6px #3fb95088;
+    }
+    .sl-group-dot[hidden] { display: none; }
+    .sl-group-btn {
+      flex: 0 0 auto;
+      width: 32px; height: 32px;
+      background: none;
+      border: 0;
+      border-radius: 6px;
+      color: #6e7681;
+      font-size: 13px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .sl-group-btn:hover, .sl-group-btn:focus-visible { color: #e6edf3; background: #21262d; outline: none; }
+    .sl-group-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 5px 4px;
+      padding: 6px 8px;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #388bfd;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+    }
 
     .sl-title {
       grid-area: title;
@@ -502,6 +645,14 @@
       <button class="action-btn tmux-btn" onclick="newSessionFromList('codex')" title="Start Codex on the Deepgram API account">+ Codex DG</button>
       <button class="action-btn tmux-btn" onclick="newSessionFromList('codex-chatgpt')" title="Start Codex with the ChatGPT account and connected apps">+ Codex GPT</button>
     </div>
+    <!-- Grouping. Its own row because the bar above is already full at phone
+         width, and these act on the list rather than starting anything. -->
+    <div id="sl-tools">
+      <button id="sl-autogroup" class="action-btn" onclick="autogroupSessions()" title="Group sessions by what each conversation is about">Autogroup</button>
+      <button class="action-btn" onclick="newGroup()" title="Add an empty group">+ Group</button>
+      <button id="sl-undo" class="action-btn" onclick="undoLayout()" title="Put the groups back the way they were" hidden>Undo</button>
+      <span id="sl-tools-msg" role="status"></span>
+    </div>
     <ul id="sl-rows"></ul>
   </div>
 
@@ -516,7 +667,11 @@
     import { LiveSelection } from '/js/selection.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
     import { scanMouseState, wheelSequence, wheelStepsFromDelta } from '/js/scroll.js';
-    import { STATE_TEXT, rowState, badgeState, summarise, isUnread, pollDelay } from '/js/attention.js';
+    import { STATE_TEXT, rowState, badgeState, summarise, isUnread, pollDelay, wantsUser } from '/js/attention.js';
+    import {
+      UNGROUPED, emptyLayout, arrange, displayOrder, addGroup, renameGroup, toggleGroup,
+      deleteGroup, moveSession, moveGroup, newGroupId, MAX_GROUPS, MAX_NAME_LENGTH,
+    } from '/js/groups.js';
 
     // ── Saved preferences ───────────────────────────────────────────────────
     const savedFontSize  = parseInt(localStorage.getItem('pd-font-size')) || 14;
@@ -554,7 +709,7 @@
     // each main-buffer scrollback persists and so xterm.js's cell-dimension
     // measurement stays correct across switches.
     const sessions = new Map();            // id → SessionState
-    const order    = [];                   // creation order, for Next cycling
+    const order    = [];                   // creation order; the DISPLAYED order is the layout's, see groups.js
     let   activeId        = null;
     let   previousId      = null;
     let   currentFontSize = savedFontSize;
@@ -1133,14 +1288,18 @@
       });
     }
 
+    // The order the list shows, which is what the counter and Ctrl-B cycling
+    // follow: "3/7" has to mean the third row you would see.
+    const shownOrder = () => displayOrder(arrange(layout, order));
+
     function updateSessionLabel() {
-      const idx = order.indexOf(activeId);
       if (!activeId) {
         sessionLbl.textContent = '–';
         sessionLbl.removeAttribute('title');
         return;
       }
-      const counter = `${idx + 1}/${order.length}`;
+      const shown = shownOrder();
+      const counter = `${shown.indexOf(activeId) + 1}/${shown.length}`;
       const name = sessions.get(activeId)?.title;
       sessionLbl.textContent = name ? `${counter} · ${name}` : counter;
       // The row truncates hard on a phone, so keep the full name reachable.
@@ -1180,8 +1339,36 @@
     }
 
     async function refreshSessionMeta() {
-      try { applySessionMeta(await listSessions()); }
-      catch (e) { /* offline or unwired; labels just stay as they are */ }
+      try {
+        const [list] = await Promise.all([listSessions(), refreshLayout()]);
+        applySessionMeta(list);
+      } catch (e) { /* offline or unwired; labels just stay as they are */ }
+    }
+
+    // The server's revision of the layout this browser last saw or saved. A
+    // GET answer older than it is discarded: a poll the server answered just
+    // before our PUT landed would otherwise put the moved row back for one
+    // interval, which reads as the drop not taking. While a save is queued or
+    // in flight, polls are discarded outright, because the server does not
+    // have the edit on screen yet.
+    let layoutRev = 0;
+    let layoutSaving = false;
+    let layoutQueued = null;
+
+    function adoptLayout(next) {
+      layout = next;
+      if (Number.isSafeInteger(next.rev)) layoutRev = next.rev;
+    }
+
+    async function refreshLayout() {
+      try {
+        const r = await fetch('/layout');
+        if (!r.ok) return;
+        const next = await r.json();
+        if (layoutSaving || layoutQueued || listDrag) return;
+        if (Number.isSafeInteger(next.rev) && next.rev < layoutRev) return;
+        adoptLayout(next);
+      } catch (e) { /* offline or unwired: keep the layout we have */ }
     }
 
     function addSession(id) {
@@ -1257,6 +1444,15 @@
     // last time someone opened it, so the answer is the same on every device.
     const slRows  = document.getElementById('sl-rows');
     const slCount = document.getElementById('sl-count');
+    // How the list is grouped and ordered, as GET /layout last served it (or as
+    // this browser just edited it). Server-side so the phone and the desktop
+    // agree; see sessionLayout.js. `listDrag` is non-null while a row or group
+    // is in the air, and while it is the drag owns the DOM order.
+    let layout   = emptyLayout();
+    let listDrag = null;
+    // Ends an in-progress drag without saving. installListDrag() sets it; the
+    // renderer calls it when the node being dragged stops existing.
+    let cancelListDrag = () => {};
     const sessionsBtn = document.getElementById('sessions-btn');
 
     // Read/unread lives on the SERVER, not in localStorage: "have I read this?"
@@ -1310,9 +1506,21 @@
     // DO NOT reintroduce replaceChildren / innerHTML here, and do not "simplify"
     // this back to rebuilding. test/e2e/session-list-click.spec.js presses with
     // a real duration under background output and is the guard.
-    const slRowEls = new Map();   // session id -> the row's elements
+    const slRowEls   = new Map();   // session id -> the row's elements
+    const slGroupEls = new Map();   // group id (UNGROUPED for the rest) -> its header's elements
 
     function buildRow(id) {
+      const item = document.createElement('li');
+      item.className = 'sl-item';
+      item.dataset.sessionId = id;
+      const grip = document.createElement('span');
+      grip.className = 'sl-grip';
+      grip.title = 'Drag to move, or focus and use the arrow keys';
+      // Focusable so the arrow keys can do what a drag does; see installListDrag.
+      grip.tabIndex = 0;
+      grip.setAttribute('role', 'button');
+      grip.setAttribute('aria-label', 'Move session');
+
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'sl-row';
@@ -1339,12 +1547,73 @@
       prev.className = 'sl-prev';
 
       row.append(title, meta, status, prev);
+      item.append(grip, row);
       // Bound once, for the life of the row, so it cannot be lost to a re-render.
       row.addEventListener('click', () => {
         setActive(id);
         closeSessionList();
       });
-      return { row, title, time, status, statusText, prev };
+      return { item, row, title, time, status, statusText, prev };
+    }
+
+    // A group header. Built once per group and reused, for the same reason rows
+    // are: a header rebuilt under a press swallows the click. The handlers it
+    // calls live outside this section (startRename and friends) and are looked
+    // up when clicked, not when built.
+    function buildGroupHeader(gid) {
+      const head = document.createElement('li');
+      head.className = 'sl-group';
+      head.dataset.groupId = gid;
+      const ungrouped = gid === UNGROUPED;
+
+      const grip = document.createElement('span');
+      grip.className = ungrouped ? 'sl-grip sl-grip-none' : 'sl-grip';
+      if (!ungrouped) {
+        grip.title = 'Drag to reorder groups, or focus and use the arrow keys';
+        grip.tabIndex = 0;
+        grip.setAttribute('role', 'button');
+        grip.setAttribute('aria-label', 'Move group');
+      }
+
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'sl-group-toggle';
+      const chev = document.createElement('span');
+      chev.className = 'sl-chev';
+      chev.textContent = '▾';
+      const name = document.createElement('span');
+      name.className = 'sl-group-name';
+      const count = document.createElement('span');
+      count.className = 'sl-group-count';
+      const dot = document.createElement('span');
+      dot.className = 'sl-group-dot';
+      dot.hidden = true;
+      toggle.append(chev, name, count, dot);
+      head.append(grip, toggle);
+
+      if (ungrouped) {
+        // A label, not a control: Ungrouped is where sessions go, not a thing
+        // you collapse or rename.
+        toggle.tabIndex = -1;
+      } else {
+        toggle.addEventListener('click', () => toggleGroupCollapsed(gid));
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.className = 'sl-group-btn';
+        rename.textContent = '✎';
+        rename.title = 'Rename group';
+        rename.setAttribute('aria-label', 'Rename group');
+        rename.addEventListener('click', () => startRename(gid));
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'sl-group-btn';
+        remove.textContent = '✕';
+        remove.title = 'Remove group (its sessions move to Ungrouped)';
+        remove.setAttribute('aria-label', 'Remove group');
+        remove.addEventListener('click', () => removeGroup(gid));
+        head.append(rename, remove);
+      }
+      return { head, toggle, name, count, dot };
     }
 
     // Forget a row and detach it. Called both from the render sweep and from
@@ -1354,7 +1623,11 @@
     function dropSessionRow(id) {
       const refs = slRowEls.get(id);
       if (!refs) return;
-      refs.row.remove();
+      // A row killed (or archived, or closed on another device) while it is
+      // being dragged: end the drag, or the next pointer move re-inserts the
+      // dead node and the drop saves an edit naming a session that is gone.
+      if (listDrag?.el === refs.item) cancelListDrag();
+      refs.item.remove();
       slRowEls.delete(id);
     }
 
@@ -1363,57 +1636,112 @@
     function setText(el, value) {
       if (el.textContent !== value) el.textContent = value;
     }
+    function setData(el, key, value) {
+      if (el.dataset[key] !== value) el.dataset[key] = value;
+    }
+
+    function updateRow(id, s) {
+      let refs = slRowEls.get(id);
+      if (!refs) {
+        refs = buildRow(id);
+        slRowEls.set(id, refs);
+      }
+      const { row, title, time, status, statusText, prev } = refs;
+      const state = stateOfSession(s);
+
+      // A session whose harness writes no transcript has no AI-generated
+      // title to show and never will, so it is named for what it IS. This is
+      // the highest-value line in the provider feature: it turns a bare
+      // `main-3` into `Codex · main-3` and makes the tab legible. Claude rows
+      // keep their conversation title, and a Claude tab too new to have one
+      // keeps the existing fallback, so nothing regresses.
+      //
+      // Keyed off statusTracked rather than the provider id, for the same
+      // reason the label comes from the server: the client holds no table of
+      // which providers write transcripts.
+      const titleText = s.title
+        || (s.statusTracked === false && s.providerLabel ? `${s.providerLabel} · ${id}` : null)
+        || (id === activeId ? 'Current session' : id);
+      setText(title, titleText);
+      setText(time, ago(s.lastOutputAt));
+      setText(statusText, STATE_TEXT[state]);
+      setText(prev, s.lastPrompt || '');
+      setData(row, 'unread', String(unreadFlag(s)));
+      setData(status, 'state', state);
+      const label = `${titleText}. ${STATE_TEXT[state]}.`;
+      if (row.getAttribute('aria-label') !== label) row.setAttribute('aria-label', label);
+      return refs;
+    }
 
     function renderSessionList() {
-      const seen = new Set();
-      const listed = [];
-      let cursor = slRows.firstElementChild;
+      const view = arrange(layout, order);
+      // With no groups the list looks exactly as it did before groups existed:
+      // no headers, just the rows. Ungrouped only gets a header once there is
+      // something for it to be distinguished from.
+      const showHeaders = view.groups.length > 0;
+      const sections = [
+        ...view.groups,
+        { id: UNGROUPED, name: 'Ungrouped', collapsed: false, sessions: view.ungrouped },
+      ];
+      const listed   = [];
+      const sequence = [];   // elements, in the order they should appear
 
-      for (const id of order) {
-        const s = sessions.get(id);
-        if (!s) continue;
-        seen.add(id);
-        listed.push(s);
-        const state = stateOfSession(s);
-
-        let refs = slRowEls.get(id);
-        if (!refs) {
-          refs = buildRow(id);
-          slRowEls.set(id, refs);
+      for (const g of sections) {
+        const members = g.sessions.map((id) => sessions.get(id)).filter(Boolean);
+        if (showHeaders) {
+          let h = slGroupEls.get(g.id);
+          if (!h) {
+            h = buildGroupHeader(g.id);
+            slGroupEls.set(g.id, h);
+          }
+          setText(h.name, g.name);
+          setText(h.count, String(members.length));
+          setData(h.head, 'collapsed', String(g.collapsed));
+          if (g.id !== UNGROUPED && h.toggle.getAttribute('aria-expanded') !== String(!g.collapsed))
+            h.toggle.setAttribute('aria-expanded', String(!g.collapsed));
+          const news = g.collapsed && members.some((s) => wantsUser(stateOfSession(s)));
+          if (h.dot.hidden === news) h.dot.hidden = !news;
+          sequence.push(h.head);
         }
-        const { row, title, time, status, statusText, prev } = refs;
-
-        // A session whose harness writes no transcript has no AI-generated
-        // title to show and never will, so it is named for what it IS. This is
-        // the highest-value line in the provider feature: it turns a bare
-        // `main-3` into `Codex · main-3` and makes the tab legible. Claude rows
-        // keep their conversation title, and a Claude tab too new to have one
-        // keeps the existing fallback, so nothing regresses.
-        //
-        // Keyed off statusTracked rather than the provider id, for the same
-        // reason the label comes from the server: the client holds no table of
-        // which providers write transcripts.
-        const titleText = s.title
-          || (s.statusTracked === false && s.providerLabel ? `${s.providerLabel} · ${id}` : null)
-          || (id === activeId ? 'Current session' : id);
-        setText(title, titleText);
-        setText(time, ago(s.lastOutputAt));
-        setText(statusText, STATE_TEXT[state]);
-        setText(prev, s.lastPrompt || '');
-        const unread = String(unreadFlag(s));
-        if (row.dataset.unread !== unread) row.dataset.unread = unread;
-        if (status.dataset.state !== state) status.dataset.state = state;
-        const label = `${titleText}. ${STATE_TEXT[state]}.`;
-        if (row.getAttribute('aria-label') !== label) row.setAttribute('aria-label', label);
-
-        // Put the row in the right place only if it is not already there, so a
-        // steady-state render moves nothing.
-        if (row === cursor) cursor = cursor.nextElementSibling;
-        else slRows.insertBefore(row, cursor);
+        for (const id of g.sessions) {
+          const s = sessions.get(id);
+          if (!s) continue;
+          listed.push(s);
+          const refs = updateRow(id, s);
+          if (!g.collapsed) sequence.push(refs.item);
+        }
       }
 
+      const liveGroups = new Set(showHeaders ? sections.map((g) => g.id) : []);
+      for (const gid of [...slGroupEls.keys()]) {
+        if (liveGroups.has(gid)) continue;
+        // Same as dropSessionRow: a group removed elsewhere mid-drag.
+        if (listDrag?.el === slGroupEls.get(gid).head) cancelListDrag();
+        slGroupEls.get(gid).head.remove();
+        slGroupEls.delete(gid);
+      }
       for (const id of [...slRowEls.keys()]) {
-        if (!seen.has(id)) dropSessionRow(id);
+        if (!sessions.has(id)) dropSessionRow(id);
+      }
+
+      // Put each element in the right place only if it is not already there,
+      // so a steady-state render moves nothing. Skipped entirely while a drag
+      // is in progress: the drag is moving these same nodes, and a background
+      // session's output re-rendering the list must not yank one out from
+      // under the pointer. The text updates above still land.
+      if (!listDrag) {
+        let cursor = slRows.firstElementChild;
+        for (const el of sequence) {
+          if (el === cursor) cursor = cursor.nextElementSibling;
+          else slRows.insertBefore(el, cursor);
+        }
+        // Whatever is left is a row inside a collapsed group: detached, but
+        // kept in the cache so expanding the group reuses it.
+        while (cursor) {
+          const next = cursor.nextElementSibling;
+          cursor.remove();
+          cursor = next;
+        }
       }
 
       setText(slCount, summarise(listed, activeId));
@@ -1475,6 +1803,358 @@
       await createSession(provider);
       closeSessionList();
     };
+
+    // ── Session groups ──────────────────────────────────────────────────────
+    // Every edit is optimistic: the new layout renders at once and is PUT to
+    // the server, whose normalised answer then replaces it. Edits always start
+    // from arrange(), not the raw layout, so an index read off the screen
+    // means the same thing in the layout it is applied to.
+    const undoBtn      = document.getElementById('sl-undo');
+    const autogroupBtn = document.getElementById('sl-autogroup');
+    const toolsMsg     = document.getElementById('sl-tools-msg');
+    let undoSnapshot   = null;
+
+    function setToolsMsg(text, tone) {
+      toolsMsg.textContent = text;
+      if (tone) toolsMsg.dataset.tone = tone; else delete toolsMsg.dataset.tone;
+    }
+
+    const shownLayout = () => arrange(layout, order);
+    const sameLayout  = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+    function afterLayoutChange() {
+      undoBtn.hidden = !undoSnapshot;
+      updateSessionLabel();
+      if (document.body.dataset.view === 'list') renderSessionList();
+    }
+
+    // Undo covers the two edits that rearrange things you did not just point
+    // at (Autogroup, removing a group). Any other edit retires it, because
+    // undoing past that edit would silently revert it too.
+    function commitLayout(next, { undoable = false } = {}) {
+      undoSnapshot = undoable ? shownLayout() : null;
+      layout = { ...next, rev: layoutRev };
+      afterLayoutChange();
+      layoutQueued = next;
+      if (!layoutSaving) flushLayoutSaves();
+    }
+
+    // Saves go out ONE AT A TIME, newest wins. Two PUTs in flight together can
+    // reach the server in either order, and the server keeps whichever lands
+    // last, so a quick second edit could be overwritten by the first. Each PUT
+    // names the revision it was made from, so an edit made against a list
+    // another device has since changed is refused rather than clobbering it.
+    async function flushLayoutSaves() {
+      layoutSaving = true;
+      try {
+        while (layoutQueued) {
+          const body = layoutQueued;
+          layoutQueued = null;
+          let r, data;
+          try {
+            r = await fetch('/layout', {
+              method:  'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ ...body, baseRev: layoutRev }),
+            });
+            data = await r.json().catch(() => ({}));
+          } catch (e) {
+            setToolsMsg('Could not save the groups. Check the connection.', 'error');
+            continue;
+          }
+          if (r.ok) {
+            layoutRev = data.rev;
+            // A newer edit is already queued; showing this one would flicker.
+            if (!layoutQueued) { adoptLayout(data); afterLayoutChange(); }
+          } else {
+            // Conflict or a failed write: show what the server really holds,
+            // and drop anything queued behind it, which was built on the edit
+            // that just failed.
+            layoutQueued = null;
+            undoSnapshot = null;
+            if (data.layout) { adoptLayout(data.layout); afterLayoutChange(); }
+            setToolsMsg(r.status === 409
+              ? 'The list changed on another device, so that change was not saved.'
+              : `Could not save the groups: ${data.error || `HTTP ${r.status}`}.`, 'error');
+          }
+        }
+      } finally {
+        layoutSaving = false;
+      }
+    }
+
+    function toggleGroupCollapsed(gid) {
+      commitLayout(toggleGroup(shownLayout(), gid));
+    }
+
+    function removeGroup(gid) {
+      const name = shownLayout().groups.find((g) => g.id === gid)?.name;
+      commitLayout(deleteGroup(shownLayout(), gid), { undoable: true });
+      setToolsMsg(`Removed "${name}". Its sessions moved to Ungrouped.`);
+    }
+
+    // Rename in place: the name becomes a text field. Enter or leaving the
+    // field saves, Escape cancels. The field sits BESIDE the toggle button
+    // rather than in it, since an input inside a button is not focusable.
+    function startRename(gid) {
+      renderSessionList();
+      const h = slGroupEls.get(gid);
+      if (!h || h.head.querySelector('.sl-group-input')) return;
+      const before = h.name.textContent;
+      const input = document.createElement('input');
+      input.className = 'sl-group-input';
+      input.maxLength = MAX_NAME_LENGTH;
+      input.value = before;
+      input.setAttribute('aria-label', 'Group name');
+      h.toggle.hidden = true;
+      h.toggle.after(input);
+      input.focus();
+      input.select();
+
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        const name = input.value.trim();
+        input.remove();
+        h.toggle.hidden = false;
+        if (save && name && name !== before) commitLayout(renameGroup(shownLayout(), gid, name));
+      };
+      input.addEventListener('keydown', (e) => {
+        // stopPropagation keeps Escape from also closing the whole list.
+        if (e.key === 'Enter')  { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      });
+      input.addEventListener('blur', () => finish(true));
+    }
+
+    window.newGroup = function() {
+      // The server keeps at most MAX_GROUPS; offering one more would show a
+      // group that vanishes the moment the save comes back.
+      if (shownLayout().groups.length >= MAX_GROUPS) {
+        setToolsMsg(`That is the most groups the list holds (${MAX_GROUPS}).`, 'error');
+        return;
+      }
+      const id = newGroupId();
+      commitLayout(addGroup(shownLayout(), id, 'New group'));
+      setToolsMsg('Name the group, then drag sessions into it.');
+      startRename(id);
+    };
+
+    window.autogroupSessions = async function() {
+      autogroupBtn.disabled = true;
+      setToolsMsg('Grouping by topic…');
+      const before = shownLayout();
+      try {
+        const r = await fetch('/layout/autogroup', { method: 'POST' });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+        // The server has already saved this, at a newer revision than any poll
+        // already in flight, so those polls are discarded on arrival. Undo
+        // restores what the server applied it to, which includes any edit
+        // made while the model was thinking; `before` is only the fallback
+        // for a server that does not send it.
+        const { previous, ...grouped } = body;
+        undoSnapshot = previous ? arrange(previous, order) : before;
+        adoptLayout(grouped);
+        afterLayoutChange();
+        const count = grouped.groups.reduce((n, g) => n + g.sessions.length, 0);
+        setToolsMsg(grouped.groups.length
+          ? `Grouped ${count} session${count === 1 ? '' : 's'} into ${grouped.groups.length} group${grouped.groups.length === 1 ? '' : 's'}.`
+          : 'No clear groups found.');
+      } catch (e) {
+        setToolsMsg(`Autogroup failed: ${e.message}`, 'error');
+      } finally {
+        autogroupBtn.disabled = false;
+      }
+    };
+
+    window.undoLayout = function() {
+      if (!undoSnapshot) return;
+      commitLayout(undoSnapshot);
+      setToolsMsg('Put back the previous grouping.');
+    };
+
+    // ── Drag to reorder ─────────────────────────────────────────────────────
+    // Pointer events, NOT HTML5 drag and drop: HTML5 DnD never fires for a
+    // finger on mobile browsers, and the phone is a primary client.
+    //
+    // The dragged node itself moves through the list as the pointer crosses
+    // its neighbours' midpoints, so what you see during the drag is exactly
+    // the order you get on release. Capture is set on #sl-rows, NOT on the
+    // grip: moving a node removes and re-inserts it, and removing the capture
+    // target releases the capture, which ends the drag after the first step.
+    function installListDrag() {
+      const EDGE = 48;    // px from the list's top or bottom edge that scrolls it
+      let raf = 0;
+
+      const midY = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.top + r.height / 2;
+      };
+
+      function moveTo(el, before) {
+        if (before === el) return;
+        if (before ? el.nextElementSibling === before : slRows.lastElementChild === el) return;
+        slRows.insertBefore(el, before);
+      }
+
+      function placeDragged() {
+        const { el, kind, y } = listDrag;
+        const others = [...slRows.children].filter((c) => c !== el);
+        if (kind === 'group') {
+          // Groups move among headers only, and always stay above Ungrouped.
+          const heads = others.filter((c) => c.classList.contains('sl-group'));
+          const rest  = heads.find((h) => h.dataset.groupId === UNGROUPED) || null;
+          moveTo(el, heads.find((h) => h !== rest && midY(h) > y) || rest);
+          return;
+        }
+        let before = others.find((c) => midY(c) > y) || null;
+        // Never above the first header: a row there would belong to no group.
+        const first = others.find((c) => c.classList.contains('sl-group'));
+        if (first && before === first) before = others[others.indexOf(first) + 1] || null;
+        moveTo(el, before);
+      }
+
+      function tick() {
+        if (!listDrag) return;
+        const r = slRows.getBoundingClientRect();
+        const y = listDrag.y;
+        let dy = 0;
+        if (y < r.top + EDGE)         dy = -Math.ceil((r.top + EDGE - y) / 4);
+        else if (y > r.bottom - EDGE) dy =  Math.ceil((y - (r.bottom - EDGE)) / 4);
+        if (dy) {
+          slRows.scrollTop += dy;
+          placeDragged();
+        }
+        raf = requestAnimationFrame(tick);
+      }
+
+      // Where the node ended up, read back as a layout edit: the nearest header
+      // above a row is its group, and the rows between them are its index.
+      //
+      // A collapsed group has no rows in the DOM to count, so a row landing
+      // under its header goes to the END of it, like dropping into a folder,
+      // unless `enteredFromAbove` (a keyboard step down across the header),
+      // where the start is the place it was walking towards.
+      function dropResult(d, { enteredFromAbove = false } = {}) {
+        const base = shownLayout();
+        if (d.kind === 'group') {
+          const gid = d.el.dataset.groupId;
+          const heads = [...slRows.children]
+            .filter((c) => c.classList.contains('sl-group') && c.dataset.groupId !== UNGROUPED)
+            .map((c) => c.dataset.groupId);
+          return moveGroup(base, gid, heads.indexOf(gid));
+        }
+        let gid = UNGROUPED;
+        let index = 0;
+        for (let p = d.el.previousElementSibling; p; p = p.previousElementSibling) {
+          if (p.classList.contains('sl-group')) { gid = p.dataset.groupId; break; }
+          index++;
+        }
+        const into = base.groups.find((g) => g.id === gid);
+        if (into?.collapsed && !enteredFromAbove) index = into.sessions.length;
+        return moveSession(base, d.el.dataset.sessionId, gid, index);
+      }
+
+      // The keyboard path: Up/Down on a focused grip moves its row or group one
+      // place, through the same DOM-then-dropResult path a drag takes, so the
+      // two cannot disagree about what a position means. A row moving past a
+      // header changes group, exactly as dragging it there would.
+      function stepKey(e) {
+        const grip = e.target.closest?.('.sl-grip');
+        if (!grip || grip.classList.contains('sl-grip-none') || listDrag) return;
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        e.preventDefault();
+        const el = grip.parentElement;
+        const up = e.key === 'ArrowUp';
+        const kind = el.classList.contains('sl-group') ? 'group' : 'session';
+        const isHead = (c) => c?.classList.contains('sl-group');
+        if (kind === 'group') {
+          const heads = [...slRows.children].filter((c) => isHead(c) && c.dataset.groupId !== UNGROUPED);
+          const i = heads.indexOf(el);
+          const swap = heads[up ? i - 1 : i + 1];
+          if (!swap) return;
+          slRows.insertBefore(el, up ? swap : swap.nextElementSibling);
+        } else {
+          const prev = el.previousElementSibling;
+          const next = el.nextElementSibling;
+          if (up) {
+            // Directly under the first header there is nowhere further up.
+            if (!prev || (isHead(prev) && !prev.previousElementSibling)) return;
+            slRows.insertBefore(el, prev);
+          } else {
+            if (!next) return;
+            slRows.insertBefore(el, next.nextElementSibling);
+          }
+        }
+        const next = dropResult({ el, kind }, { enteredFromAbove: !up });
+        if (!sameLayout(next, shownLayout())) commitLayout(next);
+        else renderSessionList();
+        // Moving a node can drop its focus; keep the keyboard where it was.
+        grip.focus();
+      }
+
+      function endDrag(commit, { render = true } = {}) {
+        const d = listDrag;
+        listDrag = null;
+        cancelAnimationFrame(raf);
+        try { slRows.releasePointerCapture(d.pointerId); } catch { /* already released */ }
+        d.el.classList.remove('sl-dragging');
+        delete slRows.dataset.dragging;
+        if (commit) {
+          const next = dropResult(d);
+          if (!sameLayout(next, shownLayout())) {
+            commitLayout(next);
+            return;
+          }
+        }
+        // Cancelled, or dropped where it started: put back whatever moved.
+        if (render) renderSessionList();
+      }
+
+      slRows.addEventListener('pointerdown', (e) => {
+        const grip = e.target.closest('.sl-grip');
+        if (!grip || grip.classList.contains('sl-grip-none') || listDrag) return;
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        const el = grip.parentElement;
+        // Stops text selection on desktop and the long-press menu on a phone.
+        e.preventDefault();
+        listDrag = {
+          el,
+          kind: el.classList.contains('sl-group') ? 'group' : 'session',
+          pointerId: e.pointerId,
+          y: e.clientY,
+        };
+        slRows.setPointerCapture(e.pointerId);
+        el.classList.add('sl-dragging');
+        slRows.dataset.dragging = listDrag.kind;
+        raf = requestAnimationFrame(tick);
+      });
+      // No render here: the caller IS the renderer (or removeSession on its
+      // way to one), and a nested render would sweep the caches it is walking.
+      cancelListDrag = () => { if (listDrag) endDrag(false, { render: false }); };
+      slRows.addEventListener('pointermove', (e) => {
+        if (!listDrag || e.pointerId !== listDrag.pointerId) return;
+        listDrag.y = e.clientY;
+        placeDragged();
+      });
+      slRows.addEventListener('pointerup', (e) => {
+        if (listDrag && e.pointerId === listDrag.pointerId) endDrag(true);
+      });
+      slRows.addEventListener('pointercancel', (e) => {
+        if (listDrag && e.pointerId === listDrag.pointerId) endDrag(false);
+      });
+      slRows.addEventListener('keydown', stepKey);
+      // Capture phase, so Escape cancels the drag without also closing the list.
+      document.addEventListener('keydown', (e) => {
+        if (listDrag && e.key === 'Escape') {
+          e.stopImmediatePropagation();
+          endDrag(false);
+        }
+      }, true);
+    }
+    installListDrag();
 
     // ── Resync ──────────────────────────────────────────────────────────────
     // Reconcile the panes on screen with the sessions the server actually has.
@@ -1542,7 +2222,9 @@
     async function bootstrap() {
       applyConnStatusToDot('connecting');
       let list = [];
-      try { list = await listSessions(); }
+      // The layout rides along so the `n/m` counter is in display order from
+      // the first paint. refreshLayout swallows its own failures.
+      try { [list] = await Promise.all([listSessions(), refreshLayout()]); }
       catch (e) { console.warn('listSessions failed', e); }
       if (!list.length) {
         // /sessions may be missing entirely (static-mode tests boot createApp()
@@ -1766,9 +2448,10 @@
     }
 
     function cycleActive(delta) {
-      if (order.length < 2) return;
-      const idx  = order.indexOf(activeId);
-      const next = order[(idx + delta + order.length) % order.length];
+      const shown = shownOrder();
+      if (shown.length < 2) return;
+      const idx  = shown.indexOf(activeId);
+      const next = shown[(idx + delta + shown.length) % shown.length];
       setActive(next);
     }
 

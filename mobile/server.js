@@ -9,6 +9,8 @@ const { exec, execFile, spawnSync } = require('child_process');
 const { WebSocketServer } = require('ws');
 const { SAFE_ID, UUID_RE } = require('./safeId');
 const { createSessionStore, nullSessionStore } = require('./sessionStore');
+const { createLayoutStore, createLayoutApi } = require('./sessionLayout');
+const { buildPrompt, applyAutogroup, claudeClassifier } = require('./autogroup');
 const {
   PROVIDER_IDS, DEFAULT_PROVIDER, isProvider, labelFor,
   sessionKindFor, resolveInput,
@@ -362,7 +364,16 @@ function readCodexTurnStatus(threadId) {
   return readCodexTurnStatuses([threadId])[0] || 'unknown';
 }
 
-function createApp({ sessionsApi, shellOverride = Boolean(SHELL_CMD) } = {}) {
+// `layoutApi` and `classify` only matter with a sessionsApi. Left out, the
+// layout lives in memory for the life of the app and Autogroup calls the real
+// headless Claude; startServer() passes the file-backed layout, and tests pass
+// a fake classifier so no test ever reaches a model.
+function createApp({
+  sessionsApi,
+  shellOverride = Boolean(SHELL_CMD),
+  layoutApi = sessionsApi && createLayoutApi({ liveIds: () => sessionsApi.list().map((s) => s.id) }),
+  classify  = claudeClassifier,
+} = {}) {
   const app = express();
   const inputTails = new WeakMap();
 
@@ -472,6 +483,53 @@ function createApp({ sessionsApi, shellOverride = Boolean(SHELL_CMD) } = {}) {
 
     app.post('/refresh', requireSession, (req, res) => {
       refreshTmuxSession(req.session.id, (err) => res.json({ ok: !err }));
+    });
+
+    // Session list grouping and order. Display only: nothing here touches
+    // status, unread or the roster. See sessionLayout.js.
+    app.get('/layout', (req, res) => res.json(layoutApi.get()));
+
+    // Answer a layoutApi.put() result. A conflict carries the current layout
+    // so the browser can show it instead of the edit that lost.
+    function sendPut(res, result, extra = {}) {
+      if (result.status === 'saved') return res.json({ ...result.layout, ...extra });
+      if (result.status === 'conflict')
+        return res.status(409).json({ error: 'the list changed on another device', layout: result.layout });
+      return res.status(503).json({ error: 'the layout could not be saved', layout: result.layout });
+    }
+
+    app.put('/layout', (req, res) => {
+      const body = req.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body))
+        return res.status(400).json({ error: 'layout object required' });
+      // Optional, so a client that predates revisions still saves.
+      if (body.baseRev !== undefined && !Number.isSafeInteger(body.baseRev))
+        return res.status(400).json({ error: 'baseRev must be an integer' });
+      sendPut(res, layoutApi.put(body, body.baseRev));
+    });
+
+    // One model call at a time: a second press while the first is running
+    // would race two answers into the same file.
+    let autogrouping = false;
+    app.post('/layout/autogroup', async (req, res) => {
+      if (autogrouping) return res.status(409).json({ error: 'autogroup already running' });
+      autogrouping = true;
+      try {
+        const rows   = sessionsApi.describe();
+        const result = await classify(buildPrompt(rows, layoutApi.get()));
+        // Re-read both: sessions and the layout may have changed while the
+        // model was thinking, and the answer must only place what still
+        // exists. `previous` is what it was applied to, edits made during the
+        // call included, and is what the browser's Undo restores.
+        const ids      = sessionsApi.list().map((s) => s.id);
+        const previous = layoutApi.get();
+        sendPut(res, layoutApi.put(applyAutogroup(previous, result, ids), previous.rev), { previous });
+      } catch (err) {
+        console.warn(`autogroup: ${err.message}`);
+        res.status(502).json({ error: err.message });
+      } finally {
+        autogrouping = false;
+      }
     });
   }
 
@@ -1272,7 +1330,16 @@ function startServer() {
   const restored = sessionsApi.restore({ autoContinue: cleanExit });
   if (restored.length) console.log(`restored ${restored.length} session(s): ${restored.join(', ')}`);
 
-  const app    = createApp({ sessionsApi });
+  // Prune the layout against what was restored BEFORE any new id can be
+  // minted: ids restart from the highest restored one, so a tab killed last
+  // run can hand its id to a new tab, which must not inherit its old group.
+  const layoutApi = createLayoutApi({
+    store:   createLayoutStore({ dir: STATE_DIR }),
+    liveIds: () => sessionsApi.list().map((s) => s.id),
+  });
+  layoutApi.prune();
+
+  const app    = createApp({ sessionsApi, layoutApi });
   const server = http.createServer(app);
   const wss    = new WebSocketServer({ noServer: true });
 
