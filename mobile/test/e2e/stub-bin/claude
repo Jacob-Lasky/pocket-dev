@@ -18,6 +18,17 @@
 # alone, then failed under parallel workers that shared a server. PD_SID_FILE is
 # delivered explicitly by `new-session -e` (see buildTmuxSpawnArgs), so it is
 # always present. DO NOT swap this back for a plain env var.
+# `claude -p` is the server's Autogroup call (autogroup.js), not a session.
+# Answer it the way the real CLI does with --output-format json and a schema:
+# one JSON object whose structured_output holds the groups. The first two
+# session ids in the prompt become a group named "stubbed", so the browser test
+# exercises the real spawn, stdin and parse path without reaching a model.
+if [ "${1:-}" = "-p" ]; then
+  ids=$(grep -o '"id":"[^"]*"' | head -2 | sed 's/"id":\("[^"]*"\)/\1/' | paste -sd, -)
+  printf '{"type":"result","is_error":false,"structured_output":{"groups":[{"name":"stubbed","sessions":[%s]}]}}' "$ids"
+  exit 0
+fi
+
 log=""
 if [ -n "${PD_SID_FILE:-}" ]; then
   log="$(dirname "$(dirname "$PD_SID_FILE")")/claude-argv.log"

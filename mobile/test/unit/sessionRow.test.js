@@ -15,10 +15,11 @@
 // asserted about. One code path, so the file that gets looked at is the same
 // DOM these assertions ran against.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATE_TEXT, rowState, isUnread, summarise } from '../../public/js/attention.js';
+import { STATE_TEXT, rowState, isUnread, summarise, wantsUser } from '../../public/js/attention.js';
+import { UNGROUPED, emptyLayout, arrange } from '../../public/js/groups.js';
 
 const indexHtml = fs.readFileSync(path.join(__dirname, '../../public/index.html'), 'utf8');
 
@@ -39,20 +40,20 @@ function sliceRowRenderer() {
 const styleSheet = indexHtml.slice(indexHtml.indexOf('<style>') + '<style>'.length, indexHtml.indexOf('</style>'));
 
 // Stand the sliced renderer up against a real DOM.
-function mountRenderer({ sessions, order, activeId }) {
+function mountRenderer({ sessions, order, activeId, layout = emptyLayout(), listDrag = null, cancelListDrag = () => {} }) {
   document.head.innerHTML = `<style>${styleSheet}</style>`;
   document.body.innerHTML = '<span id="sl-count"></span><ul id="sl-rows"></ul>';
-  // slRows and slCount are declared above the slice, so they are injected here
-  // exactly as the browser supplies them: two getElementById lookups.
+  // slRows, slCount, layout and listDrag are declared above the slice, so they
+  // are injected here exactly as the browser supplies them.
   const factory = new Function(
-    'document', 'sessions', 'order', 'activeId', 'slRows', 'slCount',
-    'STATE_TEXT', 'rowState', 'isUnread', 'summarise',
-    `${sliceRowRenderer()}\nreturn { renderSessionList, buildRow };`,
+    'document', 'sessions', 'order', 'activeId', 'slRows', 'slCount', 'layout', 'listDrag', 'cancelListDrag',
+    'STATE_TEXT', 'rowState', 'isUnread', 'summarise', 'wantsUser', 'UNGROUPED', 'arrange',
+    `${sliceRowRenderer()}\nreturn { renderSessionList, buildRow, dropSessionRow, slRowEls, slGroupEls };`,
   );
   return factory(
     document, sessions, order, activeId,
-    document.getElementById('sl-rows'), document.getElementById('sl-count'),
-    STATE_TEXT, rowState, isUnread, summarise,
+    document.getElementById('sl-rows'), document.getElementById('sl-count'), layout, listDrag, cancelListDrag,
+    STATE_TEXT, rowState, isUnread, summarise, wantsUser, UNGROUPED, arrange,
   );
 }
 
@@ -266,5 +267,113 @@ describe('a Claude tab with no title yet', () => {
     const renderer = mountRenderer({ sessions: fresh, order: ['main-1'], activeId: 'main-1' });
     renderer.renderSessionList();
     expect(document.querySelector('.sl-title').textContent).toBe('Current session');
+  });
+});
+
+describe('the list with groups', () => {
+  const ids = ['main-1', 'main-2', 'main-3'];
+  const make = () => new Map(ids.map((id) => [id, sessionFrom({ ...CLAUDE_ROW, title: `t ${id}`, unread: id === 'main-3' }, { id })]));
+  const grouped = (collapsed) => ({
+    version: 1,
+    groups: [{ id: 'g-a', name: 'deephive', collapsed, sessions: ['main-3', 'main-1'] }],
+    ungrouped: ['main-2'],
+  });
+  const shape = () => [...document.getElementById('sl-rows').children]
+    .map((el) => (el.classList.contains('sl-group') ? `[${el.querySelector('.sl-group-name').textContent}]` : el.dataset.sessionId));
+
+  it('has no headers at all until a group exists, so an ungrouped list is unchanged', () => {
+    mountRenderer({ sessions: make(), order: ids, activeId: 'main-1' }).renderSessionList();
+    expect(shape()).toEqual(['main-1', 'main-2', 'main-3']);
+  });
+
+  it('puts each group under its header, in layout order, with Ungrouped last', () => {
+    mountRenderer({ sessions: make(), order: ids, activeId: 'main-1', layout: grouped(false) }).renderSessionList();
+    expect(shape()).toEqual(['[deephive]', 'main-3', 'main-1', '[Ungrouped]', 'main-2']);
+    expect(document.querySelector('[data-group-id="g-a"] .sl-group-count').textContent).toBe('2');
+  });
+
+  it('hides a collapsed group\'s rows but keeps its news on the header', () => {
+    mountRenderer({ sessions: make(), order: ids, activeId: 'main-1', layout: grouped(true) }).renderSessionList();
+    expect(shape()).toEqual(['[deephive]', '[Ungrouped]', 'main-2']);
+    // main-3 inside it is unread, so the header carries the green dot.
+    expect(document.querySelector('[data-group-id="g-a"] .sl-group-dot').hidden).toBe(false);
+    expect(document.querySelector('[data-group-id="g-a"] .sl-group-toggle').getAttribute('aria-expanded')).toBe('false');
+    // The summary still counts every session, hidden or not.
+    expect(document.getElementById('sl-count').textContent).toMatch(/^3 sessions/);
+  });
+
+  it('gives Ungrouped no grip, rename or remove: it is where sessions go, not a group', () => {
+    mountRenderer({ sessions: make(), order: ids, activeId: 'main-1', layout: grouped(false) }).renderSessionList();
+    const rest = document.querySelector('[data-group-id=""]');
+    expect(rest.querySelector('.sl-grip').classList.contains('sl-grip-none')).toBe(true);
+    expect(rest.querySelectorAll('.sl-group-btn')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-group-id="g-a"] .sl-group-btn')).toHaveLength(2);
+  });
+
+  it('puts the grip BESIDE the row button, never inside it', () => {
+    // Interactive content inside a <button> is invalid and the button takes its
+    // events, so a grip in there could never start a drag.
+    mountRenderer({ sessions: make(), order: ids, activeId: 'main-1' }).renderSessionList();
+    for (const row of document.querySelectorAll('.sl-row')) {
+      expect(row.querySelector('.sl-grip')).toBeNull();
+      expect([...row.parentElement.children].some((c) => c.classList.contains('sl-grip'))).toBe(true);
+    }
+  });
+
+  it('reuses every row and header across renders, regrouping included', () => {
+    // The click guard from session-list-click.spec.js, extended to groups: a
+    // node rebuilt under a press never receives the click. The layout object
+    // is MUTATED between renders, because the renderer closes over that one
+    // binding exactly as index.html's does; the second render is a genuine
+    // regroup (a row changes group and order, a group collapses and reopens).
+    const sessions = make();
+    const layout = grouped(false);
+    const r = mountRenderer({ sessions, order: ids, activeId: 'main-1', layout });
+    r.renderSessionList();
+    const key = (el) => el.dataset.sessionId ?? el.dataset.groupId;
+    const before = new Map([...document.querySelectorAll('#sl-rows > *')].map((el) => [key(el), el]));
+
+    layout.groups = [{ id: 'g-a', name: 'deephive', collapsed: false, sessions: ['main-2', 'main-1'] }];
+    layout.ungrouped = ['main-3'];
+    r.renderSessionList();
+    expect(shape()).toEqual(['[deephive]', 'main-2', 'main-1', '[Ungrouped]', 'main-3']);
+    for (const el of document.querySelectorAll('#sl-rows > *')) expect(before.get(key(el))).toBe(el);
+
+    layout.groups = [{ ...layout.groups[0], collapsed: true }];
+    r.renderSessionList();
+    layout.groups = [{ ...layout.groups[0], collapsed: false }];
+    r.renderSessionList();
+    for (const el of document.querySelectorAll('#sl-rows > *')) expect(before.get(key(el))).toBe(el);
+  });
+
+  it('ends a drag whose row or header is removed, instead of letting the next move re-insert it', () => {
+    const cancel = vi.fn();
+    const drag = { el: null };   // truthy: a drag is in progress
+    const layout = grouped(false);
+    const r = mountRenderer({ sessions: make(), order: ids, activeId: 'main-1', layout, listDrag: drag, cancelListDrag: cancel });
+    r.renderSessionList();
+
+    drag.el = r.slRowEls.get('main-1').item;
+    r.dropSessionRow('main-3');               // some other row: the drag goes on
+    expect(cancel).not.toHaveBeenCalled();
+    r.dropSessionRow('main-1');               // the dragged row
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    // A group removed on another device while its header is in the air.
+    drag.el = r.slGroupEls.get('g-a').head;
+    layout.groups = [];
+    r.renderSessionList();
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not place anything while a drag is in progress', () => {
+    // The drag moves these same nodes; a background session's output
+    // re-rendering mid-drag must not yank one out from under the pointer.
+    const r = mountRenderer({ sessions: make(), order: ids, activeId: 'main-1', listDrag: { kind: 'session' } });
+    const rowsEl = document.getElementById('sl-rows');
+    r.renderSessionList();
+    expect(rowsEl.children).toHaveLength(0);
+    // Text still lands: the summary is written either way.
+    expect(document.getElementById('sl-count').textContent).toMatch(/^3 sessions/);
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSessionsApi, buildSessionCommand, buildTmuxSpawnArgs } from '../../server.js';
+import { createSessionsApi, buildSessionCommand, buildTmuxSpawnArgs, CODEX_LAUNCHER_PATH } from '../../server.js';
 import { createSessionStore } from '../../sessionStore.js';
 import { archivedNotice as archived } from '../fixtures/rc-notices.js';
 
@@ -898,7 +898,12 @@ describe('the provider a session runs', () => {
     // so with the provider per session a Codex tab would have come up running
     // CLAUDE in a restart loop, which is the worst available failure: the tab
     // works, and it is the wrong harness.
-    expect(buildSessionCommand('codex')).not.toContain('claude');
+    // The launcher's own directory is cut out first: it is wherever the repo
+    // is checked out, and a checkout under `.claude/worktrees/` put the word
+    // in every command and failed this for a reason unrelated to the harness.
+    const cmd = buildSessionCommand('codex').split(path.dirname(CODEX_LAUNCHER_PATH)).join('<mobile>');
+    expect(cmd).toContain('<mobile>/pd-codex-session');
+    expect(cmd).not.toContain('claude');
   });
 
   it('refuses to build a command for an id no registry knows', () => {
