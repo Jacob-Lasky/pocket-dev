@@ -408,6 +408,31 @@
       touch-action: manipulation;
     }
     .sl-group-btn:hover, .sl-group-btn:focus-visible { color: #e6edf3; background: #21262d; outline: none; }
+    .sl-row[hidden] { display: none; }
+    .sl-row-rename {
+      flex: 0 0 auto;
+      width: 40px;
+      background: none;
+      border: 0;
+      color: #484f58;
+      font-size: 13px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .sl-row-rename:hover, .sl-row-rename:focus-visible { color: #e6edf3; background: #21262d; outline: none; }
+    .sl-session-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 10px 4px;
+      padding: 8px 10px;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #388bfd;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 14px;
+      outline: none;
+    }
     .sl-group-input {
       flex: 1 1 auto;
       min-width: 0;
@@ -541,7 +566,9 @@
     }
 
     .session-label {
-      display: block;
+      display: flex;
+      align-items: center;
+      gap: 8px;
       width: 100%;
       text-align: left;
       background: none;
@@ -558,6 +585,31 @@
       touch-action: manipulation;
     }
     .session-label:active { color: #e6edf3; }
+    /* Three parts, in reading order: where you are in the list, which group,
+       which conversation. Only the name shrinks: the counter and the group are
+       short and are what tell two similarly named sessions apart. */
+    .lbl-count { flex: 0 0 auto; color: #6e7681; }
+    .lbl-group {
+      /* Keeps its natural width up to the cap; the name gives way first. */
+      flex: 0 0 auto;
+      min-width: 0;
+      max-width: 40%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding: 1px 7px;
+      border-radius: 4px;
+      background: #bc8cff1f;
+      color: #bc8cff;
+      font-size: 0.92em;
+    }
+    .lbl-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #c9d1d9;
+    }
+    .lbl-group[hidden], .lbl-name[hidden] { display: none; }
     .session-label:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
 
     /* Desktop layout */
@@ -590,7 +642,7 @@
          it must never be inside #btn-group: collapsing the toolbar would hide
          both the answer to "which session am I in" and the way out of it. -->
     <div id="topbar">
-      <button id="session-label" class="session-label" onclick="openSessionList()" title="Open the session list">–</button>
+      <button id="session-label" class="session-label" onclick="openSessionList()" title="Open the session list"><span class="lbl-count">–</span><span class="lbl-group" hidden></span><span class="lbl-name" hidden></span></button>
     </div>
     <div id="terminal-container">
       <div id="conn-dot" title="WebSocket disconnected"></div>
@@ -670,6 +722,7 @@
     import { STATE_TEXT, rowState, badgeState, summarise, isUnread, pollDelay, wantsUser } from '/js/attention.js';
     import {
       UNGROUPED, emptyLayout, arrange, displayOrder, addGroup, renameGroup, toggleGroup,
+      renameSession, sessionName, cleanSessionName, MAX_SESSION_NAME_LENGTH,
       deleteGroup, moveSession, moveGroup, newGroupId, MAX_GROUPS, MAX_NAME_LENGTH,
     } from '/js/groups.js';
 
@@ -1292,24 +1345,42 @@
     // follow: "3/7" has to mean the third row you would see.
     const shownOrder = () => displayOrder(arrange(layout, order));
 
+    // The strip above the terminal: counter, group, name. On a phone there is
+    // no browser tab title, so this is the only persistent answer to "which
+    // session am I in", and the group is half of that answer once there are
+    // several conversations about the same project.
+    const lblCount = sessionLbl.querySelector('.lbl-count');
+    const lblGroup = sessionLbl.querySelector('.lbl-group');
+    const lblName  = sessionLbl.querySelector('.lbl-name');
+
     function updateSessionLabel() {
       if (!activeId) {
-        sessionLbl.textContent = '–';
-        sessionLbl.removeAttribute('title');
+        lblCount.textContent = '–';
+        lblGroup.hidden = lblName.hidden = true;
+        sessionLbl.title = 'Open the session list';
         return;
       }
-      const shown = shownOrder();
+      const view    = arrange(layout, order);
+      const shown   = displayOrder(view);
       const counter = `${shown.indexOf(activeId) + 1}/${shown.length}`;
-      const name = sessions.get(activeId)?.title;
-      sessionLbl.textContent = name ? `${counter} · ${name}` : counter;
-      // The row truncates hard on a phone, so keep the full name reachable.
-      if (name) sessionLbl.title = name; else sessionLbl.removeAttribute('title');
+      const group   = view.groups.find((g) => g.sessions.includes(activeId))?.name || '';
+      const s       = sessions.get(activeId);
+      const name    = (s && displayName(s, activeId)) || '';
+      lblCount.textContent = counter;
+      lblGroup.textContent = group;
+      lblName.textContent  = name;
+      lblGroup.hidden = !group;
+      lblName.hidden  = !name;
+      // Both truncate on a phone, so the full text stays reachable.
+      sessionLbl.title = [counter, group, name].filter(Boolean).join(' · ');
+      sessionLbl.setAttribute('aria-label', `${sessionLbl.title}. Open the session list`);
     }
 
     // The browser tab is the one place a name is visible without opening
     // anything, which matters most on desktop where several tabs are open.
     function updateDocumentTitle() {
-      const name = activeId && sessions.get(activeId)?.title;
+      const s = activeId && sessions.get(activeId);
+      const name = s && displayName(s, activeId);
       document.title = name ? `${name} · pocket-dev` : 'pocket-dev';
     }
 
@@ -1360,12 +1431,19 @@
       if (Number.isSafeInteger(next.rev)) layoutRev = next.rev;
     }
 
+    const editingName = () => !!slRows.querySelector('.sl-session-input, .sl-group-input');
+
     async function refreshLayout() {
       try {
         const r = await fetch('/layout');
         if (!r.ok) return;
         const next = await r.json();
-        if (layoutSaving || layoutQueued || listDrag) return;
+        // Nor while a name is being typed. Adopting another device's layout
+        // then would detach the row under a collapsed group (a removed input
+        // fires no blur, so the text is neither saved nor cancelled), and
+        // would move this browser onto the newer revision, so a save made
+        // from the stale value would win instead of getting its conflict.
+        if (layoutSaving || layoutQueued || listDrag || editingName()) return;
         if (Number.isSafeInteger(next.rev) && next.rev < layoutRev) return;
         adoptLayout(next);
       } catch (e) { /* offline or unwired: keep the layout we have */ }
@@ -1480,6 +1558,22 @@
     // is pure and unit-tested. These wrappers just bind the active session,
     // which is the one thing the module cannot know.
     const stateOfSession = (s) => rowState(s, activeId);
+
+    // What a session is called, everywhere it is named: the row, the strip
+    // above the terminal and the browser tab. ONE function, so renaming a
+    // session renames it in all three. A name the user gave wins; then the
+    // conversation's own title; then, for a harness that writes no transcript
+    // (statusTracked false), what it IS, so `main-3` reads `Codex · main-3`.
+    // Null means nothing better than the id is known, and each caller decides
+    // what to show then. Keyed off statusTracked rather than the provider id
+    // because the client holds no table of which providers write transcripts.
+    function automaticName(s, id) {
+      return s.title
+        || (s.statusTracked === false && s.providerLabel ? `${s.providerLabel} · ${id}` : null);
+    }
+    function displayName(s, id) {
+      return sessionName(layout, id) || automaticName(s, id);
+    }
     const unreadFlag     = (s) => isUnread(s, activeId);
 
     function ago(ms) {
@@ -1547,7 +1641,15 @@
       prev.className = 'sl-prev';
 
       row.append(title, meta, status, prev);
-      item.append(grip, row);
+      // Beside the row button, like the grip, never inside it.
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'sl-row-rename';
+      rename.textContent = '✎';
+      rename.title = 'Rename session';
+      rename.setAttribute('aria-label', 'Rename session');
+      rename.addEventListener('click', () => startSessionRename(id));
+      item.append(grip, row, rename);
       // Bound once, for the life of the row, so it cannot be lost to a re-render.
       row.addEventListener('click', () => {
         setActive(id);
@@ -1649,19 +1751,9 @@
       const { row, title, time, status, statusText, prev } = refs;
       const state = stateOfSession(s);
 
-      // A session whose harness writes no transcript has no AI-generated
-      // title to show and never will, so it is named for what it IS. This is
-      // the highest-value line in the provider feature: it turns a bare
-      // `main-3` into `Codex · main-3` and makes the tab legible. Claude rows
-      // keep their conversation title, and a Claude tab too new to have one
-      // keeps the existing fallback, so nothing regresses.
-      //
-      // Keyed off statusTracked rather than the provider id, for the same
-      // reason the label comes from the server: the client holds no table of
-      // which providers write transcripts.
-      const titleText = s.title
-        || (s.statusTracked === false && s.providerLabel ? `${s.providerLabel} · ${id}` : null)
-        || (id === activeId ? 'Current session' : id);
+      // displayName owns the naming rules. A Claude tab too new to have a
+      // title keeps the list's own fallback.
+      const titleText = displayName(s, id) || (id === activeId ? 'Current session' : id);
       setText(title, titleText);
       setText(time, ago(s.lastOutputAt));
       setText(statusText, STATE_TEXT[state]);
@@ -1825,6 +1917,7 @@
     function afterLayoutChange() {
       undoBtn.hidden = !undoSnapshot;
       updateSessionLabel();
+      updateDocumentTitle();
       if (document.body.dataset.view === 'list') renderSessionList();
     }
 
@@ -1922,6 +2015,53 @@
       };
       input.addEventListener('keydown', (e) => {
         // stopPropagation keeps Escape from also closing the whole list.
+        if (e.key === 'Enter')  { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      });
+      input.addEventListener('blur', () => finish(true));
+    }
+
+    // Rename a session in place, the same way a group is renamed: the row
+    // becomes a text field. It starts from what the row shows now, so naming
+    // means editing rather than retyping. Saving the automatic text unchanged
+    // does nothing, so a session is not frozen at today's title by accident;
+    // saving an empty field clears a given name and the conversation's own
+    // title takes over again. The name is pocket-dev's: it is not typed into
+    // Claude, so Remote Control keeps its own.
+    function startSessionRename(id) {
+      const refs = slRowEls.get(id);
+      const s = sessions.get(id);
+      if (!refs || !s || refs.item.querySelector('.sl-session-input')) return;
+      const given = sessionName(layout, id);
+      const automatic = automaticName(s, id) || '';
+      const input = document.createElement('input');
+      input.className = 'sl-session-input';
+      input.maxLength = MAX_SESSION_NAME_LENGTH;
+      // Assigning .value bypasses maxLength, and a conversation title can be
+      // longer than a name may be; clip it here so what is edited is what
+      // can be saved.
+      input.value = (given ?? automatic).slice(0, MAX_SESSION_NAME_LENGTH);
+      input.placeholder = automatic || 'Name this session';
+      input.setAttribute('aria-label', 'Session name');
+      refs.row.hidden = true;
+      refs.row.after(input);
+      input.focus();
+      input.select();
+
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        const name = cleanSessionName(input.value);
+        input.remove();
+        refs.row.hidden = false;
+        if (!save) return;
+        if (given === undefined
+          ? (!name || name === cleanSessionName(automatic))
+          : name === given) return;
+        commitLayout(renameSession(shownLayout(), id, name));
+      };
+      input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter')  { e.preventDefault(); finish(true); }
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
       });

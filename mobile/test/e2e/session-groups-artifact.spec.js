@@ -47,6 +47,7 @@ test('artifact: grouped session list, desktop and phone', async ({ pdServerClaud
           { id: 'g-homelab', name: 'homelab', collapsed: true, sessions: [ids[1]] },
         ],
         ungrouped: [ids[3]],
+        names: { [ids[4]]: 'EKS campaign runtime (renamed)' },
       }),
     });
   }, ids);
@@ -68,4 +69,15 @@ test('artifact: grouped session list, desktop and phone', async ({ pdServerClaud
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(OUT, 'session-groups-3-phone.png') });
+
+  // Mid-rename, then the strip above the terminal for a grouped, renamed tab.
+  await page.locator(`.sl-item[data-session-id="${ids[4]}"] .sl-row-rename`).click();
+  await page.screenshot({ path: path.join(OUT, 'session-groups-4-renaming.png') });
+  await page.keyboard.press('Escape');
+  await page.locator(`.sl-item[data-session-id="${ids[4]}"] .sl-row`).click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, 'session-groups-5-strip-phone.png'), clip: { x: 0, y: 0, width: 390, height: 120 } });
+  await page.setViewportSize({ width: 900, height: 760 });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, 'session-groups-6-strip-desktop.png'), clip: { x: 0, y: 0, width: 900, height: 80 } });
 });

@@ -231,3 +231,71 @@ test('Autogroup asks the model through the real CLI path, and Undo puts it back'
   await expect.poll(() => listShape(page)).toEqual(ids);
   await expect.poll(async () => (await serverLayout(page)).groups).toEqual([]);
 });
+
+test('rename a session in place; the strip shows its group and name; clearing it restores automatic', async ({ pdServer, page }) => {
+  const [a, b] = await threeSessions(page, pdServer);
+  await addGroup(page, 'deephive');
+  await drag(page, row(page, b), 'below', header(page, 'deephive'));
+  await expect.poll(() => listShape(page)).toContain(b);
+
+  await row(page, b).locator('.sl-row-rename').click();
+  const input = row(page, b).locator('.sl-session-input');
+  await expect(input).toBeFocused();
+  await input.fill('Billing migration');
+  await input.press('Enter');
+  await expect(row(page, b).locator('.sl-title')).toHaveText('Billing migration');
+  await expect.poll(async () => (await serverLayout(page)).names).toEqual({ [b]: 'Billing migration' });
+
+  // Open it: the strip above the terminal says where it is and what it is.
+  await row(page, b).locator('.sl-row').click();
+  await expect(page.locator('#session-label .lbl-group')).toHaveText('deephive');
+  await expect(page.locator('#session-label .lbl-name')).toHaveText('Billing migration');
+  await expect(page.locator('#session-label .lbl-count')).toHaveText(/^1\/3$/);
+  await expect.poll(() => page.title()).toBe('Billing migration · pocket-dev');
+
+  // Survives a reload, because it lives in the server's layout.
+  await page.reload();
+  await waitForConnection(page);
+  await openSessionList(page);
+  await expect(row(page, b).locator('.sl-title')).toHaveText('Billing migration');
+
+  // Escape cancels; an empty name clears it.
+  await row(page, b).locator('.sl-row-rename').click();
+  await row(page, b).locator('.sl-session-input').fill('nope');
+  await row(page, b).locator('.sl-session-input').press('Escape');
+  await expect(row(page, b).locator('.sl-title')).toHaveText('Billing migration');
+  expect(await page.evaluate(() => document.body.dataset.view)).toBe('list');
+  await row(page, b).locator('.sl-row-rename').click();
+  await row(page, b).locator('.sl-session-input').fill('');
+  await row(page, b).locator('.sl-session-input').press('Enter');
+  await expect(row(page, b).locator('.sl-title')).not.toHaveText('Billing migration');
+  await expect.poll(async () => (await serverLayout(page)).names).toEqual({});
+
+  // A session in no group shows no group pill.
+  await row(page, a).locator('.sl-row').click();
+  await expect(page.locator('#session-label .lbl-group')).toBeHidden();
+});
+
+test('a rename in progress is not swept away by another device, and loses cleanly to its newer edit', async ({ pdServer, page }) => {
+  const [, b] = await threeSessions(page, pdServer);
+  await row(page, b).locator('.sl-row-rename').click();
+  await row(page, b).locator('.sl-session-input').fill('Mine');
+
+  // Another device names the same session while this field is open.
+  await page.evaluate(async (b) => {
+    const cur = await (await fetch('/layout')).json();
+    await fetch('/layout', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cur, names: { [b]: 'Theirs' }, baseRev: cur.rev }),
+    });
+  }, b);
+  // Let at least one metadata poll (4 to 8 s) come and go: it must not adopt
+  // the newer layout under an open field.
+  await page.waitForTimeout(9000);
+  await expect(row(page, b).locator('.sl-session-input')).toHaveValue('Mine');
+
+  await row(page, b).locator('.sl-session-input').press('Enter');
+  await expect(page.locator('#sl-tools-msg')).toHaveText(/changed on another device/);
+  await expect(row(page, b).locator('.sl-title')).toHaveText('Theirs');
+  expect((await serverLayout(page)).names).toEqual({ [b]: 'Theirs' });
+});

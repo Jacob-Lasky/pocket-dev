@@ -5,6 +5,7 @@ import path from 'node:path';
 import request from 'supertest';
 import {
   normalizeLayout, createLayoutStore, createLayoutApi, createMemoryLayoutStore, MAX_GROUPS, MAX_NAME_LENGTH,
+  MAX_SESSION_NAME_LENGTH,
 } from '../../sessionLayout.js';
 import { applyAutogroup, buildPrompt, claudeClassifier } from '../../autogroup.js';
 import { createApp } from '../../server.js';
@@ -13,7 +14,7 @@ const LIVE = ['main-1', 'main-2', 'main-3', 'main-4'];
 
 describe('normalizeLayout, the one gate for PUT bodies and the file on disk', () => {
   it('turns nothing into the flat list in creation order', () => {
-    expect(normalizeLayout(null, LIVE)).toEqual({ version: 1, groups: [], ungrouped: LIVE });
+    expect(normalizeLayout(null, LIVE)).toEqual({ version: 1, groups: [], ungrouped: LIVE, names: {} });
   });
 
   it('appends sessions the layout has not seen to the END of Ungrouped, in creation order', () => {
@@ -80,6 +81,29 @@ describe('normalizeLayout, the one gate for PUT bodies and the file on disk', ()
     expect(out.groups.map((g) => g.collapsed)).toEqual([true, false]);
   });
 
+  it('keeps names given to live sessions, cleaned, and drops the rest', () => {
+    const out = normalizeLayout({ names: {
+      'main-1': '  Codex\nreview  ',
+      'main-2': '',                       // cleared: back to the automatic title
+      'main-9': 'gone',                   // not a live session
+      "x'; rm": 'evil',                   // not a SAFE_ID
+      'main-3': 42,                       // not text
+      'main-4': 'y'.repeat(200),
+    } }, LIVE);
+    expect(out.names).toEqual({ 'main-1': 'Codex review', 'main-4': 'y'.repeat(MAX_SESSION_NAME_LENGTH) });
+  });
+
+  it('refuses __proto__ as a session id, so a name cannot set the prototype', () => {
+    const raw = JSON.parse('{"names":{"__proto__":"x","main-1":"ok"}}');
+    const out = normalizeLayout(raw, [...LIVE, '__proto__']);
+    expect(Object.keys(out.names)).toEqual(['main-1']);
+    expect(Object.getPrototypeOf(out.names)).toBe(Object.prototype);
+  });
+
+  it('treats names that are not an object as no names', () => {
+    for (const names of [null, 'x', ['main-1'], 3]) expect(normalizeLayout({ names }, LIVE).names).toEqual({});
+  });
+
   it('caps the number of groups', () => {
     const groups = Array.from({ length: MAX_GROUPS + 10 }, (_, i) => ({ id: `g-${i}`, name: `${i}` }));
     expect(normalizeLayout({ groups }, LIVE).groups).toHaveLength(MAX_GROUPS);
@@ -87,7 +111,7 @@ describe('normalizeLayout, the one gate for PUT bodies and the file on disk', ()
 
   it('survives garbage of every shape', () => {
     for (const raw of [undefined, 42, 'str', [], { groups: 'no' }, { groups: [null, 1, 'x'] }, { ungrouped: {} }]) {
-      expect(normalizeLayout(raw, LIVE)).toEqual({ version: 1, groups: [], ungrouped: LIVE });
+      expect(normalizeLayout(raw, LIVE)).toEqual({ version: 1, groups: [], ungrouped: LIVE, names: {} });
     }
   });
 });
@@ -99,7 +123,7 @@ describe('the layout file', () => {
 
   it('round-trips through layout.json in the state dir', () => {
     const store = createLayoutStore({ dir });
-    store.save({ version: 1, groups: [], ungrouped: ['main-1'] });
+    store.save({ version: 1, groups: [], ungrouped: ['main-1'], names: {} });
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'layout.json'), 'utf8')).ungrouped).toEqual(['main-1']);
     expect(createLayoutStore({ dir }).load().ungrouped).toEqual(['main-1']);
   });
@@ -132,7 +156,7 @@ describe('the layout file', () => {
     // tab killed last run can hand its id to a brand new tab. startServer runs
     // prune() after restore and before any new id exists; this is that call.
     const store = createLayoutStore({ dir });
-    store.save({ version: 1, groups: [{ id: 'g-1', name: 'dh', collapsed: false, sessions: ['main-1', 'main-5'] }], ungrouped: [] });
+    store.save({ version: 1, groups: [{ id: 'g-1', name: 'dh', collapsed: false, sessions: ['main-1', 'main-5'] }], ungrouped: [], names: {} });
     let live = ['main-1'];
     const api = createLayoutApi({ store, liveIds: () => live });
     api.prune();
@@ -151,7 +175,7 @@ describe('the layout file', () => {
   });
 
   it('does not rewrite a file that was already normal', () => {
-    const store = { load: vi.fn(() => ({ version: 1, groups: [], ungrouped: ['main-1'], rev: 3 })), save: vi.fn() };
+    const store = { load: vi.fn(() => ({ version: 1, groups: [], ungrouped: ['main-1'], names: {}, rev: 3 })), save: vi.fn() };
     createLayoutApi({ store, liveIds: () => ['main-1'] }).get();
     expect(store.save).not.toHaveBeenCalled();
   });
@@ -231,6 +255,21 @@ describe('applyAutogroup, the model answer folded into a layout', () => {
       ['g-new', []],                 // empty by hand, still there to be filled
       // g-gone is dropped: the model took the only session it had.
     ]);
+  });
+
+  it('keeps the names people gave sessions, and shows them to the model in place of the title', () => {
+    const prior = normalizeLayout({ names: { 'main-2': 'Billing migration' } }, LIVE);
+    const out = applyAutogroup(prior, { groups: [{ name: 'dh', sessions: ['main-1', 'main-2'] }] }, LIVE);
+    expect(out.names).toEqual({ 'main-2': 'Billing migration' });
+    const prompt = buildPrompt([{ id: 'main-2', title: 'auto title', lastPrompt: null, provider: 'claude' }], prior);
+    expect(prompt).toContain('"title":"Billing migration"');
+    expect(prompt).not.toContain('auto title');
+  });
+
+  it('reads only names the layout actually holds, so an id like toString keeps its title', () => {
+    const prompt = buildPrompt([{ id: 'toString', title: 'Real title', lastPrompt: null, provider: 'claude' }],
+      normalizeLayout(null, ['toString']));
+    expect(prompt).toContain('"title":"Real title"');
   });
 
   it('treats a malformed answer as "no groups" rather than throwing', () => {
@@ -316,7 +355,7 @@ describe('the /layout routes', () => {
   it('serves the flat layout before anything was saved', async () => {
     const app = createApp({ sessionsApi: fakeSessions() });
     const res = await request(app).get('/layout');
-    expect(res.body).toEqual({ version: 1, groups: [], ungrouped: ['main-1', 'main-2', 'main-3'], rev: 0 });
+    expect(res.body).toEqual({ version: 1, groups: [], ungrouped: ['main-1', 'main-2', 'main-3'], names: {}, rev: 0 });
   });
 
   it('saves a PUT and answers with the normalised version', async () => {
@@ -325,7 +364,7 @@ describe('the /layout routes', () => {
       groups: [{ id: 'g-1', name: 'dh', sessions: ['main-3', 'nope'] }], ungrouped: ['main-2'],
     });
     expect(put.status).toBe(200);
-    expect(put.body).toEqual({ version: 1, groups: [{ id: 'g-1', name: 'dh', collapsed: false, sessions: ['main-3'] }], ungrouped: ['main-2', 'main-1'], rev: 1 });
+    expect(put.body).toEqual({ version: 1, groups: [{ id: 'g-1', name: 'dh', collapsed: false, sessions: ['main-3'] }], ungrouped: ['main-2', 'main-1'], names: {}, rev: 1 });
     expect((await request(app).get('/layout')).body).toEqual(put.body);
   });
 
@@ -343,7 +382,7 @@ describe('the /layout routes', () => {
     expect(res.body.groups[0]).toMatchObject({ name: 'dh', sessions: ['main-1', 'main-3'] });
     expect(classify.mock.calls[0][0]).toContain('"title":"t-main-2"');
     // `previous` is what it was applied to, for the browser's Undo.
-    expect(res.body.previous).toEqual({ version: 1, groups: [], ungrouped: ['main-1', 'main-2', 'main-3'], rev: 0 });
+    expect(res.body.previous).toEqual({ version: 1, groups: [], ungrouped: ['main-1', 'main-2', 'main-3'], names: {}, rev: 0 });
     const { previous, ...saved } = res.body;
     expect((await request(app).get('/layout')).body).toEqual(saved);
   });
