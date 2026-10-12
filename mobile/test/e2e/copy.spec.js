@@ -151,6 +151,59 @@ test('multiline selection copies as one line across every copy path', async ({ p
   await page.screenshot({ path: path.resolve('test-artifacts/copy-single-line.png') });
 });
 
+test('a URL a TUI wrapped across rows copies without spaces at the breaks', async ({ pdServer, page }) => {
+  // Claude paints a long URL row by row with cursor addressing, breaking it
+  // mid-token at the right edge and indenting each continuation. xterm marks
+  // none of those rows wrapped, so plain row joining put a space at every break.
+  await gotoTest(page, pdServer);
+  await waitForConnection(page);
+  await page.bringToFront();
+  const url = 'https://keycloak.example.com/auth/realms/Production/protocol/openid-connect/auth'
+    + '?client_id=vault&code_challenge=zxQxHOCWUEiHFeHCwlK2Mi68ri2pEYax2wBWKywBFAI'
+    + '&code_challenge_method=S256&nonce=n_pgviKFao2Qde87yv1h15&state=st_hgjN0llrL2z0lMNwkp2G'
+    + `&padding=${'a1b2'.repeat(60)}`;
+  const lead = '● Please open the following link to sign in: ';
+  const rows = await page.evaluate(({ text }) => {
+    const { cols } = window.term;
+    const out = [text.slice(0, cols)];
+    for (let rest = text.slice(cols); rest; rest = rest.slice(cols - 2)) out.push(rest.slice(0, cols - 2));
+    return new Promise(done => window.term.write('\x1b[2J'
+      + out.map((row, i) => `\x1b[${i + 2};${i ? 3 : 1}H${row}`).join('')
+      + `\x1b[${out.length + 3};1H❯ next prompt`, () => done(out.length)));
+  }, { text: lead + url });
+  expect(rows).toBeGreaterThan(2);
+  expect(await page.evaluate(() => window.term.getSelection())).toBe('');
+
+  const grid = await page.evaluate(() => {
+    const rect = document.querySelector('.terminal-pane.active .xterm-screen').getBoundingClientRect();
+    return { x: rect.x, y: rect.y, cellWidth: rect.width / window.term.cols,
+      cellHeight: rect.height / window.term.rows, cols: window.term.cols };
+  });
+  // Drag from the URL's first cell to the end of its last row.
+  const lastLen = (lead.length + url.length - grid.cols) % (grid.cols - 2) || grid.cols - 2;
+  await page.mouse.move(grid.x + (lead.length + .5) * grid.cellWidth, grid.y + 1.5 * grid.cellHeight);
+  await page.mouse.down();
+  await page.mouse.move(grid.x + (lastLen + 2.5) * grid.cellWidth, grid.y + (rows + .5) * grid.cellHeight, { steps: 12 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.term.getSelection())).toMatch(/\n/);
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(url);
+  const dragged = await readClipboard(page);
+
+  await page.evaluate(() => navigator.clipboard.writeText('copy-button-sentinel'));
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(url);
+  await page.evaluate(() => window.term.clearSelection());
+  await page.click('#copy-btn');
+  await expect.poll(() => readClipboard(page), { timeout: 8000 }).toBe(`${lead}${url} ❯ next prompt`);
+
+  // The artifact: what the drag put on the clipboard, pasted into the composer.
+  // Last, because a long composer value grows it and the grid resize clears
+  // the selection.
+  await page.locator('#cmd-input').fill(dragged);
+  await expect(page.locator('#cmd-input')).toHaveValue(url);
+  await page.screenshot({ path: path.resolve('test-artifacts/copy-split-url.png') });
+});
+
 test('Copy button joins visible terminal rows when nothing is selected', async ({ pdServer, page }) => {
   await gotoTest(page, pdServer);
   await waitForConnection(page);
