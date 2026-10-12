@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Terminal } from '@xterm/xterm';
-import { renderTerminalText, cleanCopyText, selectedTerminalText } from '../../public/js/view.js';
+import { renderTerminalText, screenCopyText, selectedTerminalText } from '../../public/js/view.js';
 
 // ── Buffer walk: the actual bug fixes ───────────────────────────────────────
 // These run a REAL xterm under the test DOM so we exercise the parsed buffer,
@@ -137,26 +137,127 @@ describe('real Claude frame (closes the cat/alt-screen test gap)', () => {
 
 });
 
-describe('cleanCopyText', () => {
-  it('joins rows as prose without terminal indentation', () => {
-    expect(cleanCopyText('    first line\n    second line\n      nested line'))
-      .toBe('first line second line nested line');
+// A TUI coder paints each row with cursor addressing, so xterm never marks its
+// own line wraps. Rows here are placed the same way, at 1-based row r col c.
+const at = (r, c, text) => `\x1b[${r};${c}H${text}`;
+const URL = 'https://keycloak.example.com/auth?client_id=vault&code_challenge=zxQxHOCWUEiHFeHCwlK2Mi68&state=st_hgjN0llrL2z0';
+
+// Paint `text` from (row, col) and wrap it at `width` columns the way Claude
+// does: continuation rows indented by `indent`.
+function paintWrapped(row, col, text, { width, indent = 2 }) {
+  let out = at(row, col, text.slice(0, width - col + 1));
+  let rest = text.slice(width - col + 1);
+  const span = width - indent;
+  while (rest) {
+    row++;
+    out += at(row, indent + 1, rest.slice(0, span));
+    rest = rest.slice(span);
+  }
+  return out;
+}
+
+describe('a token the app split across rows', () => {
+  it('rejoins a URL wrapped to the last column (assistant text)', async () => {
+    const term = await makeTerm(40);
+    await write(term, paintWrapped(1, 1, `● Sign in: ${URL}`, { width: 40 }));
+    term.selectAll();
+    expect(term.getSelection()).toContain('\n');
+    expect(selectedTerminalText(term)).toBe(`● Sign in: ${URL}`);
   });
 
-  it('joins CRLF rows and removes edge whitespace', () => {
-    expect(cleanCopyText('a   \r\nb\t\r\n')).toBe('a b');
+  it('rejoins a URL wrapped one column short of the edge (prompt echo)', async () => {
+    const term = await makeTerm(40);
+    await write(term, paintWrapped(1, 3, URL, { width: 39 }));
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe(URL);
   });
 
-  it('omits blank rows rather than pasting paragraph breaks', () => {
-    expect(cleanCopyText('a\n\n\n\nb')).toBe('a b');
+  it('rejoins a URL when the selection starts and ends inside it', async () => {
+    const term = await makeTerm(40);
+    await write(term, paintWrapped(1, 1, `● Sign in: ${URL}`, { width: 40 }));
+    term.select(11, 0, 2 * term.cols - 11 + 10);
+    expect(selectedTerminalText(term)).toBe(URL.slice(0, 29 + 38 + 8));
   });
 
-  it('drops leading and trailing blank lines', () => {
-    expect(cleanCopyText('\n\nhello\n\n\n')).toBe('hello');
+  it('rejoins a URL that started with one or two characters left on the row', async () => {
+    const term = await makeTerm(40);
+    for (const left of [1, 2]) {
+      const lead = `${'p'.repeat(39 - left)} `;
+      await write(term, '\x1b[2J' + paintWrapped(1, 1, `${lead}${URL}`, { width: 40 }));
+      term.selectAll();
+      expect(selectedTerminalText(term)).toBe(`${lead}${URL}`);
+    }
   });
 
-  it('preserves internal spacing', () => {
-    expect(cleanCopyText('a   b   c')).toBe('a   b   c');
-    expect(cleanCopyText('a\tb\n  c\td')).toBe('a\tb c\td');
+  it('measures wide glyphs in columns at the edge and in the width test', async () => {
+    const term = await makeTerm(12);
+    // 'abc ' then four wide glyphs fill the row; four more continue it.
+    await write(term, at(1, 1, 'abc 界界界界') + at(2, 3, '界界界界'));
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe('abc 界界界界界界界界');
+    // Ending one column short of the edge still counts as reaching it.
+    await write(term, '\x1b[2J' + at(1, 1, 'ab 界界界界') + at(2, 3, '界界界界'));
+    expect(term.buffer.active.getLine(0).translateToString(true)).toBe('ab 界界界界');
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe('ab 界界界界界界界界');
+  });
+
+  it('keeps the space between prose words when a row ends flush at the edge', async () => {
+    const term = await makeTerm(40);
+    const full = 'the quick brown fox jumps over the lazy';
+    await write(term, at(1, 1, `${full}s`) + at(2, 3, 'dog and more words'));
+    expect(term.buffer.active.getLine(0).translateToString(true)).toHaveLength(40);
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe(`${full}s dog and more words`);
+  });
+
+  it('keeps the space between short rows that stop before the edge', async () => {
+    const term = await makeTerm(40);
+    await write(term, at(1, 3, 'single') + at(2, 3, 'tokens'));
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe('single tokens');
+  });
+
+  it('does not join across a blank row', async () => {
+    const term = await makeTerm(40);
+    await write(term, at(1, 1, 'x'.repeat(40)) + at(3, 3, 'yyyy'));
+    term.selectAll();
+    expect(selectedTerminalText(term)).toBe(`${'x'.repeat(40)} yyyy`);
+  });
+
+  it('keeps rectangular selections untouched', async () => {
+    const term = await makeTerm(40);
+    await write(term, paintWrapped(1, 1, URL, { width: 40 }));
+    term.selectAll();
+    expect(selectedTerminalText(term, { columnSelectMode: true })).toBe(term.getSelection());
+  });
+});
+
+describe('screenCopyText (the Copy button with nothing selected)', () => {
+  it('joins rows as prose without terminal indentation', async () => {
+    const term = await makeTerm(40);
+    await write(term, '    first line\r\n    second line\r\n      nested line');
+    expect(screenCopyText(term)).toBe('first line second line nested line');
+  });
+
+  it('omits blank rows and keeps spacing inside rows', async () => {
+    const term = await makeTerm(40);
+    await write(term, '\r\n\r\na   b\r\n\r\n\r\n  c\td\r\n\r\n');
+    expect(screenCopyText(term)).toBe('a   b c     d');
+  });
+
+  it('rejoins a split URL the same way a selection does', async () => {
+    const term = await makeTerm(40);
+    await write(term, paintWrapped(2, 1, `● Sign in: ${URL}`, { width: 40 }) + at(6, 1, '❯ next prompt'));
+    expect(screenCopyText(term)).toBe(`● Sign in: ${URL} ❯ next prompt`);
+  });
+
+  it('copies only the visible rows', async () => {
+    const term = await makeTerm(20);
+    for (let n = 0; n < 20; n++) await write(term, `line-${n}\r\n`);
+    term.scrollToTop();
+    const text = screenCopyText(term);
+    expect(text).toContain('line-0');
+    expect(text).not.toContain('line-10');
   });
 });

@@ -715,7 +715,7 @@
   <script src="/addon-fit/lib/addon-fit.js"></script>
   <script type="module">
     import { clipboardWrite } from '/js/clipboard.js';
-    import { renderTerminalText, cleanCopyText } from '/js/view.js';
+    import { screenCopyText } from '/js/view.js';
     import { LiveSelection } from '/js/selection.js';
     import { maybeInterceptCopyKey } from '/js/keys.js';
     import { scanMouseState, wheelSequence, wheelStepsFromDelta } from '/js/scroll.js';
@@ -2386,7 +2386,7 @@
       const term = session?.term;
       const text = term ? (term.hasSelection()
         ? session.selection.copyText()
-        : cleanCopyText(renderTerminalText(term, { viewportOnly: true }))) : '';
+        : screenCopyText(term)) : '';
       flashCopyButton(await clipboardWrite(text));
     };
 

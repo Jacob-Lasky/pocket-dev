@@ -14,6 +14,7 @@ Live-scroll — the core of the mobile experience:
 Live selection + copy:
 - [ ] Hold a word directly in the terminal, lift your finger, adjust both handles, tap **Copy**, then **Done**. Paste elsewhere: the selected words match. Repeat over LAN HTTP to exercise the clipboard fallback.
 - [ ] Select across several rows, including indented code, wide characters and wrapped text. Paste elsewhere: ordinary copy is one line, with one space between rows and spacing within each row intact.
+- [ ] Ask Claude to print a URL longer than one row, then drag across all of it and paste: the URL arrives with no spaces where Claude wrapped it. Prose that Claude wrapped still has its spaces.
 - [ ] Start a multiline selection partway into its first row. Copy it and paste elsewhere: no line breaks or TUI left margin remain.
 - [ ] Copy that selection with the browser's native Copy command as well as the pocket-dev button. On desktop, Alt-drag a rectangular selection and verify its columns remain aligned after copying.
 - [ ] Move your finger before the long-press threshold: it scrolls without selecting. Pinch still changes font size.
