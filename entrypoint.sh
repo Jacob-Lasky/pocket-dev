@@ -306,15 +306,17 @@ chmod 775 /workspace 2>/dev/null || true
 # container start and is not guaranteed to be stable across recreates (Docker
 # often reuses one, but nothing promises it), so the image cannot know it.
 #
-# The export reaches PID 1 and everything descended from it. That is NOT by
+# The export reaches the server this script execs and everything descended from
+# it. Under --init that server is NOT PID 1: tini is, and it never sees this
+# export, so read the server's own environment, never /proc/1. That is NOT by
 # itself enough to reach a session: tmux's server outlives its clients and
 # `new-session` inherits the SERVER's environment, so a tmux server that was
 # already running without this variable would hand sessions an environment
 # without it. server.js closes that by forwarding every LAVISH_ variable through
 # `new-session -e`; see buildTmuxSpawnArgs. It also does not reach `docker exec`,
 # which builds its environment from the image's Config.Env, so a probe from
-# outside has to import PID 1's environment (/proc/1/environ) or it will bind
-# loopback and report a URL nothing can open. See CLAUDE.md.
+# outside has to import the server's environment (/proc/<server pid>/environ) or
+# it will bind loopback and report a URL nothing can open. See CLAUDE.md.
 #
 # Reachability is only half of it. Lavish's DNS-rebinding guard 403s any request
 # whose Host header is not one it answers to, and it answers to loopback, this

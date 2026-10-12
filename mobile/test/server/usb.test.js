@@ -45,10 +45,17 @@ describe('USB access for adb', () => {
     expect(extraParams).toMatch(/--pids-limit 8192\b/);
   });
 
+  it('template runs an init that reaps orphans (#31)', () => {
+    // node as PID 1 never reaps, so zombies climbed to the pids ceiling. Like
+    // the pids limit, this lived only on Tower's copy of the template first.
+    expect(extraParams).toMatch(/(?:^|\s)--init(?:\s|$)/);
+  });
+
   it('docker-compose mirrors the template', () => {
     expect(compose).toMatch(/- \/dev\/bus\/usb:\/dev\/bus\/usb\r?$/m);
     expect(compose).toMatch(/device_cgroup_rules:\r?\n\s+- 'c 189:\* rmw'/);
     expect(compose).toMatch(/pids_limit:\s*8192\b/);
+    expect(compose).toMatch(/^\s+init:\s*true\s*$/m);
   });
 
   it('host udev rule hands usb_device nodes to gid 100, the container group', () => {

@@ -98,9 +98,14 @@ services:
     # workloads is how a runaway compile takes the whole box down.
     mem_limit: 16g
 
-    # PID 1 here does not reap orphans, so zombies pile up until the cgroup pids
+    # Docker's init (tini) runs as PID 1 and reaps orphans (#31). Without it the
+    # node server is PID 1, never reaps, and zombies pile up until the cgroup pids
     # ceiling; at the 2048 default that surfaced as chromium "Target crashed" and
-    # Go "failed to create new OS thread", neither of which mentions pids.
+    # Go "failed to create new OS thread", neither of which mentions pids. tini
+    # forwards SIGTERM to the server, which still writes its clean-shutdown marker.
+    init: true
+    # Headroom kept alongside init: a session can still fork thousands of live
+    # processes, and the 2048 default is what broke chromium and Go before.
     pids_limit: 8192
 
     # Host USB access for adb (#88). The rule lets the container open any usbfs

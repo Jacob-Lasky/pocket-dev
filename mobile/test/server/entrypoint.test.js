@@ -36,8 +36,9 @@ describe('entrypoint.sh', () => {
     expect(umaskIdx).toBeLessThan(execIdx);
   });
 
-  it('ends by exec-ing its arguments, so the server is PID 1', () => {
-    // start.sh → node needs to receive the SIGTERM docker sends, because the
+  it('ends by exec-ing its arguments, so the server receives the stop signal', () => {
+    // The server is PID 1, or tini's direct child under --init (tini forwards
+    // signals). Either way start.sh → node needs to receive the SIGTERM docker sends, because the
     // clean-shutdown marker that gates auto-continue is written from its handler.
     // A non-exec'd child would be killed without ever writing it, and every
     // restored session would come back with the crash warning instead.
