@@ -38,5 +38,11 @@ export function spawnEnv(overrides = {}) {
   // of a temp HOME. Left on, every suite that spawns entrypoint.sh downloads
   // Codex, and its log line lands where lavish.test.js reads stdout. Set it
   // explicitly in a test that means to exercise the block.
-  return Object.assign(env, { PD_CODEX_RC: '0' }, overrides);
+  //
+  // PD_HAPPIER=0 by DEFAULT for a related reason: entrypoint.sh starts a
+  // BACKGROUND loop when the home holds a Happier credential, and a background
+  // child outliving the script would keep the test's stderr pipe open. A temp
+  // HOME holds no credential, so this is belt and braces; happier.test.js sets
+  // it explicitly where it means to exercise the launch.
+  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0' }, overrides);
 }

@@ -6,7 +6,7 @@ A browser-accessible terminal for [Claude Code](https://github.com/anthropics/cl
 
 - `mobile/server.js` — Node + Express server. Spawns a tmux session running Claude under a restart loop, exposes the PTY over a WebSocket at `/ws`, serves a mobile-first xterm.js client at `/`.
 - `mobile/public/` — the client: a selectable live xterm.js terminal, touch selection handles, a multiline composer with per-session drafts, and collapsible terminal keys.
-- `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container, and [Lavish Editor](https://github.com/kunchenguid/lavish-axi) so a session can hand a generated HTML artifact to a human to annotate.
+- `Dockerfile` — `node:24-bookworm-slim` base. Ships `gh` CLI, `docker-ce-cli`, the Playwright/chromium headless runtime libs so in-container sessions can run UI probes, the [Codex](https://github.com/openai/codex) CLI so a session can consult a second lab's model without leaving the container, [Lavish Editor](https://github.com/kunchenguid/lavish-axi) so a session can hand a generated HTML artifact to a human to annotate, and the [Happier](https://github.com/happier-dev/happier) CLI plus [OpenCode](https://github.com/anomalyco/opencode) so the container's sessions can be run and supervised from the Happier phone, desktop and web apps (see "Your sessions from the Happier apps" below).
 
 For repo orientation — particularly the two-layers-of-alt-screen gotcha around tmux + Claude's TUI — read `CLAUDE.md`. For shipping changes, see `DEPLOYMENT-GUIDE.md`.
 
@@ -64,6 +64,10 @@ Two consequences worth knowing:
 - **Install session tools into `~/bin`** (on `PATH`, inside the mount), not `~/.local/bin` — that one is a symlink into the image skeleton, and writes there are lost on the next update.
 - **`~/.cache` and `~/.npm` are deliberately not persisted.** They are relinked to a container-local path, because the home mount lands on the UnRAID array over shfs FUSE and a write-heavy cache is the wrong traffic for it.
 - **`~/.codex/tmp` is relinked the same way**, for a different reason: Codex deletes its own temporary helper directories while their lock files are still open, which shfs cannot do (it leaves a `.fuse_hidden*` file behind and the removal fails), so on the array each start would strand another directory in your appdata. Only the temporary helpers move — your codex login, conversations and config stay in the mount.
+
+## Your sessions from the Happier apps
+
+The image ships the [Happier](https://github.com/happier-dev/happier) CLI and [OpenCode](https://github.com/anomalyco/opencode), both pinned in `agent-tools/package.json`. Point the CLI at your Happier relay and sign in once (`happier server add ... --use`, then `happier auth login`); within a minute the daemon starts on its own, and from then on it is kept running: `mobile/pd-happier-supervise` checks it every minute and restarts it if it stops, because the daemon's own always-on mode needs `systemd`, which a container does not have. Do not start it by hand through `docker exec`, which misses the environment the container's sessions need. The daemon is what lists this container's Claude, Codex and OpenCode sessions in the Happier apps, sends their approvals to your phone, and starts new ones on request. `PD_HAPPIER=0` turns the supervisor off. OpenCode's history is kept in the home mount (`~/.local-persist/share/opencode`), so it survives an image update like everything else.
 
 ## A second model in the box
 

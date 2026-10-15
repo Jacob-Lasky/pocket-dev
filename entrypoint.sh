@@ -200,6 +200,56 @@ if [ "$HOME_WRITABLE" = "1" ]; then
     fi
   fi
 
+  # OpenCode keeps its database (every session it has run) under
+  # ~/.local/share/opencode, and ~/.local is the image skeleton linked above, so
+  # left alone that database lives in the container layer and is lost on every
+  # recreate, along with whatever Happier sessions drive OpenCode. Point that one
+  # leaf at the persistent home instead, under ~/.local-persist so any other
+  # XDG-data tool that turns out to need the same treatment has an obvious home.
+  #
+  # A REAL directory there is data from before this link existed (a restart,
+  # not a recreate, keeps the container layer). It is never deleted until a
+  # complete copy exists. The copy goes to a staging name first and is renamed
+  # into place, so an interrupted copy can never become a half-populated live
+  # directory that the next boot mistakes for real history. It becomes the live
+  # copy only when the persistent target is provably empty; beside a populated
+  # (or unlistable) one it is kept as a dated `opencode.pre-link-*` sibling, so
+  # neither copy can overwrite the other.
+  #
+  # EVERY step is non-fatal. Under `set -e` a failed copy, delete or link would
+  # otherwise turn "OpenCode history stays in the container layer" into "no
+  # boot". Anything that fails leaves the data where it was and warns.
+  OPENCODE_DATA="$HOME/.local/share/opencode"
+  OPENCODE_PERSIST="$HOME/.local-persist/share/opencode"
+  if [ -d "$HOME/.local/share" ] && mkdir -p "$OPENCODE_PERSIST" 2>/dev/null; then
+    opencode_linkable=1
+    if [ -d "$OPENCODE_DATA" ] && [ ! -L "$OPENCODE_DATA" ]; then
+      opencode_stage="$OPENCODE_PERSIST.staging-$$"
+      opencode_listing=""
+      if opencode_listing=$(ls -A "$OPENCODE_PERSIST" 2>/dev/null) && [ -z "$opencode_listing" ]; then
+        opencode_dest="$OPENCODE_PERSIST"
+      else
+        opencode_dest="$OPENCODE_PERSIST.pre-link-$(date -u +%Y%m%dT%H%M%SZ)"
+      fi
+      if rm -rf "$opencode_stage" 2>/dev/null \
+        && cp -a "$OPENCODE_DATA" "$opencode_stage" 2>/dev/null \
+        && { [ "$opencode_dest" != "$OPENCODE_PERSIST" ] || rmdir "$OPENCODE_PERSIST" 2>/dev/null; } \
+        && mv "$opencode_stage" "$opencode_dest" 2>/dev/null; then
+        rm -rf "$OPENCODE_DATA" 2>/dev/null || opencode_linkable=0
+      else
+        rm -rf "$opencode_stage" 2>/dev/null || true
+        mkdir -p "$OPENCODE_PERSIST" 2>/dev/null || true
+        opencode_linkable=0
+      fi
+    fi
+    if [ "$opencode_linkable" = "1" ] && ln -sfn "$OPENCODE_PERSIST" "$OPENCODE_DATA" 2>/dev/null; then
+      :
+    else
+      echo "pocket-dev: could not link $OPENCODE_DATA into the persistent home;" >&2
+      echo "pocket-dev: OpenCode history stays in the container layer this boot." >&2
+    fi
+  fi
+
   # NO config.toml SEED FOR CODEX, ON PURPOSE. An earlier version of this block
   # wrote `model = "gpt-5.6-sol"` and `model_reasoning_effort = "high"` here to
   # match cachyos-desktop. Both reasons it was removed matter:
@@ -318,6 +368,38 @@ if [ -z "${LAVISH_AXI_HOST:-}" ]; then
       echo "pocket-dev: connections, set LAVISH_AXI_HOST to the right one." >&2
     fi
   fi
+fi
+
+# The Happier daemon supervisor (see mobile/pd-happier-supervise for why it
+# exists). Started HERE, after the Lavish export and just before exec, so it and
+# every session the daemon launches inherit the finished environment. Started
+# in the background so it never delays the server, and it outlives the exec as
+# a child of the same PID.
+#
+# It runs whenever the CLI is installed, signed in or not: a never-signed-in
+# home costs one bash loop doing a glob check a minute, and in exchange a first
+# `happier auth login` needs no daemon start by hand. That matters because a
+# start typed through `docker exec` misses this script's exports. PD_HAPPIER=0
+# turns it off, the same shape as PD_RESUME and PD_REMOTE_CONTROL.
+# PD_HAPPIER_SUPERVISOR is the test seam that swaps in a stub; nothing sets it in
+# production.
+#
+# stdout goes to /dev/null and NOT to whoever started us: the suites that run
+# this script read stdout, and a background child holding that pipe open would
+# keep their process from ever closing. stderr stays the container log.
+if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
+  && happier_bin=$(command -v happier 2>/dev/null); then
+  # The image's copy is /usr/local/bin/happier. One resolving anywhere else is a
+  # home copy shadowing the pinned version, because ~/bin precedes /usr/local/bin
+  # on PATH. Say so, since the build log's version is then not what runs.
+  case "$happier_bin" in
+    /usr/local/bin/happier) ;;
+    *)
+      echo "pocket-dev: happier resolves to $happier_bin, not the image's" >&2
+      echo "pocket-dev: /usr/local/bin/happier; remove the home copy to run the pinned one." >&2
+      ;;
+  esac
+  "${PD_HAPPIER_SUPERVISOR:-/mobile/pd-happier-supervise}" </dev/null >/dev/null &
 fi
 
 # Execute the main command
