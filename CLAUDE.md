@@ -457,7 +457,7 @@ A `200` says something answered on that port and accepted that `Host`, which is 
 
 **Measured on a container built from this code, 2026-09-03**, which is exactly what the guard tests deliberately do not cover:
 
-- `PID 1` carried `LAVISH_AXI_HOST=172.17.0.65`, matching the container's `eth0`.
+- `PID 1` (then still the server; this predates `--init`) carried `LAVISH_AXI_HOST=172.17.0.65`, matching the container's `eth0`.
 - A session created through `POST /sessions` saw the same value, which is the `new-session -e` forwarding working rather than inheritance happening to hold.
 - A hostile `~/bin/hostname` printing `10.6.6.6` was planted and the container restarted; the bind address stayed `172.17.0.65`, so the absolute-path call really does keep a writable `~/bin` out of it.
 - That session ran `lavish-axi` and got `status: opened` with a URL on the configured link host.
