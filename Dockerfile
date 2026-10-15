@@ -374,11 +374,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # The symlink rewrite is the load-bearing part. The claude installer writes an
 # ABSOLUTE symlink (.local/bin/claude -> /home/claude/.local/share/claude/
 # versions/<v>), so a bare `mv` leaves a dangling link that only resolves if
-# entrypoint.sh has already linked ~/.local back. That circular dependency would
+# entrypoint.sh has already linked ~/.local/share/claude back. That circular dependency would
 # mean a container with a failed entrypoint has no runnable Claude and no
 # obvious reason why. Rewriting the links to point inside /opt/pd-home makes the
 # skeleton self-contained: PATH below reaches the real binary even if no seeding
-# ever runs. DO NOT drop the rewrite and rely on ~/.local being linked.
+# ever runs. DO NOT drop the rewrite and rely on the ~/.local links.
 USER root
 RUN mv /home/claude /opt/pd-home && \
     rm -rf /opt/pd-home/.cache /opt/pd-home/.npm && \

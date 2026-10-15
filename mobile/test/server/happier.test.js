@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnEnv } from './pdEnv.js';
 
-// The Happier daemon's permanent home: the pinned image install, the boot-time
-// supervisor, and OpenCode's data surviving a recreate.
+// The Happier daemon's permanent home: the pinned image install and the
+// boot-time supervisor. OpenCode's data surviving a recreate is no longer its own
+// mechanism: ~/.local is a real directory in the home mount, so every tool's XDG
+// data persists, and entrypointSeed.test.js covers it.
 //
 // None of this is reachable from the cat-based e2e suite (no Happier relay, no
 // account, no daemon), so the guards are the same two kinds the rest of the
@@ -288,87 +290,5 @@ describe('entrypoint.sh starts the supervisor', () => {
     // leftover ~/bin/happier.
     const { stderr } = boot();
     expect(stderr).toContain(`happier resolves to ${path.join(stubBin, 'happier')}`);
-  });
-});
-
-describe('OpenCode data lives in the persistent home', () => {
-  const data = () => path.join(home, '.local/share/opencode');
-  const persist = () => path.join(home, '.local-persist/share/opencode');
-  const boot = () => {
-    const res = spawnSync('bash', [ENTRYPOINT, 'true'], {
-      env: spawnEnv({ HOME: home, PD_SKEL_DIR: skel, PD_CACHE_DIR: cache }),
-      encoding: 'utf8',
-    });
-    expect(res.status).toBe(0);
-  };
-
-  it('links the data dir into the home mount on a fresh boot', () => {
-    boot();
-    expect(fs.lstatSync(data()).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(data())).toBe(fs.realpathSync(persist()));
-  });
-
-  it('moves data written before the link existed instead of deleting it', () => {
-    fs.mkdirSync(path.join(skel, '.local/share/opencode'));
-    fs.writeFileSync(path.join(skel, '.local/share/opencode/opencode.db'), 'history');
-    boot();
-    expect(fs.readFileSync(path.join(persist(), 'opencode.db'), 'utf8')).toBe('history');
-    expect(fs.lstatSync(data()).isSymbolicLink()).toBe(true);
-  });
-
-  it('keeps a stale copy beside a populated persistent dir, never over it', () => {
-    fs.mkdirSync(persist(), { recursive: true });
-    fs.writeFileSync(path.join(persist(), 'opencode.db'), 'current');
-    fs.mkdirSync(path.join(skel, '.local/share/opencode'));
-    fs.writeFileSync(path.join(skel, '.local/share/opencode/opencode.db'), 'stale');
-    boot();
-    expect(fs.readFileSync(path.join(persist(), 'opencode.db'), 'utf8')).toBe('current');
-    const siblings = fs.readdirSync(path.dirname(persist())).filter((n) => n.startsWith('opencode.pre-link-'));
-    expect(siblings).toHaveLength(1);
-    expect(fs.readFileSync(path.join(path.dirname(persist()), siblings[0], 'opencode.db'), 'utf8')).toBe('stale');
-  });
-
-  it('treats an unlistable persistent dir as populated, never copying over it', () => {
-    fs.mkdirSync(persist(), { recursive: true });
-    fs.writeFileSync(path.join(persist(), 'opencode.db'), 'current');
-    fs.mkdirSync(path.join(skel, '.local/share/opencode'));
-    fs.writeFileSync(path.join(skel, '.local/share/opencode/opencode.db'), 'stale');
-    fs.chmodSync(persist(), 0o300);
-    try {
-      boot();
-    } finally {
-      fs.chmodSync(persist(), 0o755);
-    }
-    expect(fs.readFileSync(path.join(persist(), 'opencode.db'), 'utf8')).toBe('current');
-    expect(fs.readdirSync(path.dirname(persist())).some((n) => n.startsWith('opencode.pre-link-'))).toBe(true);
-  });
-
-  it('leaves the data in place and still boots when the copy fails', () => {
-    const src = path.join(skel, '.local/share/opencode');
-    fs.mkdirSync(src);
-    fs.writeFileSync(path.join(src, 'opencode.db'), 'history');
-    fs.writeFileSync(path.join(src, 'unreadable'), 'x');
-    fs.chmodSync(path.join(src, 'unreadable'), 0o000);
-    let res;
-    try {
-      res = spawnSync('bash', [ENTRYPOINT, 'true'], {
-        env: spawnEnv({ HOME: home, PD_SKEL_DIR: skel, PD_CACHE_DIR: cache }),
-        encoding: 'utf8',
-      });
-    } finally {
-      fs.chmodSync(path.join(src, 'unreadable'), 0o644);
-    }
-    expect(res.status).toBe(0);
-    expect(fs.lstatSync(src).isSymbolicLink()).toBe(false);
-    expect(fs.readFileSync(path.join(src, 'opencode.db'), 'utf8')).toBe('history');
-    expect(res.stderr).toContain('OpenCode history stays in the container layer');
-    expect(fs.readdirSync(path.dirname(persist())).filter((n) => n.includes('staging'))).toEqual([]);
-  });
-
-  it('is idempotent across boots', () => {
-    boot();
-    fs.writeFileSync(path.join(data(), 'opencode.db'), 'kept');
-    boot();
-    expect(fs.readFileSync(path.join(persist(), 'opencode.db'), 'utf8')).toBe('kept');
   });
 });
