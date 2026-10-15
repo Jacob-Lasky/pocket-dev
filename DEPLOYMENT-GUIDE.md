@@ -69,7 +69,7 @@ ssh tower 'docker images ghcr.io/jacob-lasky/pocket-dev --format "{{.ID}} {{.Cre
 # there and would fail such a check. These two are what a deploy can actually
 # assert, and they are the two that break silently.
 ssh tower 'docker exec pocket-dev lavish-axi --version'
-ssh tower 'docker exec pocket-dev sh -c "tr \"\\0\" \"\\n\" < /proc/1/environ | grep LAVISH_AXI_HOST"'
+ssh tower 'docker exec pocket-dev sh -c "tr \"\\0\" \"\\n\" < /proc/\$(pgrep -o -f \"node /mobile/server.js\")/environ | grep LAVISH_AXI_HOST"'
 ```
 
 Reaching port 7682 is only meaningful once a session has opened an artifact, so that probe belongs in the change that touches Lavish rather than in every deploy. The recipe, including why `docker exec` alone gets the wrong environment, is in `CLAUDE.md` under "Lavish Editor".

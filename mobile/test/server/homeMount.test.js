@@ -76,7 +76,7 @@ describe('entrypoint.sh: seeding the mounted home', () => {
     // A copy is written once and never refreshed, so an image update would ship a
     // new `claude` that no container actually runs, and you would be debugging a
     // version that is not the one on disk. DO NOT switch these to cp.
-    expect(script).toMatch(/ln -sfn "\$src" "\$dst"/);
+    expect(script).toMatch(/ln -sfnT "\$src" "\$dst"/);
     expect(script).not.toMatch(/^\s*cp\s+-[ar]/m);
   });
 
@@ -85,11 +85,22 @@ describe('entrypoint.sh: seeding the mounted home', () => {
     // (~/.local/.local) instead of replacing it, which leaves `claude` off the
     // resolved path with no error anywhere. This guard is also what makes
     // re-seeding idempotent across restarts.
-    expect(script).toMatch(/\[ -L "\$dst" \] \|\| rm -rf "\$dst"/);
+    // It MOVES a real destination aside rather than deleting it: under ~/.local
+    // that destination can be persisted tool data. Never `rm -rf "$dst"`.
+    expect(script).toMatch(/mv -T "\$dst" "\$aside"/);
+    expect(script).not.toMatch(/rm -rf "\$dst"/);
   });
 
-  it('links .local so the image binaries are reachable through $HOME', () => {
-    expect(script).toMatch(/for entry in .*\.local(;|\s)/);
+  it('keeps ~/.local a REAL directory and links only the image entries into it', () => {
+    // ~/.local used to be one link into the skeleton, so every tool's XDG data
+    // lived in the container layer and died on recreate. It must NEVER return to
+    // the link list: link_from_image does `rm -rf` on a real directory at its
+    // destination, which would delete every tool's persisted data.
+    const linkedTargets = [...script.matchAll(/for entry in ([^\n;]+)/g)]
+      .flatMap((m) => m[1].trim().split(/\s+/));
+    expect(linkedTargets).not.toContain('.local');
+    expect(script).toMatch(/for d in \.local \.local\/share \.local\/state; do/);
+    expect(script).toMatch(/link_from_image \.local\/bin/);
   });
 
   it('links only the image-owned leaves of .config, never .config itself', () => {

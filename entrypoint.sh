@@ -61,22 +61,88 @@ fi
 
 # Link one image-owned entry into HOME.
 #
-# The `[ -L ] || rm -rf` is load-bearing, not defensive noise: `ln -s target dir`
-# against a REAL directory silently creates the link INSIDE it (~/.local/.local)
-# instead of replacing it, which would leave `claude` off the resolved path with
-# no error anywhere. Only ever called with the fixed image-owned names below, so
-# it can never reach a directory holding user state.
+# A REAL file or directory already at the destination is MOVED ASIDE to a dated
+# `<name>.pre-image-<UTC>` sibling, never deleted, and named on stderr. Two
+# reasons, both load-bearing. `ln -s target dir` against a real directory
+# silently creates the link INSIDE it (~/.local/bin/bin) instead of replacing
+# it, which would leave `claude` off the resolved path with no error anywhere.
+# And ~/.local holds persisted tool data, so a real ~/.local/share/<x> that a
+# NEWER image starts shipping under the same name is somebody's data: this
+# used to be `rm -rf`, which would have deleted it. `-T` on mv and ln makes a
+# directory appearing at the destination a failure rather than a nest.
+#
+# A failure WARNS and the boot continues, never `set -e` out of the script: a
+# link that cannot be made (a root-owned ~/.local/share left by a sibling
+# container, say) would otherwise crash-loop the container, while without the
+# link the image binaries still resolve, because PATH names the skeleton.
 link_from_image() {
-  local rel="$1" src="$SKEL/$1" dst="$HOME/$1"
-  [ -e "$src" ] || return 0
-  [ -L "$dst" ] || rm -rf "$dst"
-  ln -sfn "$src" "$dst"
+  local rel="$1" src="$SKEL/$1" dst="$HOME/$1" aside
+  [ -e "$src" ] || [ -L "$src" ] || return 0
+  if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+    aside="$dst.pre-image-$(date -u +%Y%m%dT%H%M%SZ)"
+    if mv -T "$dst" "$aside" 2>/dev/null; then
+      echo "pocket-dev: moved a real ~/$rel aside to ~/${aside#"$HOME"/} so the image's copy can be linked" >&2
+    else
+      aside=""
+    fi
+  fi
+  if [ "$aside" != "" ] || [ ! -e "$dst" ] || [ -L "$dst" ]; then
+    ln -sfnT "$src" "$dst" 2>/dev/null && return 0
+  fi
+  echo "pocket-dev: could not link ~/$rel to the image; continuing without it" >&2
 }
 
 if [ "$HOME_WRITABLE" = "1" ]; then
 
-  for entry in .bash_logout .bashrc .profile .zshrc .local; do
+  for entry in .bash_logout .bashrc .profile .zshrc; do
     link_from_image "$entry"
+  done
+
+  # ~/.local is a REAL directory in the persistent home, with only what the
+  # image ships linked into it: .local/bin whole, and each child of the
+  # skeleton's .local/share and .local/state (today, `claude` in both).
+  # Everything else under ~/.local persists, the same split as .config below.
+  #
+  # It used to be one link to the whole skeleton, which put every tool's
+  # XDG data (~/.local/share/<tool>) in the container's writable layer, lost
+  # on every recreate: OpenCode's history, uv's tools and pythons, the
+  # deepgram-agents-skills link that 69 ~/.claude/skills entries point
+  # through. A per-tool relink only saves the tools someone already knew to
+  # list; a new tool would lose its first data at the next recreate, the
+  # exact class of quiet loss the single home mount exists to end.
+  #
+  # DO NOT put .local back in the link list above: that would move the whole
+  # persisted ~/.local aside on the next boot and replace it with the image's,
+  # which is every tool's data gone from where the tools look for it.
+  # homeMount.test.js guards that.
+  #
+  # ~/.local, ~/.local/share and ~/.local/state must each be REAL: a symlink
+  # left at any of them (the old layout's ~/.local link, or a hand-made one)
+  # is removed first. That is not tidiness: with ~/.local/share linked into
+  # the skeleton, linking share/claude would resolve onto the skeleton's own
+  # claude directory and move it aside, taking the binary with it.
+  #
+  # Image entries are enumerated from the skeleton rather than named, so an
+  # image that adds a .local/share/<x> gets it linked without an edit here.
+  # `..?*` alongside `.[!.]*` catches names starting with two dots, which the
+  # usual dotfile glob skips. The `if` forms are the .config pattern: under
+  # `set -e` a false `[ ]` in an `&&` list would end the boot, and a failing
+  # command in a then-branch would too, hence `|| true` on every removal.
+  for d in .local .local/share .local/state; do
+    if [ -L "$HOME/$d" ]; then rm -f "$HOME/$d" 2>/dev/null || true; fi
+  done
+  if ! mkdir -p "$HOME/.local/share" "$HOME/.local/state" 2>/dev/null; then
+    echo "pocket-dev: could not create ~/.local/share and ~/.local/state; tool data this boot may not persist" >&2
+  fi
+  link_from_image .local/bin
+  for xdg in share state; do
+    if [ -d "$SKEL/.local/$xdg" ]; then
+      for src in "$SKEL/.local/$xdg"/* "$SKEL/.local/$xdg"/.[!.]* "$SKEL/.local/$xdg"/..?*; do
+        if [ -e "$src" ] || [ -L "$src" ]; then
+          link_from_image ".local/$xdg/${src##*/}"
+        fi
+      done
+    fi
   done
 
   # .config is NOT image-owned as a whole: gh's auth token lives in .config/gh
@@ -200,55 +266,37 @@ if [ "$HOME_WRITABLE" = "1" ]; then
     fi
   fi
 
-  # OpenCode keeps its database (every session it has run) under
-  # ~/.local/share/opencode, and ~/.local is the image skeleton linked above, so
-  # left alone that database lives in the container layer and is lost on every
-  # recreate, along with whatever Happier sessions drive OpenCode. Point that one
-  # leaf at the persistent home instead, under ~/.local-persist so any other
-  # XDG-data tool that turns out to need the same treatment has an obvious home.
+  # One-time move of data staged in ~/.local-persist into the real ~/.local.
   #
-  # A REAL directory there is data from before this link existed (a restart,
-  # not a recreate, keeps the container layer). It is never deleted until a
-  # complete copy exists. The copy goes to a staging name first and is renamed
-  # into place, so an interrupted copy can never become a half-populated live
-  # directory that the next boot mistakes for real history. It becomes the live
-  # copy only when the persistent target is provably empty; beside a populated
-  # (or unlistable) one it is kept as a dated `opencode.pre-link-*` sibling, so
-  # neither copy can overwrite the other.
+  # ~/.local-persist is where data was parked before ~/.local became a real
+  # directory: the deploy that introduced this layout pre-copied the old
+  # container layer's ~/.local/share and ~/.local/state there (a recreate
+  # discards that layer, so nothing at boot could have rescued it), and the
+  # brief OpenCode-only relink before this design used the same name. Each
+  # child moves to the same path under ~/.local unless something already
+  # occupies it (an image-owned link, or data written since), in which case
+  # the staged copy is LEFT in place and named on stderr, never overwritten
+  # and never deleted. Same filesystem, so each move is a rename.
   #
-  # EVERY step is non-fatal. Under `set -e` a failed copy, delete or link would
-  # otherwise turn "OpenCode history stays in the container layer" into "no
-  # boot". Anything that fails leaves the data where it was and warns.
-  OPENCODE_DATA="$HOME/.local/share/opencode"
-  OPENCODE_PERSIST="$HOME/.local-persist/share/opencode"
-  if [ -d "$HOME/.local/share" ] && mkdir -p "$OPENCODE_PERSIST" 2>/dev/null; then
-    opencode_linkable=1
-    if [ -d "$OPENCODE_DATA" ] && [ ! -L "$OPENCODE_DATA" ]; then
-      opencode_stage="$OPENCODE_PERSIST.staging-$$"
-      opencode_listing=""
-      if opencode_listing=$(ls -A "$OPENCODE_PERSIST" 2>/dev/null) && [ -z "$opencode_listing" ]; then
-        opencode_dest="$OPENCODE_PERSIST"
-      else
-        opencode_dest="$OPENCODE_PERSIST.pre-link-$(date -u +%Y%m%dT%H%M%SZ)"
-      fi
-      if rm -rf "$opencode_stage" 2>/dev/null \
-        && cp -a "$OPENCODE_DATA" "$opencode_stage" 2>/dev/null \
-        && { [ "$opencode_dest" != "$OPENCODE_PERSIST" ] || rmdir "$OPENCODE_PERSIST" 2>/dev/null; } \
-        && mv "$opencode_stage" "$opencode_dest" 2>/dev/null; then
-        rm -rf "$OPENCODE_DATA" 2>/dev/null || opencode_linkable=0
-      else
-        rm -rf "$opencode_stage" 2>/dev/null || true
-        mkdir -p "$OPENCODE_PERSIST" 2>/dev/null || true
-        opencode_linkable=0
-      fi
+  # EVERY step is non-fatal: under `set -e` a failed move would otherwise
+  # turn "data stays parked" into "no boot".
+  for xdg in share state; do
+    staged="$HOME/.local-persist/$xdg"
+    if [ -d "$staged" ] && [ ! -L "$staged" ]; then
+      for src in "$staged"/* "$staged"/.[!.]* "$staged"/..?*; do
+        if [ -e "$src" ] || [ -L "$src" ]; then
+          dst="$HOME/.local/$xdg/${src##*/}"
+          if [ -e "$dst" ] || [ -L "$dst" ]; then
+            echo "pocket-dev: kept $src (~/.local/$xdg/${src##*/} already exists)" >&2
+          elif ! mv -T "$src" "$dst" 2>/dev/null; then
+            echo "pocket-dev: could not move $src into ~/.local/$xdg; left in place" >&2
+          fi
+        fi
+      done
+      rmdir "$staged" 2>/dev/null || true
     fi
-    if [ "$opencode_linkable" = "1" ] && ln -sfn "$OPENCODE_PERSIST" "$OPENCODE_DATA" 2>/dev/null; then
-      :
-    else
-      echo "pocket-dev: could not link $OPENCODE_DATA into the persistent home;" >&2
-      echo "pocket-dev: OpenCode history stays in the container layer this boot." >&2
-    fi
-  fi
+  done
+  rmdir "$HOME/.local-persist" 2>/dev/null || true
 
   # NO config.toml SEED FOR CODEX, ON PURPOSE. An earlier version of this block
   # wrote `model = "gpt-5.6-sol"` and `model_reasoning_effort = "high"` here to
@@ -306,15 +354,17 @@ chmod 775 /workspace 2>/dev/null || true
 # container start and is not guaranteed to be stable across recreates (Docker
 # often reuses one, but nothing promises it), so the image cannot know it.
 #
-# The export reaches PID 1 and everything descended from it. That is NOT by
+# The export reaches the server this script execs and everything descended from
+# it. Under --init that server is NOT PID 1: tini is, and it never sees this
+# export, so read the server's own environment, never /proc/1. That is NOT by
 # itself enough to reach a session: tmux's server outlives its clients and
 # `new-session` inherits the SERVER's environment, so a tmux server that was
 # already running without this variable would hand sessions an environment
 # without it. server.js closes that by forwarding every LAVISH_ variable through
 # `new-session -e`; see buildTmuxSpawnArgs. It also does not reach `docker exec`,
 # which builds its environment from the image's Config.Env, so a probe from
-# outside has to import PID 1's environment (/proc/1/environ) or it will bind
-# loopback and report a URL nothing can open. See CLAUDE.md.
+# outside has to import the server's environment (/proc/<server pid>/environ) or
+# it will bind loopback and report a URL nothing can open. See CLAUDE.md.
 #
 # Reachability is only half of it. Lavish's DNS-rebinding guard 403s any request
 # whose Host header is not one it answers to, and it answers to loopback, this

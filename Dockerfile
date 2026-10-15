@@ -181,6 +181,29 @@ RUN npm install -g --no-fund --no-audit lavish-axi \
     && npm cache clean --force \
     && lavish-axi --version
 
+# bws, the Bitwarden Secrets Manager CLI that the /secrets skill drives. Before
+# this it was installed by hand into ~/.local/bin, which is a symlink into the
+# image skeleton, so every recreate deleted it and the next session downloaded
+# it again. Same /usr/local reasoning and the same ~/bin shadowing trap as codex
+# and lavish-axi above: a copy left in ~/bin wins on PATH and freezes forever.
+#
+# PINNED, unlike those two, and the sha256 is pinned with it. They come from a
+# registry; this is a raw GitHub release asset, and checking it against the
+# checksum file published beside it only proves the two files agree. A pinned
+# digest fails the build if the asset is ever replaced. To bump: take the newest
+# `bws-v*` tag on bitwarden/sdk-sm, and the musl zip's line from its
+# `bws-sha256-checksums-<ver>.txt`. musl because it is static, so the same binary
+# also runs when copied into an Alpine sibling container.
+ARG BWS_VERSION=2.1.0
+ARG BWS_SHA256=f59ee150e42b82128d437087e9bac920053c6bfddcb960d20ce9386e5ac9bba6
+RUN curl -fsSL -o /tmp/bws.zip \
+      "https://github.com/bitwarden/sdk-sm/releases/download/bws-v${BWS_VERSION}/bws-x86_64-unknown-linux-musl-${BWS_VERSION}.zip" \
+    && echo "${BWS_SHA256}  /tmp/bws.zip" | sha256sum -c - \
+    && python3 -m zipfile -e /tmp/bws.zip /tmp/bws \
+    && install -m 0755 /tmp/bws/bws /usr/local/bin/bws \
+    && rm -rf /tmp/bws /tmp/bws.zip \
+    && bws --version
+
 # Happier and OpenCode, the agent-orchestration CLIs. Happier's daemon is what
 # makes this container's sessions visible and drivable from the Happier phone,
 # desktop and web apps (relay on Tower, homelab#27); entrypoint.sh supervises
@@ -351,11 +374,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # The symlink rewrite is the load-bearing part. The claude installer writes an
 # ABSOLUTE symlink (.local/bin/claude -> /home/claude/.local/share/claude/
 # versions/<v>), so a bare `mv` leaves a dangling link that only resolves if
-# entrypoint.sh has already linked ~/.local back. That circular dependency would
+# entrypoint.sh has already linked ~/.local/share/claude back. That circular dependency would
 # mean a container with a failed entrypoint has no runnable Claude and no
 # obvious reason why. Rewriting the links to point inside /opt/pd-home makes the
 # skeleton self-contained: PATH below reaches the real binary even if no seeding
-# ever runs. DO NOT drop the rewrite and rely on ~/.local being linked.
+# ever runs. DO NOT drop the rewrite and rely on the ~/.local links.
 USER root
 RUN mv /home/claude /opt/pd-home && \
     rm -rf /opt/pd-home/.cache /opt/pd-home/.npm && \
