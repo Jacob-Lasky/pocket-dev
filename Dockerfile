@@ -181,6 +181,38 @@ RUN npm install -g --no-fund --no-audit lavish-axi \
     && npm cache clean --force \
     && lavish-axi --version
 
+# Happier and OpenCode, the agent-orchestration CLIs. Happier's daemon is what
+# makes this container's sessions visible and drivable from the Happier phone,
+# desktop and web apps (relay on Tower, homelab#27); entrypoint.sh supervises
+# it. OpenCode is the any-model harness Happier drives.
+#
+# PINNED, unlike codex and lavish above, and pinned in exactly ONE place:
+# agent-tools/package.json, with its lockfile installed by `npm ci`. Happier's
+# OpenCode 2 support and its daemon/relay protocol move between minor
+# releases, so a silent upgrade is a real behaviour change, not freshness.
+# Bump both by editing that file and regenerating the lockfile.
+#
+# npm (not pnpm) on purpose: this is a plain install tree, not a workspace, and
+# npm 11's `allowScripts` gives the two properties pnpm was chosen for here, a
+# lockfile and build scripts refused unless named. That list lives in
+# package.json and is deliberately exact; CLAUDE.md "Happier daemon" says why
+# each entry is there and why onnxruntime-node is denied.
+#
+# Same /usr/local reasoning as codex: /home/claude ships EMPTY and is a bind
+# mount, and ~/bin precedes /usr/local/bin on PATH, so a home copy would
+# shadow these forever. The tree is root-owned and read-only to uid 99; both
+# CLIs were verified to run from a read-only tree (they keep state under
+# ~/.happier and ~/.local/share/opencode, never in their package).
+COPY agent-tools/package.json agent-tools/package-lock.json /opt/agent-tools/
+RUN cd /opt/agent-tools \
+    && npm ci --no-fund --no-audit \
+    && npm cache clean --force \
+    && ln -s /opt/agent-tools/node_modules/.bin/happier /usr/local/bin/happier \
+    && ln -s /opt/agent-tools/node_modules/.bin/opencode /usr/local/bin/opencode \
+    && ln -s /opt/agent-tools/node_modules/.bin/opencode2 /usr/local/bin/opencode2 \
+    && happier --version \
+    && opencode --version
+
 # Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
 # to the newest model in its family at launch, by design (Jake wants these to
 # track latest automatically). DO NOT pin them back to claude-opus-X-Y / a dated
@@ -233,9 +265,9 @@ RUN groupadd -g 281 docker || true && \
 # the e2e suite against a pnpm install, which loads those assets over /xterm.
 RUN corepack enable pnpm
 COPY mobile/ /mobile/
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace pd-happier-supervise && \
     pnpm install --prod --frozen-lockfile && \
-    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace && \
+    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace /mobile/pd-happier-supervise && \
     mkdir -p /etc/codex && \
     cp /mobile/codex-requirements.toml /etc/codex/requirements.toml && \
     chown -R claude:users /mobile

@@ -1,0 +1,104 @@
+#!/bin/bash
+# Keep the Happier daemon running for as long as this container runs.
+#
+# WHY this exists. The Happier daemon is what makes this container's sessions
+# visible and drivable from the Happier phone, desktop and web apps: it holds
+# the connection to the relay and launches sessions the apps ask for. Its own
+# always-on mode (`happier daemon install`) is a `systemd --user` unit, and this
+# container has no systemd, so without this loop the daemon runs only until the
+# next recreate (CA Auto Update does one at ~03:00 whenever a new image exists)
+# or the next crash, and nothing says it stopped.
+#
+# entrypoint.sh starts this in the background just before it execs the server,
+# so it inherits the finished environment (LAVISH_AXI_HOST, CODEX_INSTALL_DIR,
+# PATH) and so do the sessions the daemon spawns. That is also why the daemon
+# should be STARTED by this loop rather than by hand: a `happier daemon start`
+# typed through `docker exec` builds its environment from the image config and
+# misses those exports. After a first `happier auth login`, just wait for the
+# next pass; the credential check below picks it up.
+#
+# The loop has no exit path (no `set -e`, nothing returns early) except the
+# PD_HAPPIER_ONCE test seam, so the only way it stops is a signal. Under
+# `--init` tini reaps whatever the daemon orphans.
+#
+# Status comes from `happier daemon status --json` and NOT the exit code, which
+# is 0 whether or not the daemon runs (measured on CLI 0.2.16). Anything short
+# of a completed call carrying BOOLEAN `auth.authenticated` and
+# `daemon.running` is "unknown" and never triggers a start, so a CLI that
+# cannot answer is never mistaken for a dead daemon. Two supervisors, or one
+# racing a manual start, are harmless: `happier daemon start` against a live
+# daemon prints "Daemon already running" and keeps the same PID (measured
+# 2026-10-15).
+#
+# Logging is on STATE CHANGES only, to stderr (the container log); stdout
+# belongs to whoever started us and entrypoint.sh points it at /dev/null.
+#
+# Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
+# is not a positive number falls back to 60, so a bad value cannot become a
+# tight loop) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
+set -u
+
+INTERVAL="${PD_HAPPIER_INTERVAL:-60}"
+if ! [[ $INTERVAL =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ $INTERVAL =~ ^0+(\.0+)?$ ]]; then
+  INTERVAL=60
+fi
+ONCE="${PD_HAPPIER_ONCE:-0}"
+HAPPIER_HOME="${HAPPIER_HOME_DIR:-$HOME/.happier}"
+last_key=""
+
+say() {
+  # $1 is the state key, $2 the message. Same key twice in a row stays quiet.
+  [ "$1" = "$last_key" ] && return 0
+  last_key="$1"
+  echo "pocket-dev: happier: $2" >&2
+}
+
+read_state() {
+  # Prints "<authenticated> <running>" as true/false words, or "unknown".
+  local out
+  if ! out=$(set -o pipefail; timeout 30 happier daemon status --json 2>/dev/null); then
+    echo unknown
+    return
+  fi
+  printf '%s' "$out" | node -e '
+    let s = "";
+    process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+      try {
+        const j = JSON.parse(s);
+        const a = j && j.auth && j.auth.authenticated;
+        const r = j && j.daemon && j.daemon.running;
+        if (typeof a !== "boolean" || typeof r !== "boolean") throw new Error("shape");
+        process.stdout.write(`${a} ${r}`);
+      } catch {
+        process.stdout.write("unknown");
+      }
+    });'
+}
+
+while :; do
+  if ! compgen -G "$HAPPIER_HOME/servers/*/access.key" >/dev/null; then
+    # Never signed in: nothing to start, and no CLI call is worth making.
+    say no-credential "no Happier sign-in yet; the daemon starts on the first check after 'happier auth login'"
+  else
+    case "$(read_state)" in
+      "true true")
+        say running "daemon running"
+        ;;
+      "true false")
+        if timeout 90 happier daemon start >/dev/null 2>&1; then
+          say running "daemon started"
+        else
+          say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
+        fi
+        ;;
+      "false "*)
+        say signed-out "not signed in to a Happier server (run 'happier auth login'); daemon not started"
+        ;;
+      *)
+        say unknown "could not read daemon status; retrying every ${INTERVAL}s"
+        ;;
+    esac
+  fi
+  [ "$ONCE" = "1" ] && exit 0
+  sleep "$INTERVAL"
+done
