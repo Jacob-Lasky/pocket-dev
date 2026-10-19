@@ -11,11 +11,14 @@
 #
 # entrypoint.sh starts this in the background just before it execs the server,
 # so it inherits the finished environment (LAVISH_AXI_HOST, CODEX_INSTALL_DIR,
-# PATH) and so do the sessions the daemon spawns. That is also why the daemon
+# PATH) and hands it to the session runners it spawns. That is also why the daemon
 # should be STARTED by this loop rather than by hand: a `happier daemon start`
 # typed through `docker exec` builds its environment from the image config and
 # misses those exports. After a first `happier auth login`, just wait for the
-# next pass; the credential check below picks it up.
+# next pass; the credential check below picks it up. The `claude` a runner
+# starts still gets an allowlisted environment without those exports; the
+# ~/.claude SessionStart hook pocket-dev-session-env.sh restores them (#103,
+# CLAUDE.md "Happier daemon").
 #
 # The loop has no exit path (no `set -e`, nothing returns early) except the
 # PD_HAPPIER_ONCE test seam, so the only way it stops is a signal. Under
