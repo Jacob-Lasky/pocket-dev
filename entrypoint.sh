@@ -421,8 +421,11 @@ if [ -z "${LAVISH_AXI_HOST:-}" ]; then
 fi
 
 # The Happier daemon supervisor (see mobile/pd-happier-supervise for why it
-# exists). Started HERE, after the Lavish export and just before exec, so it and
-# every session the daemon launches inherit the finished environment. Started
+# exists). Started HERE, after the Lavish export and just before exec, so it,
+# the daemon and the session runners it launches inherit the finished
+# environment. The `claude` a runner starts does not (Happier allowlists its
+# env); the ~/.claude SessionStart hook restores it, see CLAUDE.md "Happier
+# daemon" (#103). Started
 # in the background so it never delays the server, and it outlives the exec as
 # a child of the same PID.
 #

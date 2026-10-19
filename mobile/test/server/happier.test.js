@@ -282,7 +282,13 @@ describe('entrypoint.sh starts the supervisor', () => {
 
   it('does not launch it when the CLI is missing', () => {
     fs.rmSync(path.join(stubBin, 'happier'));
-    expect(boot().launched).toBe(false);
+    // Drop every PATH dir holding a real happier too. Inside pocket-dev the
+    // image's /usr/local/bin/happier is on the inherited PATH, so removing the
+    // stub alone left the CLI installed and this case failed there while
+    // passing in CI, which has no Happier.
+    const realFree = (process.env.PATH || '').split(':')
+      .filter((dir) => dir && !fs.existsSync(path.join(dir, 'happier')));
+    expect(boot({ PATH: [stubBin, ...realFree].join(':') }).launched).toBe(false);
   });
 
   it('warns when a copy outside /usr/local/bin shadows the pinned one', () => {
