@@ -134,3 +134,26 @@ describe('claude-docs workflow model pin', () => {
     expect(workflow).toContain(`claude-code-action ${tag},`);
   });
 });
+
+// The docs job reverted three corrections PR #104 made to CLAUDE.md, restoring
+// claims that PR had just disproved, because what they described (a hook in
+// ~/.claude) is invisible from the checkout. The prompt now forbids touching
+// markdown the PR diff itself changed. Guarded here because a prompt rewrite
+// that drops the rule would ship green and only show up as a silent revert.
+describe('claude-docs workflow prompt', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../.github/workflows/claude-docs.yml'),
+    'utf8',
+  );
+  const prompt = workflow.slice(workflow.indexOf('prompt: |'));
+
+  it('found the prompt block it is checking', () => {
+    expect(workflow).toContain('prompt: |');
+    expect(prompt).toContain('pr.diff');
+  });
+
+  it('forbids reverting markdown the PR itself changed', () => {
+    expect(prompt).toMatch(/Do NOT revert, delete or reword it/);
+    expect(prompt).toMatch(/author's deliberate edit/);
+  });
+});

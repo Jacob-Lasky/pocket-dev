@@ -75,6 +75,11 @@ jobs:
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The "deliberate edit" rule below is load-bearing. Measured on PR
+          # #104, 2026-10-19: without it this job reverted three corrections
+          # the PR made to CLAUDE.md, restoring claims the PR had just
+          # disproved, because the fix they described lives in ~/.claude and
+          # was invisible from this checkout.
           prompt: |
             You are updating documentation for a pull request. The full diff of
             this PR (branch vs base) is in the file ${{ runner.temp }}/pr.diff —
@@ -91,6 +96,12 @@ jobs:
             - Keep edits surgical: update what the diff made stale, add what it
               made necessary. Do not rewrite unrelated sections or restructure
               documents.
+            - Markdown that this PR's diff itself adds or changes is the
+              author's deliberate edit. Do NOT revert, delete or reword it,
+              even where you cannot confirm it from this repository: it may
+              describe something outside the repo (a hook in the user's
+              ~/.claude, a live measurement) that you cannot see. Your job is
+              the documentation the diff left stale ELSEWHERE.
             - If the documentation is already accurate, change nothing and say so.
           # DO NOT change --model to a moving alias (opus, opus[1m]). The
           # Dockerfile's cdspo/cdsps deliberately use aliases so they follow
