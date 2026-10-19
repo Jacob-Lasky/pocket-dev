@@ -96,6 +96,8 @@ describe('Codex CLI install', () => {
     // on a host running Jake's production containers.
     expect(extraParams).toMatch(/--group-add\s+281\b/);
     expect(extraParams).toMatch(/--memory=16G\b/);
+    // The cap covers RAM AND swap (homelab#72): without this a capped container swaps without limit.
+    expect(extraParams).toMatch(/--memory-swap=16G\b/);
     expect(extraParams).toMatch(/--cap-add=SYS_PTRACE\b/);
   });
 
@@ -112,6 +114,7 @@ describe('Codex CLI install', () => {
     expect(compose).toMatch(/cap_add:/);
     expect(compose).toMatch(/SYS_PTRACE\b/);
     expect(compose).toMatch(/mem_limit:\s*16g\b/);
+    expect(compose).toMatch(/memswap_limit:\s*16g\b/);
   });
 
   it('installs BEFORE the mobile/ copy (build-cache ordering)', () => {

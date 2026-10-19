@@ -97,6 +97,7 @@ services:
     # Matches the template. An uncapped container on a host running other
     # workloads is how a runaway compile takes the whole box down.
     mem_limit: 16g
+    memswap_limit: 16g   # RAM + swap together (homelab#72); equal to mem_limit = no swap beyond the cap
 
     # Docker's init (tini) runs as PID 1 and reaps orphans (#31). Without it the
     # node server is PID 1, never reaps, and zombies pile up until the cgroup pids
