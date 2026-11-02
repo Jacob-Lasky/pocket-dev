@@ -54,15 +54,17 @@
 # belongs to whoever started us and entrypoint.sh points it at /dev/null.
 #
 # Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
-# is not a number of at least 0.1 falls back to 60, so a bad value cannot
-# become a tight loop) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
+# is not a number from 0.1 to 86400 falls back to 60, so a bad value cannot
+# become a tight loop or an endless sleep) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
 set -u
 
 INTERVAL="${PD_HAPPIER_INTERVAL:-60}"
-# At least 0.1 s: a positive but tiny value (1e-28 written out) slept for
-# nothing and turned a failing start or stop into a tight loop.
+# Between 0.1 s and a day: a positive but tiny value (1e-28 written out) slept
+# for nothing and turned a failing start or stop into a tight loop, and a huge
+# one (99999999999999999999) made `sleep` never return, so supervision
+# silently stopped.
 if ! [[ $INTERVAL =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-  || ! awk -v i="$INTERVAL" 'BEGIN { exit !(i >= 0.1) }'; then
+  || ! awk -v i="$INTERVAL" 'BEGIN { exit !(i >= 0.1 && i <= 86400) }'; then
   INTERVAL=60
 fi
 ONCE="${PD_HAPPIER_ONCE:-0}"

@@ -213,7 +213,7 @@ describe('pd-happier-supervise', () => {
       expect(res.stderr.match(/daemon running/g)).toHaveLength(1);
     });
 
-    it.each(['0', '-5', 'abc', '', '0.0000000000000000000000000001', '0.05'])('falls back to 60s for interval %j instead of a tight loop', (interval) => {
+    it.each(['0', '-5', 'abc', '', '0.0000000000000000000000000001', '0.05', '99999999999999999999', '86401'])('falls back to 60s for interval %j instead of a tight loop', (interval) => {
       supervise(
         { STUB_STATUS: STATUS(true, true), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: interval },
         { timeout: 1000 },

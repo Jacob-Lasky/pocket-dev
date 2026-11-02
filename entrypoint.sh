@@ -202,10 +202,14 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # executable regular file under versions/. A real file or directory someone
   # put at the launcher path is theirs: warn and leave it, never replace it.
   claude_target="$(readlink -m "$CLAUDE_LAUNCHER" 2>/dev/null || true)"
-  case "$claude_target" in
-    "$(readlink -m "$CLAUDE_VERSIONS" 2>/dev/null || true)"/?*) claude_home_ok=1 ;;
-    *) claude_home_ok=0 ;;
-  esac
+  claude_versions_real="$(readlink -m "$CLAUDE_VERSIONS" 2>/dev/null || true)"
+  claude_home_ok=0
+  # An empty resolution must not turn the prefix into "/" and accept anything.
+  if [ -n "$claude_versions_real" ]; then
+    case "$claude_target" in
+      "$claude_versions_real"/?*) claude_home_ok=1 ;;
+    esac
+  fi
   if [ "$claude_home_ok" = "1" ] && [ -f "$claude_target" ] && [ -x "$claude_target" ]; then
     :
   elif [ -e "$CLAUDE_LAUNCHER" ] && [ ! -L "$CLAUDE_LAUNCHER" ]; then
