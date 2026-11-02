@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y \
     bubblewrap \
     build-essential \
     python3 \
+    python3-yaml \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
