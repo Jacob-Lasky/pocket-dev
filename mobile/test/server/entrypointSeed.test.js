@@ -187,7 +187,7 @@ describe('entrypoint.sh seeding, executed', () => {
 
     it('never picks a prerelease or a non-version name over a release', () => {
       fs.mkdirSync(local('share/claude/versions'), { recursive: true });
-      for (const v of ['2.1.10', '2.1.10-rc.1', 'latest', '2.1.9']) {
+      for (const v of ['2.1.10', '2.1.10-rc.1', 'latest', '2.1.9', '9', '3.0', '02.1.11']) {
         fs.writeFileSync(local(`share/claude/versions/${v}`), '#!/bin/sh\n', { mode: 0o755 });
       }
       run();
@@ -514,6 +514,30 @@ ln -s "$HOME/.codex/packages/standalone/current/bin/codex" "$CODEX_INSTALL_DIR/c
     expect(res.stderr).toContain('restored the ~/bin/codex launcher');
   });
 
+  it('repoints a ~/bin/codex link that names some other executable', () => {
+    const payload = path.join(home, '.codex/packages/standalone/current/bin');
+    fs.mkdirSync(payload, { recursive: true });
+    fs.writeFileSync(path.join(payload, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(home, 'bin'));
+    fs.symlinkSync('/bin/true', path.join(home, 'bin/codex'));
+    run();
+    expect(fs.readlinkSync(path.join(home, 'bin/codex'))).toBe(path.join(payload, 'codex'));
+  });
+
+  it('still boots when ~/.codex is a regular file', () => {
+    fs.writeFileSync(path.join(home, '.codex'), 'not a dir');
+    const res = run();
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('could not relink ~/.codex/tmp');
+  });
+
+  it('is not fooled into "unwritable" by a directory named like the probe', () => {
+    fs.mkdirSync(path.join(home, '.pd-write-test'));
+    const res = run();
+    expect(res.stderr).not.toMatch(/not writable/i);
+    expect(fs.lstatSync(path.join(home, '.local')).isDirectory()).toBe(true);
+  });
+
   it('never replaces a real ~/bin/codex file', () => {
     const payload = path.join(home, '.codex/packages/standalone/current/bin');
     fs.mkdirSync(payload, { recursive: true });
@@ -556,7 +580,7 @@ ln -s "$HOME/.codex/packages/standalone/current/bin/codex" "$CODEX_INSTALL_DIR/c
 
   it('leaves no write-test file behind', () => {
     run();
-    expect(fs.existsSync(path.join(home, '.pd-write-test'))).toBe(false);
+    expect(fs.readdirSync(home).filter((n) => n.startsWith('.pd-write-test'))).toEqual([]);
   });
 
   it('warns loudly, but still boots, when the home is not writable', () => {

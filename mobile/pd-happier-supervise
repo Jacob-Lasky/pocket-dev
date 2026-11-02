@@ -54,12 +54,15 @@
 # belongs to whoever started us and entrypoint.sh points it at /dev/null.
 #
 # Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
-# is not a positive number falls back to 60, so a bad value cannot become a
-# tight loop) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
+# is not a number of at least 0.1 falls back to 60, so a bad value cannot
+# become a tight loop) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
 set -u
 
 INTERVAL="${PD_HAPPIER_INTERVAL:-60}"
-if ! [[ $INTERVAL =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ $INTERVAL =~ ^0+(\.0+)?$ ]]; then
+# At least 0.1 s: a positive but tiny value (1e-28 written out) slept for
+# nothing and turned a failing start or stop into a tight loop.
+if ! [[ $INTERVAL =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+  || ! awk -v i="$INTERVAL" 'BEGIN { exit !(i >= 0.1) }'; then
   INTERVAL=60
 fi
 ONCE="${PD_HAPPIER_ONCE:-0}"
@@ -77,7 +80,8 @@ say() {
 newer() {
   # True when release version $1 is strictly newer than $2. Both must be plain
   # N.N.N (Happier's stable releases); anything else is not provably newer.
-  local re='^[0-9]+\.[0-9]+\.[0-9]+$'
+  # No leading zeros, so equal versions are always equal strings.
+  local re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
   [[ $1 =~ $re && $2 =~ $re ]] || return 1
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }

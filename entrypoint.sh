@@ -52,8 +52,10 @@ HOME_WRITABLE=1
 # a home whose directory is not writable passes `touch` alone, and the old
 # unguarded `rm` then ended the boot under `set -e` (reproduced 2026-11-02).
 # An entry that cannot be removed means the directory is not writable.
-if ! mkdir -p "$HOME" 2>/dev/null || ! touch "$HOME/.pd-write-test" 2>/dev/null \
-  || ! rm -f "$HOME/.pd-write-test" 2>/dev/null; then
+# A fresh mktemp name, so nothing already at a fixed name (a directory called
+# .pd-write-test, say) can make a writable home read as unwritable.
+if ! mkdir -p "$HOME" 2>/dev/null || ! write_test=$(mktemp -p "$HOME" .pd-write-test.XXXXXX 2>/dev/null) \
+  || ! rm -f "$write_test" 2>/dev/null; then
   HOME_WRITABLE=0
   echo "pocket-dev: WARNING: $HOME is not writable by uid $(id -u):$(id -g)." >&2
   echo "pocket-dev: Session restore, gh auth and every credential under ~ will" >&2
@@ -199,9 +201,9 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # "Runs" means what Claude's installer makes: the launcher resolves to an
   # executable regular file under versions/. A real file or directory someone
   # put at the launcher path is theirs: warn and leave it, never replace it.
-  claude_target="$(readlink -m "$CLAUDE_LAUNCHER")"
+  claude_target="$(readlink -m "$CLAUDE_LAUNCHER" 2>/dev/null || true)"
   case "$claude_target" in
-    "$(readlink -m "$CLAUDE_VERSIONS")"/*) claude_home_ok=1 ;;
+    "$(readlink -m "$CLAUDE_VERSIONS" 2>/dev/null || true)"/?*) claude_home_ok=1 ;;
     *) claude_home_ok=0 ;;
   esac
   if [ "$claude_home_ok" = "1" ] && [ -f "$claude_target" ] && [ -x "$claude_target" ]; then
@@ -215,9 +217,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
     # AFTER 2.1.10.
     newest=""
     for v in "$CLAUDE_VERSIONS"/*; do
-      case "${v##*/}" in
-        *[!0-9.]*|.*|*.|*..*) continue ;;
-      esac
+      [[ ${v##*/} =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
       if [ -f "$v" ] && [ -x "$v" ]; then
         if [ -z "$newest" ] || [ "$(printf '%s\n%s\n' "${newest##*/}" "${v##*/}" | sort -V | tail -n 1)" = "${v##*/}" ]; then
           newest="$v"
@@ -302,10 +302,13 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # These are process-lifetime helpers, not persisted Codex state. Relocate
   # only tmp, before the daemon or any session starts. DO NOT run this
   # migration against active Codex processes; their PATH uses these helpers.
-  mkdir -p "$CACHE/.codex-tmp"
-  chmod 700 "$CACHE/.codex-tmp"
-  [ -L "$HOME/.codex/tmp" ] || rm -rf "$HOME/.codex/tmp"
-  ln -sfn "$CACHE/.codex-tmp" "$HOME/.codex/tmp"
+  # Non-fatal: a regular file at ~/.codex (the guarded mkdir above warned)
+  # made this `ln` end the boot under `set -e`.
+  if ! { mkdir -p "$CACHE/.codex-tmp" && chmod 700 "$CACHE/.codex-tmp" \
+    && { [ -L "$HOME/.codex/tmp" ] || rm -rf "$HOME/.codex/tmp"; } \
+    && ln -sfn "$CACHE/.codex-tmp" "$HOME/.codex/tmp"; } 2>/dev/null; then
+    echo "pocket-dev: could not relink ~/.codex/tmp into the cache; Codex may strand helper dirs" >&2
+  fi
 
   # CODEX REMOTE CONTROL, so a Codex tab is drivable from the phone the way a
   # Claude tab is. The two mechanisms are NOT alike, and that asymmetry is the
@@ -371,8 +374,10 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # dangling link). Then PATH runs the image's npm Codex, which neither remote
   # control nor the Happier app can update. Restore the link the installer
   # makes; never replace a real file someone put there.
-  if [ -x "$CODEX_STANDALONE" ] && [ ! -x "$HOME/bin/codex" ] \
-    && { [ -L "$HOME/bin/codex" ] || [ ! -e "$HOME/bin/codex" ]; }; then
+  if [ -x "$CODEX_STANDALONE" ] \
+    && { [ ! -e "$HOME/bin/codex" ] && [ ! -L "$HOME/bin/codex" ] \
+      || { [ -L "$HOME/bin/codex" ] \
+        && [ "$(readlink -m "$HOME/bin/codex" 2>/dev/null || true)" != "$(readlink -m "$CODEX_STANDALONE" 2>/dev/null || true)" ]; }; }; then
     if ln -sfnT "$CODEX_STANDALONE" "$HOME/bin/codex" 2>/dev/null; then
       echo "pocket-dev: restored the ~/bin/codex launcher for the standalone Codex" >&2
     fi

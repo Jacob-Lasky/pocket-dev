@@ -213,7 +213,7 @@ describe('pd-happier-supervise', () => {
       expect(res.stderr.match(/daemon running/g)).toHaveLength(1);
     });
 
-    it.each(['0', '-5', 'abc', ''])('falls back to 60s for interval %j instead of a tight loop', (interval) => {
+    it.each(['0', '-5', 'abc', '', '0.0000000000000000000000000001', '0.05'])('falls back to 60s for interval %j instead of a tight loop', (interval) => {
       supervise(
         { STUB_STATUS: STATUS(true, true), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: interval },
         { timeout: 1000 },
@@ -280,6 +280,7 @@ describe('pd-happier-supervise', () => {
       it.each([
         ['x; rm -rf /', '0.2.17'],
         ['0.2.16', '0.2.18-preview.1'],
+        ['1.0.0', '1.0.00'],
         [null, '0.2.17'],
       ])('does not restart when a version is not a plain release (%j -> %j)', (daemon, cli) => {
         const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon, cli, matches: false }) });
