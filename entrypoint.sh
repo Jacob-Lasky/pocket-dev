@@ -48,15 +48,18 @@ CACHE="${PD_CACHE_DIR:-/var/tmp/pd-cache}"
 # and ln would fail and `set -e` would turn a degraded boot into no boot, which
 # is how this was written the first time and what the test caught.
 HOME_WRITABLE=1
-if ! mkdir -p "$HOME" 2>/dev/null || ! touch "$HOME/.pd-write-test" 2>/dev/null; then
+# The probe needs BOTH the create and the delete: a writable test file left in
+# a home whose directory is not writable passes `touch` alone, and the old
+# unguarded `rm` then ended the boot under `set -e` (reproduced 2026-11-02).
+# An entry that cannot be removed means the directory is not writable.
+if ! mkdir -p "$HOME" 2>/dev/null || ! touch "$HOME/.pd-write-test" 2>/dev/null \
+  || ! rm -f "$HOME/.pd-write-test" 2>/dev/null; then
   HOME_WRITABLE=0
   echo "pocket-dev: WARNING: $HOME is not writable by uid $(id -u):$(id -g)." >&2
   echo "pocket-dev: Session restore, gh auth and every credential under ~ will" >&2
   echo "pocket-dev: fail to persist, and this is the ONLY warning you get." >&2
   echo "pocket-dev: Fix: chown -R 99:100 the host path bound to /home/claude." >&2
   echo "pocket-dev: Booting anyway; claude still resolves from $SKEL." >&2
-else
-  rm -f "$HOME/.pd-write-test"
 fi
 
 # Link one image-owned entry into HOME.
@@ -161,9 +164,11 @@ if [ "$HOME_WRITABLE" = "1" ]; then
           case " $PD_HOME_OWNED " in
             *" $name "*)
               dst="$HOME/.local/$xdg/$name"
+              # readlink -m resolves a relative or dangling link as well as an
+              # absolute one, so every link into the image is caught.
               if [ -L "$dst" ]; then
-                case "$(readlink "$dst")" in
-                  "$SKEL"/*) rm -f "$dst" 2>/dev/null || true ;;
+                case "$(readlink -m "$dst")" in
+                  "$(readlink -m "$SKEL")"/*) rm -f "$dst" 2>/dev/null || true ;;
                 esac
               fi
               ;;
@@ -191,9 +196,28 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   #      that execute this script, the same reason PD_CODEX_RC exists.
   CLAUDE_LAUNCHER="$HOME/.local/bin/claude"
   CLAUDE_VERSIONS="$HOME/.local/share/claude/versions"
-  if [ ! -x "$CLAUDE_LAUNCHER" ]; then
+  # "Runs" means what Claude's installer makes: the launcher resolves to an
+  # executable regular file under versions/. A real file or directory someone
+  # put at the launcher path is theirs: warn and leave it, never replace it.
+  claude_target="$(readlink -m "$CLAUDE_LAUNCHER")"
+  case "$claude_target" in
+    "$(readlink -m "$CLAUDE_VERSIONS")"/*) claude_home_ok=1 ;;
+    *) claude_home_ok=0 ;;
+  esac
+  if [ "$claude_home_ok" = "1" ] && [ -f "$claude_target" ] && [ -x "$claude_target" ]; then
+    :
+  elif [ -e "$CLAUDE_LAUNCHER" ] && [ ! -L "$CLAUDE_LAUNCHER" ]; then
+    echo "pocket-dev: ~/.local/bin/claude is not Claude's native launcher; leaving it." >&2
+    echo "pocket-dev: The Happier app cannot update that copy. Move it aside to restore the native install." >&2
+  else
+    # Only plain release versions (Claude's installer names them N.N.N). A
+    # prerelease or any other name never wins: sort -V orders 2.1.10-rc.1
+    # AFTER 2.1.10.
     newest=""
     for v in "$CLAUDE_VERSIONS"/*; do
+      case "${v##*/}" in
+        *[!0-9.]*|.*|*.|*..*) continue ;;
+      esac
       if [ -f "$v" ] && [ -x "$v" ]; then
         if [ -z "$newest" ] || [ "$(printf '%s\n%s\n' "${newest##*/}" "${v##*/}" | sort -V | tail -n 1)" = "${v##*/}" ]; then
           newest="$v"
@@ -207,13 +231,22 @@ if [ "$HOME_WRITABLE" = "1" ]; then
         echo "pocket-dev: could not link ~/.local/bin/claude; the image's Claude runs instead" >&2
       fi
     elif [ "${PD_CLAUDE_NATIVE:-1}" != "0" ] && [ -x "$SKEL/.local/bin/claude" ]; then
-      if "$SKEL/.local/bin/claude" install </dev/null >/dev/null 2>&1 && [ -x "$CLAUDE_LAUNCHER" ]; then
+      # Bounded: an installer stalled on the network must not keep the
+      # container from ever reaching `exec`.
+      if timeout "${PD_CLAUDE_INSTALL_TIMEOUT:-600}" "$SKEL/.local/bin/claude" install </dev/null >/dev/null 2>&1 \
+        && [ -x "$CLAUDE_LAUNCHER" ]; then
         echo "pocket-dev: installed Claude Code natively into the home" >&2
       else
         echo "pocket-dev: native Claude install failed; the image's Claude runs instead," >&2
         echo "pocket-dev: and the Happier app cannot update it until the next boot retries." >&2
       fi
     fi
+  fi
+  # Say so when something earlier on PATH (a stray ~/bin/claude, say) shadows
+  # a working native launcher: the app would update one copy and run another.
+  if [ -x "$CLAUDE_LAUNCHER" ] && claude_on_path=$(command -v claude 2>/dev/null) \
+    && [ "$(readlink -m "$claude_on_path")" != "$(readlink -m "$CLAUDE_LAUNCHER")" ]; then
+    echo "pocket-dev: claude on PATH is $claude_on_path, which shadows the native ~/.local/bin/claude." >&2
   fi
 
   # .config is NOT image-owned as a whole: gh's auth token lives in .config/gh
@@ -251,7 +284,10 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # Happier-managed CLI's launcher (~/bin/happier) and the standalone Codex
   # launcher (~/bin/codex) live here: each must win over the image's npm
   # fallback copy of the same command.
-  mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
+  if ! mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null; then
+    # A regular file at one of these names used to end the boot under `set -e`.
+    echo "pocket-dev: could not create one of ~/.claude ~/.pocket-dev ~/.dgvpn ~/bin ~/.codex; that tool's state will not persist" >&2
+  fi
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
   # This is the identity of the persistent standalone install, not merely an
@@ -322,11 +358,23 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   if [ "${PD_CODEX_RC:-1}" != "0" ] && [ ! -x "$CODEX_STANDALONE" ]; then
     # The installer inherits the exported persistent destination. pipefail
     # keeps a failed download from looking like a successful empty shell script.
-    if (set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null | sh >/dev/null 2>&1); then
+    # Bounded for the same reason as Claude's native install above.
+    if (set -o pipefail; timeout 120 curl -fsSL https://chatgpt.com/codex/install.sh 2>/dev/null \
+      | timeout "${PD_CODEX_INSTALL_TIMEOUT:-600}" sh >/dev/null 2>&1); then
       echo "pocket-dev: installed the standalone codex (remote control needs it)" >&2
     else
       echo "pocket-dev: standalone codex install failed; remote control unavailable," >&2
       echo "pocket-dev: /usr/local/bin/codex still works for everything else." >&2
+    fi
+  fi
+  # The payload can survive while its ~/bin launcher does not (deleted, or a
+  # dangling link). Then PATH runs the image's npm Codex, which neither remote
+  # control nor the Happier app can update. Restore the link the installer
+  # makes; never replace a real file someone put there.
+  if [ -x "$CODEX_STANDALONE" ] && [ ! -x "$HOME/bin/codex" ] \
+    && { [ -L "$HOME/bin/codex" ] || [ ! -e "$HOME/bin/codex" ]; }; then
+    if ln -sfnT "$CODEX_STANDALONE" "$HOME/bin/codex" 2>/dev/null; then
+      echo "pocket-dev: restored the ~/bin/codex launcher for the standalone Codex" >&2
     fi
   fi
   if [ "${PD_CODEX_RC:-1}" != "0" ] && [ -x "$CODEX_STANDALONE" ]; then
@@ -522,12 +570,14 @@ if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
   # launcher is ~/bin/happier: it is the one the Happier app can update, and
   # pd-happier-supervise moves the daemon onto each new version. The image's
   # npm copy (/opt/agent-tools, linked as /usr/local/bin/happier) is only the
-  # first-boot fallback. When THAT is what resolves, the app shows the Happier
-  # CLI as "Installed by you" and cannot update it, so say so and name the fix.
-  case "$(readlink -f "$happier_bin" 2>/dev/null || printf '%s' "$happier_bin")" in
-    */opt/agent-tools/*)
-      echo "pocket-dev: happier resolves to the image's fallback copy ($happier_bin)," >&2
-      echo "pocket-dev: which the Happier app cannot update. Install the managed CLI:" >&2
+  # first-boot fallback. When anything else resolves (that fallback, or a stray
+  # copy earlier on PATH), the app shows the Happier CLI as "Installed by you"
+  # and cannot update it, so say so and name the fix.
+  case "$(readlink -m "$happier_bin")" in
+    "$(readlink -m "${HAPPIER_HOME_DIR:-$HOME/.happier}")"/cli/versions/*) ;;
+    *)
+      echo "pocket-dev: happier resolves to $happier_bin, not the Happier-managed install," >&2
+      echo "pocket-dev: so the Happier app cannot update it. Install the managed CLI:" >&2
       echo "pocket-dev: see CLAUDE.md \"Happier daemon\" (happier.dev/install, HAPPIER_BIN_DIR=\$HOME/bin)." >&2
       ;;
   esac

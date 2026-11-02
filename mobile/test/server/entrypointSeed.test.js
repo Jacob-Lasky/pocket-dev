@@ -169,6 +169,66 @@ describe('entrypoint.sh seeding, executed', () => {
       expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/3.0.0'));
     });
 
+    it('removes a RELATIVE link into the skeleton too', () => {
+      fs.mkdirSync(local('bin'), { recursive: true });
+      fs.symlinkSync(path.relative(local('bin'), path.join(skel, '.local/bin/claude')), local('bin/claude'));
+      run({ PD_CLAUDE_NATIVE: '1' });
+      expect(fs.realpathSync(local('bin/claude'))).toBe(fs.realpathSync(local('share/claude/versions/10.0.0')));
+    });
+
+    it('relinks a launcher that points anywhere but the home versions', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.mkdirSync(local('bin'), { recursive: true });
+      fs.writeFileSync(local('share/claude/versions/5.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      fs.symlinkSync('/nonexistent/claude', local('bin/claude'));
+      run();
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/5.0.0'));
+    });
+
+    it('never picks a prerelease or a non-version name over a release', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      for (const v of ['2.1.10', '2.1.10-rc.1', 'latest', '2.1.9']) {
+        fs.writeFileSync(local(`share/claude/versions/${v}`), '#!/bin/sh\n', { mode: 0o755 });
+      }
+      run();
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/2.1.10'));
+    });
+
+    it('leaves a real file at the launcher path alone, and says so', () => {
+      fs.mkdirSync(local('bin'), { recursive: true });
+      fs.writeFileSync(local('bin/claude'), '#!/bin/sh\necho mine\n', { mode: 0o755 });
+      const res = run({ PD_CLAUDE_NATIVE: '1' });
+      expect(fs.readFileSync(local('bin/claude'), 'utf8')).toContain('echo mine');
+      expect(res.stderr).toContain("is not Claude's native launcher; leaving it");
+    });
+
+    it('bounds the native installer so a stall cannot block the boot', () => {
+      const stall = path.join(skel, '.local/share/claude/versions/9.9.9');
+      fs.writeFileSync(stall, '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
+      const started = Date.now();
+      const res = run({ PD_CLAUDE_NATIVE: '1', PD_CLAUDE_INSTALL_TIMEOUT: '1' });
+      expect(res.status).toBe(0);
+      expect(Date.now() - started).toBeLessThan(15000);
+      expect(res.stderr).toContain('native Claude install failed');
+    });
+
+    it('warns when another claude earlier on PATH shadows the native launcher', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.writeFileSync(local('share/claude/versions/5.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      const stray = path.join(tmproot, 'stray');
+      fs.mkdirSync(stray);
+      fs.writeFileSync(path.join(stray, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+      const res = run({ PATH: `${stray}:${local('bin')}:${process.env.PATH}` });
+      expect(res.stderr).toContain(`claude on PATH is ${path.join(stray, 'claude')}, which shadows`);
+    });
+
+    it('says nothing about shadowing when the native launcher is first on PATH', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.writeFileSync(local('share/claude/versions/5.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      const res = run({ PATH: `${local('bin')}:${process.env.PATH}` });
+      expect(res.stderr).not.toContain('shadows the native');
+    });
+
     it('replaces the old layout\'s links into the skeleton and keeps the home install', () => {
       // The live home before this change: ~/.local/bin and share/claude and
       // state/claude were links into the image.
@@ -443,6 +503,43 @@ ln -s "$HOME/.codex/packages/standalone/current/bin/codex" "$CODEX_INSTALL_DIR/c
     expect(res.status).toBe(0);
     expect(res.stderr).toContain('standalone codex install failed');
     expect(res.stderr).not.toContain('installed the standalone codex');
+  });
+
+  it('restores a lost ~/bin/codex launcher for a standalone payload that survived', () => {
+    const payload = path.join(home, '.codex/packages/standalone/current/bin');
+    fs.mkdirSync(payload, { recursive: true });
+    fs.writeFileSync(path.join(payload, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+    const res = run();
+    expect(fs.readlinkSync(path.join(home, 'bin/codex'))).toBe(path.join(payload, 'codex'));
+    expect(res.stderr).toContain('restored the ~/bin/codex launcher');
+  });
+
+  it('never replaces a real ~/bin/codex file', () => {
+    const payload = path.join(home, '.codex/packages/standalone/current/bin');
+    fs.mkdirSync(payload, { recursive: true });
+    fs.writeFileSync(path.join(payload, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(home, 'bin'));
+    fs.writeFileSync(path.join(home, 'bin/codex'), 'mine', { mode: 0o644 });
+    run();
+    expect(fs.readFileSync(path.join(home, 'bin/codex'), 'utf8')).toBe('mine');
+  });
+
+  it('still boots when a state dir name is taken by a regular file', () => {
+    fs.writeFileSync(path.join(home, 'bin'), 'not a dir');
+    const res = run();
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('could not create one of');
+  });
+
+  it('still boots when a writable test file sits in an unwritable home', () => {
+    if (process.getuid && process.getuid() === 0) return;
+    fs.writeFileSync(path.join(home, '.pd-write-test'), '');
+    fs.chmodSync(home, 0o555);
+    try {
+      expect(run().status).toBe(0);
+    } finally {
+      fs.chmodSync(home, 0o755);
+    }
   });
 
   it('preserves user state in the home across a re-seed', () => {

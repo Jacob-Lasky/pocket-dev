@@ -260,15 +260,31 @@ describe('pd-happier-supervise', () => {
         expect(res.stderr).toContain('not restarting again');
       });
 
-      it('reports a stop that fails and does not start a second daemon', () => {
-        const res = supervise({ STUB_STATUS: CONVERGENCE(), STUB_STOP_EXIT: '1' });
+      it('reports a stop that fails, starts no second daemon, and retries next pass', () => {
+        const res = supervise(
+          { STUB_STATUS: CONVERGENCE(), STUB_STOP_EXIT: '1', PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: '0.1' },
+          { timeout: 1500 },
+        );
         expect(starts()).toBe(0);
-        expect(res.stderr).toContain('could not stop the daemon');
+        expect(calls('stop')).toBeGreaterThanOrEqual(2);
+        expect(res.stderr.match(/could not stop the daemon/g)).toHaveLength(1);
       });
 
-      it('ignores a version string that is not a plain version', () => {
-        const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon: 'x; rm -rf /', cli: '0.2.17', matches: false }) });
-        expect(res.stderr).toContain('daemon restarted onto CLI 0.2.17 (was -)');
+      it('never moves the daemon onto an OLDER CLI', () => {
+        // A missing managed launcher leaves the image's older npm copy on PATH.
+        const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon: '0.2.17', cli: '0.2.16' }) });
+        expect(calls('stop')).toBe(0);
+        expect(res.stderr).toContain('which is not newer');
+      });
+
+      it.each([
+        ['x; rm -rf /', '0.2.17'],
+        ['0.2.16', '0.2.18-preview.1'],
+        [null, '0.2.17'],
+      ])('does not restart when a version is not a plain release (%j -> %j)', (daemon, cli) => {
+        const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon, cli, matches: false }) });
+        expect(calls('stop')).toBe(0);
+        expect(res.stderr).toContain('not newer');
       });
     });
 
@@ -351,11 +367,20 @@ describe('entrypoint.sh starts the supervisor', () => {
     expect(boot({ PATH: [stubBin, ...realFree].join(':') }).launched).toBe(false);
   });
 
-  it('says nothing when the managed CLI (a home launcher) resolves', () => {
-    // The stub in a temp bin dir has the shape of ~/bin/happier, the launcher
-    // of Happier's own managed install: the expected state.
+  it('says nothing when the managed CLI resolves', () => {
+    // ~/bin/happier -> ~/.happier/cli/versions/<v>/happier: the expected state.
+    const versioned = path.join(home, '.happier/cli/versions/0.2.17');
+    fs.mkdirSync(versioned, { recursive: true });
+    fs.renameSync(path.join(stubBin, 'happier'), path.join(versioned, 'happier'));
+    fs.symlinkSync(path.join(versioned, 'happier'), path.join(stubBin, 'happier'));
+    const { stderr, launched } = boot();
+    expect(launched).toBe(true);
+    expect(stderr).not.toContain('not the Happier-managed install');
+  });
+
+  it('warns when a stray copy outside the managed install resolves', () => {
     const { stderr } = boot();
-    expect(stderr).not.toContain('fallback copy');
+    expect(stderr).toContain(`happier resolves to ${path.join(stubBin, 'happier')}, not the Happier-managed install`);
   });
 
   it('warns when the image\'s npm fallback is what resolves', () => {
@@ -367,6 +392,6 @@ describe('entrypoint.sh starts the supervisor', () => {
     fs.renameSync(path.join(stubBin, 'happier'), path.join(npmBin, 'happier'));
     fs.symlinkSync(path.join(npmBin, 'happier'), path.join(stubBin, 'happier'));
     const { stderr } = boot();
-    expect(stderr).toContain(`happier resolves to the image's fallback copy (${path.join(stubBin, 'happier')})`);
+    expect(stderr).toContain(`happier resolves to ${path.join(stubBin, 'happier')}, not the Happier-managed install`);
   });
 });
