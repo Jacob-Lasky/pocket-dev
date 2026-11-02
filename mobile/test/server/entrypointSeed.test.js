@@ -229,6 +229,29 @@ describe('entrypoint.sh seeding, executed', () => {
       expect(fs.existsSync(path.join(skel, '.local/share/claude/versions/9.9.9'))).toBe(true);
     });
 
+    it('never picks a release entry that links into the skeleton', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.symlinkSync(path.join(skel, '.local/share/claude/versions/9.9.9'), local('share/claude/versions/9.9.9'));
+      fs.writeFileSync(local('share/claude/versions/5.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      run();
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/5.0.0'));
+    });
+
+    it('keeps the image claude out, and says so, when the versions link cannot be removed', () => {
+      fs.mkdirSync(local('share/claude'), { recursive: true });
+      fs.symlinkSync(path.join(skel, '.local/share/claude/versions'), local('share/claude/versions'));
+      fs.chmodSync(local('share/claude'), 0o555);
+      try {
+        const res = run({ PD_CLAUDE_NATIVE: '1' });
+        expect(res.status).toBe(0);
+        expect(fs.existsSync(local('bin/claude'))).toBe(false);
+        expect(res.stderr).toContain('links into the image and could not be removed');
+        expect(fs.readdirSync(path.join(skel, '.local/share/claude/versions'))).toEqual(['9.9.9']);
+      } finally {
+        fs.chmodSync(local('share/claude'), 0o755);
+      }
+    });
+
     it('leaves a real file at the launcher path alone, and says so', () => {
       fs.mkdirSync(local('bin'), { recursive: true });
       fs.writeFileSync(local('bin/claude'), '#!/bin/sh\necho mine\n', { mode: 0o755 });

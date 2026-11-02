@@ -198,14 +198,24 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   #      that execute this script, the same reason PD_CODEX_RC exists.
   CLAUDE_LAUNCHER="$HOME/.local/bin/claude"
   CLAUDE_VERSIONS="$HOME/.local/share/claude/versions"
-  # A versions/ that is a link into the image is the image's install wearing the
-  # home's path: the steps below would adopt its frozen binary as the home's,
-  # and `claude update` would write into the container layer. Remove the link,
-  # as the PD_HOME_OWNED loop above does one level up; the image is untouched.
-  if [ -L "$CLAUDE_VERSIONS" ]; then
-    case "$(readlink -m "$CLAUDE_VERSIONS")" in
-      "$(readlink -m "$SKEL")"/*) rm -f "$CLAUDE_VERSIONS" 2>/dev/null || true ;;
+  # NOTHING THAT RESOLVES INTO THE IMAGE IS THE HOME'S CLAUDE, whatever path
+  # in the home reaches it: a versions/ linked into the skeleton, or one
+  # release entry linked there. Adopting one would run the frozen image binary
+  # under the home's name, and `claude update` would write into the container
+  # layer. Every check below resolves fully (readlink -m) and asks this.
+  skel_real="$(readlink -m "$SKEL" 2>/dev/null || true)"
+  in_image() {
+    [ -n "$skel_real" ] || return 1
+    case "$(readlink -m "$1" 2>/dev/null || true)" in
+      "$skel_real"/*) return 0 ;;
     esac
+    return 1
+  }
+  # A versions/ link into the image is removed, as the PD_HOME_OWNED loop above
+  # does one level up, so the installer below gets a real directory. The image
+  # is untouched.
+  if [ -L "$CLAUDE_VERSIONS" ] && in_image "$CLAUDE_VERSIONS"; then
+    rm -f "$CLAUDE_VERSIONS" 2>/dev/null || true
   fi
   # "Runs" means what Claude's installer makes: the launcher resolves to an
   # executable regular file under versions/. A real file or directory someone
@@ -214,7 +224,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   claude_versions_real="$(readlink -m "$CLAUDE_VERSIONS" 2>/dev/null || true)"
   claude_home_ok=0
   # An empty resolution must not turn the prefix into "/" and accept anything.
-  if [ -n "$claude_versions_real" ]; then
+  if [ -n "$claude_versions_real" ] && ! in_image "$CLAUDE_VERSIONS"; then
     case "$claude_target" in
       "$claude_versions_real"/?*) claude_home_ok=1 ;;
     esac
@@ -224,6 +234,11 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   elif [ -e "$CLAUDE_LAUNCHER" ] && [ ! -L "$CLAUDE_LAUNCHER" ]; then
     echo "pocket-dev: ~/.local/bin/claude is not Claude's native launcher; leaving it." >&2
     echo "pocket-dev: The Happier app cannot update that copy. Move it aside to restore the native install." >&2
+  elif in_image "$CLAUDE_VERSIONS"; then
+    # The removal above failed. The installer would follow the link and write
+    # into the container layer, so neither scan nor install runs.
+    echo "pocket-dev: ~/.local/share/claude/versions links into the image and could not be removed;" >&2
+    echo "pocket-dev: the image's Claude runs, and the Happier app cannot update it. Remove that link." >&2
   else
     # Only plain release versions (Claude's installer names them N.N.N). A
     # prerelease or any other name never wins: sort -V orders 2.1.10-rc.1
@@ -231,6 +246,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
     newest=""
     for v in "$CLAUDE_VERSIONS"/*; do
       [[ ${v##*/} =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+      if in_image "$v"; then continue; fi
       if [ -f "$v" ] && [ -x "$v" ]; then
         if [ -z "$newest" ] || [ "$(printf '%s\n%s\n' "${newest##*/}" "${v##*/}" | sort -V | tail -n 1)" = "${v##*/}" ]; then
           newest="$v"
