@@ -23,16 +23,37 @@ let home, skel, cache, tmproot;
 
 // A stand-in for the image's /opt/pd-home, including the ABSOLUTE symlink shape
 // the real claude installer produces (bin/claude -> <skel>/.local/share/...).
+// The skeleton's claude is the image's FALLBACK: the home owns its own native
+// install, so this one is never linked into ~/.local (PD_HOME_OWNED). Its stub
+// `install` does what Claude's native installer does, into $HOME, so the
+// bootstrap can be executed for real.
 function buildSkeleton() {
   fs.mkdirSync(path.join(skel, '.local/bin'), { recursive: true });
   fs.mkdirSync(path.join(skel, '.local/share/claude/versions'), { recursive: true });
   fs.mkdirSync(path.join(skel, '.config/fish'), { recursive: true });
   fs.mkdirSync(path.join(skel, '.config/uv'), { recursive: true });
-  fs.writeFileSync(path.join(skel, '.local/share/claude/versions/9.9.9'), '#!/bin/sh\necho claude\n');
+  fs.writeFileSync(
+    path.join(skel, '.local/share/claude/versions/9.9.9'),
+    [
+      '#!/bin/sh',
+      'if [ "$1" = install ]; then',
+      '  [ -n "$PD_TEST_CLAUDE_INSTALL_FAIL" ] && exit 1',
+      '  mkdir -p "$HOME/.local/share/claude/versions" "$HOME/.local/bin"',
+      '  printf "#!/bin/sh\\necho home claude\\n" > "$HOME/.local/share/claude/versions/10.0.0"',
+      '  chmod +x "$HOME/.local/share/claude/versions/10.0.0"',
+      '  ln -sfn "$HOME/.local/share/claude/versions/10.0.0" "$HOME/.local/bin/claude"',
+      '  exit 0',
+      'fi',
+      'echo claude',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
   fs.symlinkSync(
     path.join(skel, '.local/share/claude/versions/9.9.9'),
     path.join(skel, '.local/bin/claude'),
   );
+  fs.writeFileSync(path.join(skel, '.local/bin/uv'), '#!/bin/sh\necho uv\n', { mode: 0o755 });
   for (const rc of ['.bashrc', '.zshrc', '.profile', '.bash_logout']) {
     fs.writeFileSync(path.join(skel, rc), `# ${rc} from the image\n`);
   }
@@ -72,22 +93,99 @@ describe('entrypoint.sh seeding, executed', () => {
 
   it('makes the image binaries reachable through $HOME', () => {
     // The whole point. If this breaks, the container boots fine and simply has
-    // no claude in it.
+    // no uv in it.
     run();
-    const claude = path.join(home, '.local/bin/claude');
-    expect(fs.existsSync(claude)).toBe(true);
-    expect(fs.readFileSync(claude, 'utf8')).toContain('echo claude');
+    const uv = path.join(home, '.local/bin/uv');
+    expect(fs.existsSync(uv)).toBe(true);
+    expect(fs.readFileSync(uv, 'utf8')).toContain('echo uv');
   });
 
   it('links, never copies, the image-owned entries', () => {
-    // A copy freezes at first boot and an image update would ship a claude no
+    // A copy freezes at first boot and an image update would ship a tool no
     // container runs. Assert these are genuinely symlinks into the skeleton.
     run();
-    for (const rel of ['.bashrc', '.zshrc', '.profile', '.bash_logout', '.local/bin', '.local/share/claude']) {
+    for (const rel of ['.bashrc', '.zshrc', '.profile', '.bash_logout', '.local/bin/uv']) {
       const p = path.join(home, rel);
       expect(fs.lstatSync(p).isSymbolicLink(), `${rel} must be a symlink`).toBe(true);
       expect(fs.readlinkSync(p)).toBe(path.join(skel, rel));
     }
+  });
+
+  describe('Claude is a home-owned native install', () => {
+    // The image's claude is a fallback. The one that runs is ~/.local/bin/claude
+    // -> ~/.local/share/claude/versions/<v>, inside the mount, which `claude
+    // update` (and the Happier app's update button) keeps current. Happier
+    // attributes an install to Claude's updater only when the real path is
+    // under ~/.local/share/claude; anything else shows as "Installed by you".
+    const local = (rel) => path.join(home, '.local', rel);
+
+    it('never links the image claude into the home', () => {
+      run();
+      for (const rel of ['bin/claude', 'share/claude']) {
+        const p = local(rel);
+        const linked = fs.existsSync(p) && fs.lstatSync(p).isSymbolicLink() && fs.readlinkSync(p).startsWith(skel);
+        expect(linked, `${rel} must not point into the skeleton`).toBe(false);
+      }
+    });
+
+    it('bootstraps with the native installer when the home has no Claude', () => {
+      const res = run({ PD_CLAUDE_NATIVE: '1' });
+      expect(res.status).toBe(0);
+      expect(fs.realpathSync(local('bin/claude'))).toBe(fs.realpathSync(local('share/claude/versions/10.0.0')));
+      expect(res.stderr).toContain('installed Claude Code natively into the home');
+    });
+
+    it('does not reach the network when PD_CLAUDE_NATIVE=0', () => {
+      const res = run();
+      expect(fs.existsSync(local('bin/claude'))).toBe(false);
+      expect(res.stderr).not.toContain('native Claude install');
+    });
+
+    it('boots, on the image fallback, when the native install fails', () => {
+      const res = run({ PD_CLAUDE_NATIVE: '1', PD_TEST_CLAUDE_INSTALL_FAIL: '1' });
+      expect(res.status).toBe(0);
+      expect(res.stderr).toContain('native Claude install failed');
+    });
+
+    it('links the newest home version, with no installer, when the launcher is missing', () => {
+      // The first boot after ~/.local/bin stopped being a link to the skeleton:
+      // versions are in the mount but the launcher was in the image layer.
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      for (const v of ['2.1.9', '2.1.10']) {
+        fs.writeFileSync(local(`share/claude/versions/${v}`), `#!/bin/sh\necho ${v}\n`, { mode: 0o755 });
+      }
+      const res = run({ PD_CLAUDE_NATIVE: '1', PD_TEST_CLAUDE_INSTALL_FAIL: '1' });
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/2.1.10'));
+      expect(res.stderr).toContain("linked ~/.local/bin/claude to the home's Claude 2.1.10");
+    });
+
+    it('leaves a working launcher alone', () => {
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.mkdirSync(local('bin'), { recursive: true });
+      fs.writeFileSync(local('share/claude/versions/3.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      fs.writeFileSync(local('share/claude/versions/4.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      fs.symlinkSync(local('share/claude/versions/3.0.0'), local('bin/claude'));
+      run({ PD_CLAUDE_NATIVE: '1' });
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/3.0.0'));
+    });
+
+    it('replaces the old layout\'s links into the skeleton and keeps the home install', () => {
+      // The live home before this change: ~/.local/bin and share/claude and
+      // state/claude were links into the image.
+      fs.mkdirSync(path.join(home, '.local/share'), { recursive: true });
+      fs.mkdirSync(path.join(home, '.local/state'), { recursive: true });
+      fs.mkdirSync(path.join(skel, '.local/state/claude'), { recursive: true });
+      fs.symlinkSync(path.join(skel, '.local/bin'), local('bin'));
+      fs.symlinkSync(path.join(skel, '.local/share/claude'), local('share/claude'));
+      fs.symlinkSync(path.join(skel, '.local/state/claude'), local('state/claude'));
+      run({ PD_CLAUDE_NATIVE: '1' });
+      expect(fs.lstatSync(local('bin')).isSymbolicLink()).toBe(false);
+      expect(fs.lstatSync(local('share/claude')).isSymbolicLink()).toBe(false);
+      expect(fs.existsSync(local('state/claude'))).toBe(false);
+      expect(fs.realpathSync(local('bin/claude'))).toBe(fs.realpathSync(local('share/claude/versions/10.0.0')));
+      // The skeleton fallback is untouched.
+      expect(fs.existsSync(path.join(skel, '.local/share/claude/versions/9.9.9'))).toBe(true);
+    });
   });
 
   it('leaves .config a REAL directory with only the image leaves linked', () => {
@@ -108,25 +206,34 @@ describe('entrypoint.sh seeding, executed', () => {
 
   it('replaces a REAL directory sitting at a link destination', () => {
     // `ln -s target dir` against a real directory creates the link INSIDE it
-    // (~/.local/bin/bin) rather than replacing it, leaving claude off the path
+    // (~/.local/bin/uv/uv) rather than replacing it, leaving uv off the path
     // with no error. This is the case that guard exists for.
-    fs.mkdirSync(path.join(home, '.local/bin/junk'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.local/bin/uv/junk'), { recursive: true });
     run();
-    expect(fs.lstatSync(path.join(home, '.local/bin')).isSymbolicLink()).toBe(true);
-    expect(fs.existsSync(path.join(home, '.local/bin/bin'))).toBe(false);
-    expect(fs.existsSync(path.join(home, '.local/bin/claude'))).toBe(true);
+    expect(fs.readlinkSync(path.join(home, '.local/bin/uv'))).toBe(path.join(skel, '.local/bin/uv'));
     // Moved aside, never deleted: it could be somebody's data.
-    const aside = fs.readdirSync(path.join(home, '.local')).filter((n) => n.startsWith('bin.pre-image-'));
+    const aside = fs.readdirSync(path.join(home, '.local/bin')).filter((n) => n.startsWith('uv.pre-image-'));
     expect(aside).toHaveLength(1);
-    expect(fs.existsSync(path.join(home, '.local', aside[0], 'junk'))).toBe(true);
+    expect(fs.existsSync(path.join(home, '.local/bin', aside[0], 'junk'))).toBe(true);
   });
 
   it('is idempotent across repeated boots', () => {
     run(); run(); run();
     expect(fs.lstatSync(path.join(home, '.local')).isSymbolicLink()).toBe(false);
-    expect(fs.readlinkSync(path.join(home, '.local/bin'))).toBe(path.join(skel, '.local/bin'));
-    expect(fs.existsSync(path.join(home, '.local/bin/claude'))).toBe(true);
+    expect(fs.lstatSync(path.join(home, '.local/bin')).isSymbolicLink()).toBe(false);
+    expect(fs.readlinkSync(path.join(home, '.local/bin/uv'))).toBe(path.join(skel, '.local/bin/uv'));
     expect(fs.lstatSync(path.join(home, '.config')).isSymbolicLink()).toBe(false);
+  });
+
+  it('keeps a tool a session installed into ~/.local/bin across a re-seed', () => {
+    // .local/bin used to be a link into the skeleton, so `uv tool install` and
+    // every self-updating CLI wrote into the container layer and lost it.
+    run();
+    fs.writeFileSync(path.join(home, '.local/bin/mytool'), '#!/bin/sh\n', { mode: 0o755 });
+    run();
+    // In the home mount itself, not written through a link into the image.
+    expect(fs.realpathSync(path.join(home, '.local/bin/mytool'))).toBe(path.join(fs.realpathSync(home), '.local/bin/mytool'));
+    expect(fs.existsSync(path.join(skel, '.local/bin/mytool'))).toBe(false);
   });
 
   describe('~/.local is a real directory that keeps tool data', () => {
@@ -136,13 +243,14 @@ describe('entrypoint.sh seeding, executed', () => {
     const local = (rel) => path.join(home, '.local', rel);
 
     it('is a real directory with only the image entries linked', () => {
-      fs.mkdirSync(path.join(skel, '.local/state/claude'), { recursive: true });
+      fs.mkdirSync(path.join(skel, '.local/state/othertool'), { recursive: true });
       run();
       expect(fs.lstatSync(path.join(home, '.local')).isSymbolicLink()).toBe(false);
-      expect(fs.lstatSync(local('share')).isSymbolicLink()).toBe(false);
-      expect(fs.lstatSync(local('state')).isSymbolicLink()).toBe(false);
-      expect(fs.readlinkSync(local('share/claude'))).toBe(path.join(skel, '.local/share/claude'));
-      expect(fs.readlinkSync(local('state/claude'))).toBe(path.join(skel, '.local/state/claude'));
+      for (const d of ['bin', 'share', 'state']) {
+        expect(fs.lstatSync(local(d)).isSymbolicLink(), `${d} must be real`).toBe(false);
+      }
+      expect(fs.readlinkSync(local('bin/uv'))).toBe(path.join(skel, '.local/bin/uv'));
+      expect(fs.readlinkSync(local('state/othertool'))).toBe(path.join(skel, '.local/state/othertool'));
     });
 
     it('links an image entry it has never been told about', () => {
@@ -189,7 +297,7 @@ describe('entrypoint.sh seeding, executed', () => {
       expect(fs.lstatSync(local('share')).isSymbolicLink()).toBe(false);
       expect(fs.existsSync(path.join(skel, '.local/share/claude/versions/9.9.9'))).toBe(true);
       expect(fs.readdirSync(path.join(skel, '.local/share'))).toEqual(['claude']);
-      expect(fs.existsSync(local('bin/claude'))).toBe(true);
+      expect(fs.existsSync(local('bin/uv'))).toBe(true);
     });
 
     it('handles names that start with two dots', () => {
@@ -205,7 +313,7 @@ describe('entrypoint.sh seeding, executed', () => {
       fs.symlinkSync(path.join(skel, '.local'), path.join(home, '.local'));
       run();
       expect(fs.lstatSync(path.join(home, '.local')).isSymbolicLink()).toBe(false);
-      expect(fs.existsSync(local('bin/claude'))).toBe(true);
+      expect(fs.existsSync(local('bin/uv'))).toBe(true);
       // rm -f on the link, never rm -rf through it into the image.
       expect(fs.existsSync(path.join(skel, '.local/share/claude/versions/9.9.9'))).toBe(true);
     });
@@ -225,6 +333,7 @@ describe('entrypoint.sh seeding, executed', () => {
 
     it('still boots, and keeps the staged data, when a move fails', () => {
       // Under `set -e` a bare failed mv would end the boot; it must warn instead.
+      fs.mkdirSync(path.join(skel, '.local/share/imagetool'), { recursive: true });
       run();
       fs.mkdirSync(path.join(home, '.local-persist/share/opencode'), { recursive: true });
       fs.writeFileSync(path.join(home, '.local-persist/share/opencode/opencode.db'), 'history');
@@ -239,22 +348,23 @@ describe('entrypoint.sh seeding, executed', () => {
       expect(res.stderr).toContain('could not move');
       // The image link inside the read-only dir cannot be refreshed either; that
       // too must warn rather than end the boot (it once exited 1 here).
-      expect(res.stderr).toContain('could not link ~/.local/share/claude');
+      expect(res.stderr).toContain('could not link ~/.local/share/imagetool');
       expect(fs.readFileSync(path.join(home, '.local-persist/share/opencode/opencode.db'), 'utf8')).toBe('history');
     });
 
     it('never overwrites existing data or an image link with a staged copy', () => {
+      fs.mkdirSync(path.join(skel, '.local/share/imagetool'), { recursive: true });
       run();
       fs.mkdirSync(local('share/opencode'), { recursive: true });
       fs.writeFileSync(local('share/opencode/opencode.db'), 'current');
       fs.mkdirSync(path.join(home, '.local-persist/share/opencode'), { recursive: true });
       fs.writeFileSync(path.join(home, '.local-persist/share/opencode/opencode.db'), 'stale');
-      fs.mkdirSync(path.join(home, '.local-persist/share/claude'), { recursive: true });
+      fs.mkdirSync(path.join(home, '.local-persist/share/imagetool'), { recursive: true });
       const res = run();
       expect(res.status).toBe(0);
       expect(fs.readFileSync(local('share/opencode/opencode.db'), 'utf8')).toBe('current');
       expect(fs.readFileSync(path.join(home, '.local-persist/share/opencode/opencode.db'), 'utf8')).toBe('stale');
-      expect(fs.lstatSync(local('share/claude')).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(local('share/imagetool')).isSymbolicLink()).toBe(true);
       expect(res.stderr).toContain('kept');
     });
   });

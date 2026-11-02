@@ -99,9 +99,10 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   done
 
   # ~/.local is a REAL directory in the persistent home, with only what the
-  # image ships linked into it: .local/bin whole, and each child of the
-  # skeleton's .local/share and .local/state (today, `claude` in both).
-  # Everything else under ~/.local persists, the same split as .config below.
+  # image ships linked into it: each child of the skeleton's .local/bin,
+  # .local/share and .local/state (uv, uvx, the codex-dg wrappers), EXCEPT the
+  # names in PD_HOME_OWNED below. Everything else under ~/.local persists, the
+  # same split as .config below.
   #
   # It used to be one link to the whole skeleton, which put every tool's
   # XDG data (~/.local/share/<tool>) in the container's writable layer, lost
@@ -111,16 +112,23 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # list; a new tool would lose its first data at the next recreate, the
   # exact class of quiet loss the single home mount exists to end.
   #
+  # .local/bin is a real directory too (it was one link into the skeleton
+  # until #106), for the same reason: a tool that installs and UPDATES ITSELF
+  # there wrote into the container layer, so its update vanished on the next
+  # recreate. Claude Code's native installer and `claude update` own
+  # ~/.local/bin/claude and ~/.local/share/claude, and the Happier app's update
+  # button runs exactly that `claude update` (CLAUDE.md "Happier daemon").
+  #
   # DO NOT put .local back in the link list above: that would move the whole
   # persisted ~/.local aside on the next boot and replace it with the image's,
   # which is every tool's data gone from where the tools look for it.
   # homeMount.test.js guards that.
   #
-  # ~/.local, ~/.local/share and ~/.local/state must each be REAL: a symlink
-  # left at any of them (the old layout's ~/.local link, or a hand-made one)
-  # is removed first. That is not tidiness: with ~/.local/share linked into
-  # the skeleton, linking share/claude would resolve onto the skeleton's own
-  # claude directory and move it aside, taking the binary with it.
+  # ~/.local, ~/.local/bin, ~/.local/share and ~/.local/state must each be
+  # REAL: a symlink left at any of them (an old layout's link, or a hand-made
+  # one) is removed first. That is not tidiness: with ~/.local/share linked
+  # into the skeleton, linking share/<x> would resolve onto the skeleton's own
+  # entry and move it aside, taking the image's binary with it.
   #
   # Image entries are enumerated from the skeleton rather than named, so an
   # image that adds a .local/share/<x> gets it linked without an edit here.
@@ -128,22 +136,85 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # usual dotfile glob skips. The `if` forms are the .config pattern: under
   # `set -e` a false `[ ]` in an `&&` list would end the boot, and a failing
   # command in a then-branch would too, hence `|| true` on every removal.
-  for d in .local .local/share .local/state; do
+  #
+  # PD_HOME_OWNED names entries the image ALSO ships but the home owns: the
+  # image's copy is only the first-boot fallback (still on PATH through the
+  # skeleton) and is never linked over the home's. Linking it would point
+  # ~/.local/bin/claude back at the image's frozen version on every boot,
+  # undoing every `claude update`, and Happier would report the result as
+  # "Installed by you" (it attributes an install to Claude's updater only when
+  # the executable's real path is under ~/.local/share/claude). A link into
+  # the skeleton that an older layout left at one of these names is removed,
+  # so the bootstrap below can replace it with the home's own install.
+  PD_HOME_OWNED="claude"
+  for d in .local .local/bin .local/share .local/state; do
     if [ -L "$HOME/$d" ]; then rm -f "$HOME/$d" 2>/dev/null || true; fi
   done
-  if ! mkdir -p "$HOME/.local/share" "$HOME/.local/state" 2>/dev/null; then
-    echo "pocket-dev: could not create ~/.local/share and ~/.local/state; tool data this boot may not persist" >&2
+  if ! mkdir -p "$HOME/.local/bin" "$HOME/.local/share" "$HOME/.local/state" 2>/dev/null; then
+    echo "pocket-dev: could not create ~/.local/bin, ~/.local/share and ~/.local/state; tool data this boot may not persist" >&2
   fi
-  link_from_image .local/bin
-  for xdg in share state; do
+  for xdg in bin share state; do
     if [ -d "$SKEL/.local/$xdg" ]; then
       for src in "$SKEL/.local/$xdg"/* "$SKEL/.local/$xdg"/.[!.]* "$SKEL/.local/$xdg"/..?*; do
         if [ -e "$src" ] || [ -L "$src" ]; then
-          link_from_image ".local/$xdg/${src##*/}"
+          name="${src##*/}"
+          case " $PD_HOME_OWNED " in
+            *" $name "*)
+              dst="$HOME/.local/$xdg/$name"
+              if [ -L "$dst" ]; then
+                case "$(readlink "$dst")" in
+                  "$SKEL"/*) rm -f "$dst" 2>/dev/null || true ;;
+                esac
+              fi
+              ;;
+            *) link_from_image ".local/$xdg/$name" ;;
+          esac
         fi
       done
     fi
   done
+
+  # CLAUDE CODE IS A HOME-OWNED NATIVE INSTALL: ~/.local/bin/claude ->
+  # ~/.local/share/claude/versions/<v>, in the mount, kept current by
+  # `claude update` (which the Happier app's update button runs). This makes
+  # sure the launcher exists. EVERY STEP IS NON-FATAL: the image's own claude
+  # stays on PATH through the skeleton, so a failure here degrades to "the
+  # image's Claude, which nothing can update", never to "no Claude".
+  #
+  #   1. A launcher that runs: nothing to do. This is every boot but the first.
+  #   2. Versions already in the home (the launcher was lost, or this is the
+  #      first boot after .local/bin stopped being a link): link the newest.
+  #      No network, and the same link Claude's own installer makes.
+  #   3. No home install at all: run Claude's native installer, `claude
+  #      install`, from the image's binary. It reaches the network, so
+  #      PD_CLAUDE_NATIVE=0 skips it; pdEnv.js defaults that for the suites
+  #      that execute this script, the same reason PD_CODEX_RC exists.
+  CLAUDE_LAUNCHER="$HOME/.local/bin/claude"
+  CLAUDE_VERSIONS="$HOME/.local/share/claude/versions"
+  if [ ! -x "$CLAUDE_LAUNCHER" ]; then
+    newest=""
+    for v in "$CLAUDE_VERSIONS"/*; do
+      if [ -f "$v" ] && [ -x "$v" ]; then
+        if [ -z "$newest" ] || [ "$(printf '%s\n%s\n' "${newest##*/}" "${v##*/}" | sort -V | tail -n 1)" = "${v##*/}" ]; then
+          newest="$v"
+        fi
+      fi
+    done
+    if [ -n "$newest" ]; then
+      if ln -sfnT "$newest" "$CLAUDE_LAUNCHER" 2>/dev/null; then
+        echo "pocket-dev: linked ~/.local/bin/claude to the home's Claude ${newest##*/}" >&2
+      else
+        echo "pocket-dev: could not link ~/.local/bin/claude; the image's Claude runs instead" >&2
+      fi
+    elif [ "${PD_CLAUDE_NATIVE:-1}" != "0" ] && [ -x "$SKEL/.local/bin/claude" ]; then
+      if "$SKEL/.local/bin/claude" install </dev/null >/dev/null 2>&1 && [ -x "$CLAUDE_LAUNCHER" ]; then
+        echo "pocket-dev: installed Claude Code natively into the home" >&2
+      else
+        echo "pocket-dev: native Claude install failed; the image's Claude runs instead," >&2
+        echo "pocket-dev: and the Happier app cannot update it until the next boot retries." >&2
+      fi
+    fi
+  fi
 
   # .config is NOT image-owned as a whole: gh's auth token lives in .config/gh
   # and has to persist. Link only the two leaves the image provides.
@@ -175,16 +246,18 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   #
   # $HOME/bin is the on-PATH prefix for CLIs a session installs for itself. It
   # lives in the home mount, so those tools survive a recreate without a volume
-  # of their own — that is what retired the old /opt/pd prefix. DO NOT point
-  # tool installs at ~/.local/bin instead: that is a symlink into the read-mostly
-  # image skeleton, and writes there are lost on the next image update.
+  # of their own — that is what retired the old /opt/pd prefix. It is FIRST on
+  # PATH, ahead of ~/.local/bin and the image's /usr/local/bin, which is why the
+  # Happier-managed CLI's launcher (~/bin/happier) and the standalone Codex
+  # launcher (~/bin/codex) live here: each must win over the image's npm
+  # fallback copy of the same command.
   mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex"
   chmod 775 "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null || true
 
   # This is the identity of the persistent standalone install, not merely an
   # argument to its first bootstrap. Export it so Codex's in-process updater
-  # uses the same launcher directory instead of defaulting to the image-owned
-  # ~/.local/bin and misclassifying the existing ~/bin launcher as a conflict.
+  # uses the same launcher directory instead of defaulting to ~/.local/bin and
+  # misclassifying the existing ~/bin launcher as a conflict.
   export CODEX_INSTALL_DIR="$HOME/bin"
 
   # Codex removes its arg0 helper directories with their .lock files still
@@ -221,11 +294,14 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # subsumes the npm copy for version freshness.
   #
   # CODEX_INSTALL_DIR is $HOME/bin and NOT the installer's default
-  # $HOME/.local/bin: per the comment above, .local is a symlink into the image
-  # skeleton, so a launcher there lives in the container layer and dies on the
-  # next recreate, while $HOME/bin is in the mount. Both resolve to the same
-  # payload; only one survives. Measured 2026-09-08: after a recreate the
-  # $HOME/bin launcher was still there and still pointed at a live payload.
+  # $HOME/.local/bin. Until #106 ~/.local/bin was a symlink into the image
+  # skeleton, so a launcher there lived in the container layer and died on the
+  # next recreate; ~/bin was in the mount. Measured 2026-09-08: after a recreate
+  # the $HOME/bin launcher was still there and still pointed at a live payload.
+  # ~/.local/bin persists now too, but the existing launcher and every Codex
+  # updater invocation already name ~/bin, and ~/bin precedes /usr/local/bin
+  # where the image's npm Codex sits. DO NOT move it: two launchers for one
+  # install is the conflict the export above exists to prevent.
   #
   # EVERY STEP HERE IS NON-FATAL. The image's /usr/local/bin/codex keeps
   # working with no daemon, so a network blip at boot or an unauthenticated
@@ -442,14 +518,17 @@ fi
 # keep their process from ever closing. stderr stays the container log.
 if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
   && happier_bin=$(command -v happier 2>/dev/null); then
-  # The image's copy is /usr/local/bin/happier. One resolving anywhere else is a
-  # home copy shadowing the pinned version, because ~/bin precedes /usr/local/bin
-  # on PATH. Say so, since the build log's version is then not what runs.
-  case "$happier_bin" in
-    /usr/local/bin/happier) ;;
-    *)
-      echo "pocket-dev: happier resolves to $happier_bin, not the image's" >&2
-      echo "pocket-dev: /usr/local/bin/happier; remove the home copy to run the pinned one." >&2
+  # The CLI that should run is the Happier-managed install in ~/.happier, whose
+  # launcher is ~/bin/happier: it is the one the Happier app can update, and
+  # pd-happier-supervise moves the daemon onto each new version. The image's
+  # npm copy (/opt/agent-tools, linked as /usr/local/bin/happier) is only the
+  # first-boot fallback. When THAT is what resolves, the app shows the Happier
+  # CLI as "Installed by you" and cannot update it, so say so and name the fix.
+  case "$(readlink -f "$happier_bin" 2>/dev/null || printf '%s' "$happier_bin")" in
+    */opt/agent-tools/*)
+      echo "pocket-dev: happier resolves to the image's fallback copy ($happier_bin)," >&2
+      echo "pocket-dev: which the Happier app cannot update. Install the managed CLI:" >&2
+      echo "pocket-dev: see CLAUDE.md \"Happier daemon\" (happier.dev/install, HAPPIER_BIN_DIR=\$HOME/bin)." >&2
       ;;
   esac
   "${PD_HAPPIER_SUPERVISOR:-/mobile/pd-happier-supervise}" </dev/null >/dev/null &

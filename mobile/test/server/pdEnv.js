@@ -44,5 +44,10 @@ export function spawnEnv(overrides = {}) {
   // child outliving the script would keep the test's stderr pipe open. A temp
   // HOME holds no credential, so this is belt and braces; happier.test.js sets
   // it explicitly where it means to exercise the launch.
-  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0' }, overrides);
+  //
+  // PD_CLAUDE_NATIVE=0 by DEFAULT, the PD_CODEX_RC reason again: with no Claude
+  // in a temp HOME, entrypoint.sh runs the skeleton's `claude install`, which in
+  // the image downloads Claude Code. A fixture skeleton's claude is a stub, but
+  // a test that means to exercise the bootstrap sets it explicitly.
+  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0' }, overrides);
 }

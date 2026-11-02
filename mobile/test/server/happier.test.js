@@ -85,7 +85,7 @@ let tmproot, home, skel, cache, stubBin, stubLog;
 
 // A stand-in for the real CLI. `daemon status --json` records itself in
 // $STUB_LOG, prints $STUB_STATUS and exits $STUB_STATUS_EXIT; `daemon start`
-// records itself and exits $STUB_START_EXIT.
+// and `daemon stop` record themselves and exit $STUB_START_EXIT / $STUB_STOP_EXIT.
 function writeStubHappier() {
   fs.mkdirSync(stubBin, { recursive: true });
   fs.writeFileSync(
@@ -95,6 +95,7 @@ function writeStubHappier() {
       'case "$*" in',
       '  "daemon status --json") echo status >> "$STUB_LOG"; printf "%s" "$STUB_STATUS"; exit "${STUB_STATUS_EXIT:-0}" ;;',
       '  "daemon start") echo start >> "$STUB_LOG"; exit "${STUB_START_EXIT:-0}" ;;',
+      '  "daemon stop") echo stop >> "$STUB_LOG"; exit "${STUB_STOP_EXIT:-0}" ;;',
       '  *) exit 9 ;;',
       'esac',
       '',
@@ -104,6 +105,14 @@ function writeStubHappier() {
 }
 
 const STATUS = (authenticated, running) => JSON.stringify({ auth: { authenticated }, daemon: { running } });
+// The 0.2.17 shape: the running daemon's CLI version against the CLI on PATH.
+const CONVERGENCE = ({ daemon = '0.2.16', cli = '0.2.17', matches = daemon === cli, serviceManaged = false } = {}) =>
+  JSON.stringify({
+    auth: { authenticated: true },
+    daemon: { running: true, startedWithCliVersion: daemon, serviceManaged },
+    runtimeConvergence: { cliVersionMatches: matches },
+    cliUpdate: { currentVersion: cli },
+  });
 
 function supervise(env, opts = {}) {
   return spawnSync('bash', [SUPERVISOR], {
@@ -212,6 +221,57 @@ describe('pd-happier-supervise', () => {
       expect(calls('status')).toBe(1);
     });
 
+    describe('moving the daemon onto a new CLI', () => {
+      // `happier self update` (the Happier app's update button) restarts only a
+      // service-owned daemon. This one is started by the loop, so without this
+      // it would keep running the old version indefinitely.
+      it('stops and starts the daemon when it runs an older CLI than PATH', () => {
+        const res = supervise({ STUB_STATUS: CONVERGENCE() });
+        expect(calls('stop')).toBe(1);
+        expect(starts()).toBe(1);
+        expect(res.stderr).toContain('daemon restarted onto CLI 0.2.17 (was 0.2.16)');
+      });
+
+      it('leaves a converged daemon alone', () => {
+        const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon: '0.2.17' }) });
+        expect(calls('stop')).toBe(0);
+        expect(starts()).toBe(0);
+        expect(res.stderr).toContain('daemon running');
+      });
+
+      it('leaves a service-owned daemon to its service', () => {
+        supervise({ STUB_STATUS: CONVERGENCE({ serviceManaged: true }) });
+        expect(calls('stop')).toBe(0);
+      });
+
+      it('never restarts on a status without the convergence field', () => {
+        // Older CLIs: unknown is not a mismatch.
+        supervise({ STUB_STATUS: STATUS(true, true) });
+        expect(calls('stop')).toBe(0);
+      });
+
+      it('restarts once per version pair, not in a loop, when it does not take', () => {
+        const res = supervise(
+          { STUB_STATUS: CONVERGENCE(), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: '0.1' },
+          { timeout: 1500 },
+        );
+        expect(calls('status')).toBeGreaterThanOrEqual(3);
+        expect(calls('stop')).toBe(1);
+        expect(res.stderr).toContain('not restarting again');
+      });
+
+      it('reports a stop that fails and does not start a second daemon', () => {
+        const res = supervise({ STUB_STATUS: CONVERGENCE(), STUB_STOP_EXIT: '1' });
+        expect(starts()).toBe(0);
+        expect(res.stderr).toContain('could not stop the daemon');
+      });
+
+      it('ignores a version string that is not a plain version', () => {
+        const res = supervise({ STUB_STATUS: CONVERGENCE({ daemon: 'x; rm -rf /', cli: '0.2.17', matches: false }) });
+        expect(res.stderr).toContain('daemon restarted onto CLI 0.2.17 (was -)');
+      });
+    });
+
     it('writes nothing to stdout', () => {
       expect(supervise({ STUB_STATUS: STATUS(true, false) }).stdout).toBe('');
     });
@@ -291,10 +351,22 @@ describe('entrypoint.sh starts the supervisor', () => {
     expect(boot({ PATH: [stubBin, ...realFree].join(':') }).launched).toBe(false);
   });
 
-  it('warns when a copy outside /usr/local/bin shadows the pinned one', () => {
-    // The stub lives in a temp bin dir, which is exactly the shape of a
-    // leftover ~/bin/happier.
+  it('says nothing when the managed CLI (a home launcher) resolves', () => {
+    // The stub in a temp bin dir has the shape of ~/bin/happier, the launcher
+    // of Happier's own managed install: the expected state.
     const { stderr } = boot();
-    expect(stderr).toContain(`happier resolves to ${path.join(stubBin, 'happier')}`);
+    expect(stderr).not.toContain('fallback copy');
+  });
+
+  it('warns when the image\'s npm fallback is what resolves', () => {
+    // That copy shows in the Happier app as "Installed by you" and the app
+    // cannot update it. The warning keys on the real path, the shape of the
+    // image's /usr/local/bin/happier -> /opt/agent-tools/node_modules/.bin/...
+    const npmBin = path.join(tmproot, 'opt/agent-tools/node_modules/.bin');
+    fs.mkdirSync(npmBin, { recursive: true });
+    fs.renameSync(path.join(stubBin, 'happier'), path.join(npmBin, 'happier'));
+    fs.symlinkSync(path.join(npmBin, 'happier'), path.join(stubBin, 'happier'));
+    const { stderr } = boot();
+    expect(stderr).toContain(`happier resolves to the image's fallback copy (${path.join(stubBin, 'happier')})`);
   });
 });

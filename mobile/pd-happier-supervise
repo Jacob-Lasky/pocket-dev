@@ -33,6 +33,21 @@
 # daemon prints "Daemon already running" and keeps the same PID (measured
 # 2026-10-15).
 #
+# IT ALSO MOVES THE DAEMON ONTO A NEW CLI, because nothing else will. The CLI
+# is the Happier-managed install (~/.happier, launcher ~/bin/happier), which
+# the Happier app updates with `happier self update`. That command restarts the
+# daemon only when a systemd or launchd service owns it; for a daemon started
+# by hand, as this one is, it installs the new version and leaves the old
+# daemon running (happier-dev/happier, restartServiceDaemonAfterUpdate.ts), so
+# the app would keep showing the old version with its update "done". When the
+# status reports `runtimeConvergence.cliVersionMatches: false` (the daemon was
+# started by an older CLI than the one on PATH) and no service owns the daemon,
+# this stops it and starts it again from the CLI on PATH. `daemon stop` keeps
+# the sessions running (its help: "sessions stay alive"); runners keep the old
+# version's code until they end. One restart per (daemon version, CLI
+# version) pair: if the daemon still reports the old version afterwards, it
+# says so and does not restart in a loop.
+#
 # Logging is on STATE CHANGES only, to stderr (the container log); stdout
 # belongs to whoever started us and entrypoint.sh points it at /dev/null.
 #
@@ -48,6 +63,7 @@ fi
 ONCE="${PD_HAPPIER_ONCE:-0}"
 HAPPIER_HOME="${HAPPIER_HOME_DIR:-$HOME/.happier}"
 last_key=""
+restarted_for=""
 
 say() {
   # $1 is the state key, $2 the message. Same key twice in a row stays quiet.
@@ -57,7 +73,11 @@ say() {
 }
 
 read_state() {
-  # Prints "<authenticated> <running>" as true/false words, or "unknown".
+  # Prints "<authenticated> <running> <converged> <daemon-version> <cli-version>"
+  # with true/false words, or "unknown". <converged> is true, false or unknown:
+  # unknown (an older CLI without runtimeConvergence, or a service-owned daemon,
+  # which its service restarts) never triggers a restart. The versions are only
+  # for the log and the once-per-pair rule; anything not a plain version is "-".
   local out
   if ! out=$(set -o pipefail; timeout 30 happier daemon status --json 2>/dev/null); then
     echo unknown
@@ -71,7 +91,13 @@ read_state() {
         const a = j && j.auth && j.auth.authenticated;
         const r = j && j.daemon && j.daemon.running;
         if (typeof a !== "boolean" || typeof r !== "boolean") throw new Error("shape");
-        process.stdout.write(`${a} ${r}`);
+        const m = j.runtimeConvergence && j.runtimeConvergence.cliVersionMatches;
+        const service = j.daemon && j.daemon.serviceManaged === true;
+        const c = typeof m === "boolean" && !service ? String(m) : "unknown";
+        const v = (x) => (typeof x === "string" && /^[0-9A-Za-z._+-]+$/.test(x) ? x : "-");
+        const dv = v(j.daemon && j.daemon.startedWithCliVersion);
+        const cv = v(j.cliUpdate && j.cliUpdate.currentVersion);
+        process.stdout.write(`${a} ${r} ${c} ${dv} ${cv}`);
       } catch {
         process.stdout.write("unknown");
       }
@@ -83,11 +109,29 @@ while :; do
     # Never signed in: nothing to start, and no CLI call is worth making.
     say no-credential "no Happier sign-in yet; the daemon starts on the first check after 'happier auth login'"
   else
-    case "$(read_state)" in
-      "true true")
+    state=$(read_state)
+    case "$state" in
+      "true true false "*)
+        # shellcheck disable=SC2086
+        set -- $state
+        pair="$4>$5"
+        if [ "$pair" = "$restarted_for" ]; then
+          say "stuck:$pair" "daemon still runs CLI $4 after a restart onto $5; not restarting again"
+        else
+          restarted_for="$pair"
+          if ! timeout 90 happier daemon stop >/dev/null 2>&1; then
+            say "stop-failed:$pair" "could not stop the daemon (CLI $4) to move it onto CLI $5; not retrying for this pair"
+          elif timeout 90 happier daemon start >/dev/null 2>&1; then
+            say "restarted:$pair" "daemon restarted onto CLI $5 (was $4)"
+          else
+            say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
+          fi
+        fi
+        ;;
+      "true true "*)
         say running "daemon running"
         ;;
-      "true false")
+      "true false "*)
         if timeout 90 happier daemon start >/dev/null 2>&1; then
           say running "daemon started"
         else
