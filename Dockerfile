@@ -183,7 +183,7 @@ RUN npm install -g --no-fund --no-audit lavish-axi \
     && lavish-axi --version
 
 # bws, the Bitwarden Secrets Manager CLI that the /secrets skill drives. Before
-# this it was installed by hand into ~/.local/bin, which is a symlink into the
+# this it was installed by hand into ~/.local/bin, which was then a link into the
 # image skeleton, so every recreate deleted it and the next session downloaded
 # it again. Same /usr/local reasoning and the same ~/bin shadowing trap as codex
 # and lavish-axi above: a copy left in ~/bin wins on PATH and freezes forever.

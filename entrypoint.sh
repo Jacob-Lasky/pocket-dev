@@ -198,6 +198,15 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   #      that execute this script, the same reason PD_CODEX_RC exists.
   CLAUDE_LAUNCHER="$HOME/.local/bin/claude"
   CLAUDE_VERSIONS="$HOME/.local/share/claude/versions"
+  # A versions/ that is a link into the image is the image's install wearing the
+  # home's path: the steps below would adopt its frozen binary as the home's,
+  # and `claude update` would write into the container layer. Remove the link,
+  # as the PD_HOME_OWNED loop above does one level up; the image is untouched.
+  if [ -L "$CLAUDE_VERSIONS" ]; then
+    case "$(readlink -m "$CLAUDE_VERSIONS")" in
+      "$(readlink -m "$SKEL")"/*) rm -f "$CLAUDE_VERSIONS" 2>/dev/null || true ;;
+    esac
+  fi
   # "Runs" means what Claude's installer makes: the launcher resolves to an
   # executable regular file under versions/. A real file or directory someone
   # put at the launcher path is theirs: warn and leave it, never replace it.

@@ -194,6 +194,41 @@ describe('entrypoint.sh seeding, executed', () => {
       expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/2.1.10'));
     });
 
+    it('accepts no launcher as native when the versions dir does not resolve', () => {
+      // `readlink -m` prints something for any absolute path, symlink loops
+      // included, so only a failing readlink reaches an empty resolution. Without
+      // the guard the accepted prefix collapses to "/" and ANY executable at the
+      // launcher passes as Claude's own, so it is never relinked.
+      const fakeBin = path.join(tmproot, 'fakebin');
+      fs.mkdirSync(fakeBin);
+      const realReadlink = spawnSync('bash', ['-c', 'command -v readlink'], { encoding: 'utf8' }).stdout.trim();
+      fs.writeFileSync(
+        path.join(fakeBin, 'readlink'),
+        `#!/bin/bash\ncase "\${!#}" in */.local/share/claude/versions) exit 1 ;; esac\nexec ${realReadlink} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const other = path.join(tmproot, 'other-claude');
+      fs.writeFileSync(other, '#!/bin/sh\n', { mode: 0o755 });
+      fs.mkdirSync(local('share/claude/versions'), { recursive: true });
+      fs.mkdirSync(local('bin'), { recursive: true });
+      fs.writeFileSync(local('share/claude/versions/5.0.0'), '#!/bin/sh\n', { mode: 0o755 });
+      fs.symlinkSync(other, local('bin/claude'));
+      run({ PATH: `${fakeBin}:${process.env.PATH}` });
+      expect(fs.readlinkSync(local('bin/claude'))).toBe(local('share/claude/versions/5.0.0'));
+    });
+
+    it('never adopts the image claude through a versions dir linked into the skeleton', () => {
+      // A real ~/.local/share/claude whose versions/ is a link into the image:
+      // following it would relink the launcher onto the frozen image binary, and
+      // every `claude update` would then write into the container layer.
+      fs.mkdirSync(local('share/claude'), { recursive: true });
+      fs.symlinkSync(path.join(skel, '.local/share/claude/versions'), local('share/claude/versions'));
+      run();
+      expect(fs.existsSync(local('share/claude/versions'))).toBe(false);
+      expect(fs.existsSync(local('bin/claude'))).toBe(false);
+      expect(fs.existsSync(path.join(skel, '.local/share/claude/versions/9.9.9'))).toBe(true);
+    });
+
     it('leaves a real file at the launcher path alone, and says so', () => {
       fs.mkdirSync(local('bin'), { recursive: true });
       fs.writeFileSync(local('bin/claude'), '#!/bin/sh\necho mine\n', { mode: 0o755 });

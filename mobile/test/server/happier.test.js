@@ -213,12 +213,40 @@ describe('pd-happier-supervise', () => {
       expect(res.stderr.match(/daemon running/g)).toHaveLength(1);
     });
 
-    it.each(['0', '-5', 'abc', '', '0.0000000000000000000000000001', '0.05', '99999999999999999999', '86401'])('falls back to 60s for interval %j instead of a tight loop', (interval) => {
-      supervise(
-        { STUB_STATUS: STATUS(true, true), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: interval },
-        { timeout: 1000 },
+    // The interval the loop actually sleeps for, observed directly: a stub
+    // `sleep` records its argument and ends the loop. Counting status calls
+    // inside a timeout cannot tell the 60 s fallback from a value that sleeps
+    // forever (both make exactly one call), and a killed loop's real `sleep`
+    // would outlive the test.
+    function intervalsSlept(interval) {
+      const sleepBin = path.join(tmproot, 'sleepbin');
+      fs.mkdirSync(sleepBin, { recursive: true });
+      fs.writeFileSync(
+        path.join(sleepBin, 'sleep'),
+        '#!/bin/bash\necho "sleep $*" >> "$STUB_LOG"\nkill -TERM "$PPID"\n',
+        { mode: 0o755 },
       );
-      expect(calls('status')).toBe(1);
+      supervise(
+        {
+          STUB_STATUS: STATUS(true, true),
+          PD_HAPPIER_ONCE: '0',
+          PD_HAPPIER_INTERVAL: interval,
+          PATH: `${sleepBin}:${stubBin}:${process.env.PATH}`,
+        },
+        { timeout: 5000 },
+      );
+      return fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l.startsWith('sleep ')).map((l) => l.slice(6));
+    }
+
+    it.each(['0', '-5', 'abc', '', '0.0000000000000000000000000001', '0.05', '99999999999999999999', '86401'])(
+      'falls back to 60s for interval %j, never a tight loop or an endless sleep',
+      (interval) => {
+        expect(intervalsSlept(interval)).toEqual(['60']);
+      },
+    );
+
+    it.each(['0.1', '5', '90', '86400'])('sleeps for an in-range interval %j as given', (interval) => {
+      expect(intervalsSlept(interval)).toEqual([interval]);
     });
 
     describe('moving the daemon onto a new CLI', () => {
