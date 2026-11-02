@@ -45,13 +45,23 @@ describe('Dockerfile: the image home is relocated out of the mount', () => {
     expect(dockerfile).toMatch(/ln -sfn "\/opt\/pd-home\$\{target#\/home\/claude\}" "\$link"/);
   });
 
-  it('puts the RELOCATED bin on PATH, not ~/.local/bin', () => {
-    // Pointing PATH through $HOME would reintroduce the dependency on seeding
-    // having succeeded. /opt/pd-home is self-contained after the rewrite above.
+  it('keeps the RELOCATED bin on PATH, behind the home installs that update themselves', () => {
+    // The skeleton on PATH is what still runs when seeding never happened:
+    // /opt/pd-home is self-contained after the rewrite above. Ahead of it,
+    // ~/bin holds the Happier-managed and standalone Codex launchers (which must
+    // beat the image's npm copies in /usr/local/bin) and ~/.local/bin holds
+    // Claude's native launcher (which must beat the skeleton's frozen claude).
+    // Reorder these and the Happier app shows "Installed by you" again.
     const pathLine = dockerfile.match(/^ENV PATH="([^"]+)"/m);
     expect(pathLine).not.toBeNull();
-    expect(pathLine[1]).toContain('/opt/pd-home/.local/bin');
-    expect(pathLine[1]).not.toContain('/home/claude/.local/bin');
+    const dirs = pathLine[1].split(':');
+    const at = (d) => dirs.indexOf(d);
+    for (const d of ['/home/claude/bin', '/home/claude/.local/bin', '/opt/pd-home/.local/bin', '${PATH}']) {
+      expect(at(d), `${d} must be on PATH`).toBeGreaterThanOrEqual(0);
+    }
+    expect(at('/home/claude/bin')).toBeLessThan(at('/home/claude/.local/bin'));
+    expect(at('/home/claude/.local/bin')).toBeLessThan(at('/opt/pd-home/.local/bin'));
+    expect(at('/opt/pd-home/.local/bin')).toBeLessThan(at('${PATH}'));
   });
 
   it('puts the session tool prefix inside the home mount', () => {
@@ -99,8 +109,17 @@ describe('entrypoint.sh: seeding the mounted home', () => {
     const linkedTargets = [...script.matchAll(/for entry in ([^\n;]+)/g)]
       .flatMap((m) => m[1].trim().split(/\s+/));
     expect(linkedTargets).not.toContain('.local');
-    expect(script).toMatch(/for d in \.local \.local\/share \.local\/state; do/);
-    expect(script).toMatch(/link_from_image \.local\/bin/);
+    expect(script).toMatch(/for d in \.local \.local\/bin \.local\/share \.local\/state; do/);
+    expect(script).toMatch(/for xdg in bin share state; do/);
+    // .local/bin is no longer linked whole: a self-updating tool (Claude Code's
+    // native launcher) lost every update to the container layer that way.
+    expect(script).not.toMatch(/link_from_image \.local\/bin\s*$/m);
+  });
+
+  it('never links the image claude over the home-owned native install', () => {
+    // Linking it would undo every `claude update` on each boot, and Happier
+    // would show Claude as "Installed by you" (not under ~/.local/share/claude).
+    expect(script).toMatch(/^\s*PD_HOME_OWNED="claude"$/m);
   });
 
   it('links only the image-owned leaves of .config, never .config itself', () => {

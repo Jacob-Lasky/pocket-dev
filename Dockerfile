@@ -183,7 +183,7 @@ RUN npm install -g --no-fund --no-audit lavish-axi \
     && lavish-axi --version
 
 # bws, the Bitwarden Secrets Manager CLI that the /secrets skill drives. Before
-# this it was installed by hand into ~/.local/bin, which is a symlink into the
+# this it was installed by hand into ~/.local/bin, which was then a link into the
 # image skeleton, so every recreate deleted it and the next session downloaded
 # it again. Same /usr/local reasoning and the same ~/bin shadowing trap as codex
 # and lavish-axi above: a copy left in ~/bin wins on PATH and freezes forever.
@@ -223,10 +223,19 @@ RUN curl -fsSL -o /tmp/bws.zip \
 # each entry is there and why onnxruntime-node is denied.
 #
 # Same /usr/local reasoning as codex: /home/claude ships EMPTY and is a bind
-# mount, and ~/bin precedes /usr/local/bin on PATH, so a home copy would
-# shadow these forever. The tree is root-owned and read-only to uid 99; both
-# CLIs were verified to run from a read-only tree (they keep state under
-# ~/.happier and ~/.local/share/opencode, never in their package).
+# mount. The tree is root-owned and read-only to uid 99; both CLIs were
+# verified to run from a read-only tree (they keep state under ~/.happier and
+# ~/.local/share/opencode, never in their package).
+#
+# THIS HAPPIER IS A FIRST-BOOT FALLBACK, NOT THE ONE THAT RUNS. The CLI that
+# runs is Happier's own managed install in ~/.happier (launcher ~/bin/happier,
+# which precedes /usr/local/bin), because that is the install the Happier app
+# can update; an npm copy shows there as "Installed by you" and cannot be
+# updated from the app (Jake, 2026-11-02: standardize on the Happier update
+# surface). The pin still matters: it is what runs until the managed CLI is
+# installed, and the managed CLI's updates still have a gate, Jake pressing
+# Update in the app. OpenCode stays image-owned: Happier's catalog only knows
+# OpenCode 1.x. CLAUDE.md "Happier daemon" has the install command.
 COPY agent-tools/package.json agent-tools/package-lock.json /opt/agent-tools/
 RUN cd /opt/agent-tools \
     && npm ci --no-fund --no-audit \
@@ -355,7 +364,11 @@ ENV LAVISH_AXI_NO_OPEN=1
 # Switch to claude user before installing
 USER claude
 
-# Install claude-code and uv as the claude user
+# Install claude-code and uv as the claude user. This claude is the FALLBACK:
+# the one that runs is the home's own native install (~/.local/bin/claude ->
+# ~/.local/share/claude/versions/<v>), which entrypoint.sh bootstraps from this
+# binary with `claude install` and which `claude update` keeps current from
+# then on. entrypoint.sh never links this copy over the home's (PD_HOME_OWNED).
 RUN curl -fsSL https://claude.ai/install.sh | bash \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -405,13 +418,20 @@ USER claude
 ENV PD_SKEL_DIR=/opt/pd-home
 ENV PD_CACHE_DIR=/var/tmp/pd-cache
 
-# PATH points at the RELOCATED skeleton, not at ~/.local/bin, so `claude` and
-# `uv` resolve even if the home mount is empty and seeding has not run.
-# $HOME/bin is the prefix for CLIs a session installs for itself: it is inside
-# the home mount, so it persists across recreates with no volume of its own.
-# This replaces the old /opt/pd tool prefix, which existed only because the home
-# was not persistent. ~/.fly/bin likewise needs no mount now.
-ENV PATH="/home/claude/bin:/home/claude/.fly/bin:/opt/pd-home/.local/bin:${PATH}"
+# PATH still names the RELOCATED skeleton, so `claude` and `uv` resolve even if
+# the home mount is empty and seeding has not run. AHEAD of it, in order:
+#   $HOME/bin         the prefix for CLIs a session installs for itself, and the
+#                     launchers of the Happier-managed CLI and standalone Codex.
+#                     It must precede /usr/local/bin, where the image's npm
+#                     fallbacks of both sit.
+#   $HOME/.local/bin  a real directory in the mount (entrypoint.sh): Claude
+#                     Code's native launcher, which `claude update` (and so the
+#                     Happier app's update button) keeps current. It must
+#                     precede the skeleton, whose claude is the frozen fallback.
+# Both are inside the home mount, so they persist across recreates with no
+# volume of their own. This replaced the old /opt/pd tool prefix, which existed
+# only because the home was not persistent. ~/.fly/bin likewise needs no mount.
+ENV PATH="/home/claude/bin:/home/claude/.local/bin:/home/claude/.fly/bin:/opt/pd-home/.local/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV HOME="/home/claude"
