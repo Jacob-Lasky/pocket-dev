@@ -349,6 +349,216 @@ describe('pd-happier-supervise', () => {
   });
 });
 
+describe('pd-happier-supervise resumes the standing supervisor once per boot', () => {
+  // A stand-in for ~/.claude/skills/supervisor/scripts/fleet.py: logs
+  // "resume-start <argv>" and "resume-end" around an optional sleep
+  // ($STUB_RESUME_SLEEP, or $STUB_RESUME_SLEEP_FIRST for the first run), prints
+  // the next of the |-separated $STUB_RESUME_OUTS outcome lines (the last one
+  // repeats) and exits $STUB_RESUME_EXIT ($STUB_RESUME_EXIT_FIRST for the first run).
+  let script, resumeDir;
+  beforeEach(() => {
+    signIn();
+    script = path.join(tmproot, 'fleet.py');
+    resumeDir = path.join(tmproot, 'resume');
+    fs.writeFileSync(
+      script,
+      [
+        'import os, sys, time',
+        'log = open(os.environ["STUB_LOG"], "a")',
+        'log.write("resume-start " + " ".join(sys.argv[1:]) + "\\n"); log.flush()',
+        'n = sum(1 for l in open(os.environ["STUB_LOG"]) if l.startswith("resume-start")) - 1',
+        'pause = os.environ.get("STUB_RESUME_SLEEP_FIRST") if n == 0 else None',
+        'time.sleep(float(pause or os.environ.get("STUB_RESUME_SLEEP", "0")))',
+        'outs = os.environ.get("STUB_RESUME_OUTS", \'{"result":"already running","session":"s1"}\').split("|")',
+        'print(outs[min(n, len(outs) - 1)], flush=True)',
+        'log.write("resume-end\\n"); log.flush()',
+        'first = os.environ.get("STUB_RESUME_EXIT_FIRST")',
+        'sys.exit(int(first) if first and n == 0 else int(os.environ.get("STUB_RESUME_EXIT", "0")))',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  const resumeEnv = (env = {}) => ({
+    PD_SUPERVISOR_RESUME_SCRIPT: script,
+    PD_SUPERVISOR_RESUME_DIR: resumeDir,
+    PD_SUPERVISOR_BOOT_KEY: '1234',
+    ...env,
+  });
+  const resumes = () =>
+    fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l.startsWith('resume-start')) : [];
+
+  it('runs resume-self once the daemon is up, and logs its outcome', () => {
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true) }));
+    expect(resumes()).toEqual(['resume-start resume-self --timeout 600']);
+    expect(res.stderr).toContain('pocket-dev: supervisor-resume: {"result":"already running","session":"s1"}');
+    expect(res.stdout).toBe('');
+  });
+
+  it('runs it right after starting a stopped daemon', () => {
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, false) }));
+    expect(starts()).toBe(1);
+    expect(resumes()).toHaveLength(1);
+  });
+
+  it.each([
+    ['signed out', STATUS(false, false), {}],
+    ['a daemon that will not start', STATUS(true, false), { STUB_START_EXIT: '1' }],
+    ['unreadable status', 'not json', {}],
+  ])('does not run it before the daemon is up: %s', (_name, status, extra) => {
+    supervise(resumeEnv({ STUB_STATUS: status, ...extra }));
+    expect(resumes()).toHaveLength(0);
+  });
+
+  it('does not run it before a sign-in', () => {
+    fs.rmSync(path.join(home, '.happier'), { recursive: true, force: true });
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, true) }));
+    expect(resumes()).toHaveLength(0);
+  });
+
+  it('runs it once per boot, not once per pass or per loop', () => {
+    const many = { STUB_STATUS: STATUS(true, true), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: '0.1' };
+    supervise(resumeEnv(many), { timeout: 1500 });
+    expect(calls('status')).toBeGreaterThanOrEqual(3);
+    expect(resumes()).toHaveLength(1);
+    // A second copy of the loop in the same boot finds the marker.
+    const again = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true) }));
+    expect(resumes()).toHaveLength(1);
+    expect(again.stderr).toContain('already launched this boot');
+    // A new boot (docker restart: a new PID 1 start time) runs it again.
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), PD_SUPERVISOR_BOOT_KEY: '5678' }));
+    expect(resumes()).toHaveLength(2);
+  });
+
+  it('does not run it again when the daemon is restarted onto a new CLI', () => {
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, true) }));
+    supervise(resumeEnv({ STUB_STATUS: CONVERGENCE() }));
+    expect(calls('stop')).toBe(1);
+    expect(resumes()).toHaveLength(1);
+  });
+
+  it('never holds up the loop while it runs', () => {
+    // resume-self can wait 600 s for the relay; passes must keep coming.
+    try {
+      supervise(
+        resumeEnv({
+          STUB_STATUS: STATUS(true, true),
+          STUB_RESUME_SLEEP: '2',
+          PD_HAPPIER_ONCE: '0',
+          PD_HAPPIER_INTERVAL: '0.1',
+        }),
+        { timeout: 1000 },
+      );
+      const log = fs.readFileSync(stubLog, 'utf8').split('\n');
+      const start = log.findIndex((l) => l.startsWith('resume-start'));
+      const end = log.indexOf('resume-end');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const during = log.slice(start, end === -1 ? undefined : end).filter((l) => l === 'status');
+      expect(during.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      // The worker outlives the killed loop and finishes on its own; wait for
+      // it, pass or fail, so nothing writes into the fixture after cleanup.
+      const deadline = Date.now() + 5000;
+      while (!(fs.existsSync(stubLog) && fs.readFileSync(stubLog, 'utf8').includes('resume-end')) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+    }
+    expect(fs.readFileSync(stubLog, 'utf8')).toContain('resume-end');
+  });
+
+  it('waits out another resume-self holding the lock without using up its retries', () => {
+    // The hand-started run can hold the lock for its whole 600 s; five skips
+    // in a row, more than the three runs a failure gets, then the lock frees.
+    const skip = '{"result":"skipped","why":"another resume-self is running"}';
+    const t0 = Date.now();
+    const res = supervise(
+      resumeEnv({
+        STUB_STATUS: STATUS(true, true),
+        STUB_RESUME_OUTS: [skip, skip, skip, skip, skip, '{"result":"already running","session":"s1"}'].join('|'),
+        PD_SUPERVISOR_RESUME_RETRY: '0.1',
+      }),
+    );
+    expect(resumes()).toHaveLength(6);
+    expect(res.stderr).not.toContain('gave up');
+    expect(res.stderr).not.toContain('retrying in');
+    // Spaced, not a tight loop: five 0.1 s waits (spawnSync returns only when
+    // the worker, which holds stderr, has finished).
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(450);
+  });
+
+  it('gives a lock held after a failure its whole window, counted from the first skip', () => {
+    // A failed run, then a hand-started run takes the lock; the window must
+    // start at that skip, not at the worker's first run. The first run takes
+    // 2.2 s against a 2 s window, so a window counted from the worker's start
+    // has already closed by the first skip and the skips would use up runs.
+    const skip = '{"result":"skipped","why":"another resume-self is running"}';
+    const res = supervise(
+      resumeEnv({
+        STUB_STATUS: STATUS(true, true),
+        STUB_RESUME_OUTS: ['{"result":"failed","why":"relay"}', skip, skip, skip, skip, '{"result":"resumed","session":"s1"}'].join('|'),
+        STUB_RESUME_EXIT_FIRST: '1',
+        STUB_RESUME_SLEEP_FIRST: '2.2',
+        PD_SUPERVISOR_RESUME_LOCK_WAIT: '2',
+        PD_SUPERVISOR_RESUME_RETRY: '0.1',
+      }),
+    );
+    expect(resumes()).toHaveLength(6);
+    expect(res.stderr).toContain('run 1 exited 1; retrying');
+    expect(res.stderr).not.toContain('gave up');
+  });
+
+  it('treats a home with no supervisor profile as done, not as a failure', () => {
+    supervise(
+      resumeEnv({
+        STUB_STATUS: STATUS(true, true),
+        STUB_RESUME_OUTS: '{"result":"skipped","why":"no supervisor profile on this machine"}',
+        PD_SUPERVISOR_RESUME_RETRY: '0.1',
+      }),
+    );
+    expect(resumes()).toHaveLength(1);
+  });
+
+  it('still resumes when the marker cannot be written', () => {
+    fs.writeFileSync(resumeDir, 'a file where the marker directory goes');
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true) }));
+    expect(resumes()).toHaveLength(1);
+    expect(res.stderr).toContain('cannot write the marker');
+    expect(res.stderr).not.toContain('already launched');
+  });
+
+  it('retries a failed run, at most three runs in all', () => {
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), STUB_RESUME_EXIT: '1', PD_SUPERVISOR_RESUME_RETRY: '0.1' }));
+    expect(resumes()).toHaveLength(3);
+    expect(res.stderr).toContain('run 1 exited 1; retrying in 0.1s');
+    expect(res.stderr).toContain('gave up after 3 runs');
+  });
+
+  it('skips with one log line when the supervisor skill is absent', () => {
+    fs.rmSync(script);
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: '0.1' }), { timeout: 800 });
+    expect(res.stderr.match(/no supervisor skill \(.*fleet\.py\); skipped/g)).toHaveLength(1);
+    expect(fs.existsSync(resumeDir)).toBe(false);
+  });
+
+  it('honours PD_SUPERVISOR_RESUME=0', () => {
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), PD_SUPERVISOR_RESUME: '0' }));
+    expect(resumes()).toHaveLength(0);
+  });
+
+  it('keys the boot on the host boot id and PID 1\'s start time when no key is given', () => {
+    // Both halves: a docker restart changes PID 1's start time, a host reboot
+    // the boot id, and /tmp outlives both.
+    const env = resumeEnv({ STUB_STATUS: STATUS(true, true) });
+    delete env.PD_SUPERVISOR_BOOT_KEY;
+    supervise(env);
+    expect(resumes()).toHaveLength(1);
+    const host = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    const stat = fs.readFileSync('/proc/1/stat', 'utf8');
+    const starttime = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    expect(fs.readdirSync(resumeDir)).toEqual([`${host}-${starttime}`]);
+  });
+});
+
 describe('entrypoint.sh starts the supervisor', () => {
   // The stub supervisor drops a marker instead of looping, so a launch is
   // observable and nothing outlives the test.
