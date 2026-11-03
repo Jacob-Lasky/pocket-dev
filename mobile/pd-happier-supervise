@@ -50,6 +50,36 @@
 # reports the old version afterwards, it says so and does not restart in a
 # loop. A stop that fails is retried on the next pass.
 #
+# IT ALSO RESUMES THIS MACHINE'S STANDING SUPERVISOR SESSION, ONCE PER BOOT.
+# The supervisor (a Happier-managed Claude session in ~/supervisor, the
+# `supervisor` skill) dies with the container, and nothing else here brings it
+# back: it was down 14:27-14:54Z on 2026-11-03 after a recreate, and the
+# nightly ~03:00 one has the same gap. The desktop and laptop run the same
+# step from the systemd unit supervisor-autoresume.service; this container has
+# no systemd, so this loop is its stand-in. The first time a pass sees the
+# daemon signed in and running (or starts it), it launches, in the
+# BACKGROUND so a pass is never held up,
+#   python3 -I ~/.claude/skills/supervisor/scripts/fleet.py resume-self
+# which itself waits until the daemon is registered and the relay answers,
+# leaves a running supervisor alone ("already running"), skips a home with no
+# supervisor profile, and holds a lock so two runs cannot both resume. Its one
+# JSON outcome line reaches the container log prefixed
+# "pocket-dev: supervisor-resume:". DO NOT run it on every pass or after a daemon restart: a
+# supervisor Jake stopped on purpose must stay stopped until the next boot.
+# Once per boot is a marker directory named for the host boot id and PID 1's
+# start time under PD_SUPERVISOR_RESUME_DIR (/tmp/pocket-dev-supervisor-resume),
+# claimed with an atomic mkdir: /tmp lives in the container layer, so it
+# survives a `docker restart` (and a host reboot) that kills the supervisor,
+# and the key is what changes then; a second copy of this loop started by hand
+# in the same boot finds the marker and does nothing. A failed run is retried
+# at most twice, PD_SUPERVISOR_RESUME_RETRY seconds apart (120, the unit's
+# RestartSec); a run that found another resume-self holding the lock waits for
+# it at the same spacing (up to 720 s from the first skip) without using up a
+# retry; and
+# resume-self reuses one pending localId, so a retry never queues a second
+# startup message. No skill installed (a fresh home) is one log line.
+# PD_SUPERVISOR_RESUME=0 turns it off.
+#
 # Logging is on STATE CHANGES only, to stderr (the container log); stdout
 # belongs to whoever started us and entrypoint.sh points it at /dev/null.
 #
@@ -71,6 +101,18 @@ ONCE="${PD_HAPPIER_ONCE:-0}"
 HAPPIER_HOME="${HAPPIER_HOME_DIR:-$HOME/.happier}"
 last_key=""
 restarted_for=""
+RESUME_SCRIPT="${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}"
+RESUME_DIR="${PD_SUPERVISOR_RESUME_DIR:-/tmp/pocket-dev-supervisor-resume}"
+RESUME_RETRY="${PD_SUPERVISOR_RESUME_RETRY:-120}"
+if ! [[ $RESUME_RETRY =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+  || ! awk -v i="$RESUME_RETRY" 'BEGIN { exit !(i >= 0.1 && i <= 3600) }'; then
+  RESUME_RETRY=120
+fi
+# How long a held lock is waited out, from the first skip of a streak: the
+# holder's own 600 s timeout plus slack. Whole seconds (bash's SECONDS).
+RESUME_LOCK_WAIT="${PD_SUPERVISOR_RESUME_LOCK_WAIT:-720}"
+[[ $RESUME_LOCK_WAIT =~ ^[1-9][0-9]{0,4}$ ]] || RESUME_LOCK_WAIT=720
+resume_checked=""
 
 say() {
   # $1 is the state key, $2 the message. Same key twice in a row stays quiet.
@@ -86,6 +128,97 @@ newer() {
   local re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
   [[ $1 =~ $re && $2 =~ $re ]] || return 1
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+boot_key() {
+  # This container boot's identity: the host's boot id plus PID 1's start time
+  # (field 22 of /proc/1/stat, clock ticks since the HOST booted). A `docker
+  # restart` or recreate changes the start time; a host reboot changes the boot
+  # id, and both are needed because a marker in /tmp outlives a host reboot and
+  # the container can come back up at the same tick. Field 22 is read after the
+  # last ")" because field 2 is the command name in parentheses.
+  # PD_SUPERVISOR_BOOT_KEY is a test seam.
+  if [ -n "${PD_SUPERVISOR_BOOT_KEY:-}" ]; then
+    printf '%s' "$PD_SUPERVISOR_BOOT_KEY"
+    return
+  fi
+  local stat host
+  host=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+  [[ $host =~ ^[0-9a-f-]+$ ]] || return 1
+  stat=$(cat /proc/1/stat 2>/dev/null) || return 1
+  stat=${stat##*) }
+  # shellcheck disable=SC2086
+  set -- $stat
+  [[ ${20:-} =~ ^[0-9]+$ ]] || return 1
+  printf '%s-%s' "$host" "${20}"
+}
+
+run_resume() {
+  # The background half: resume-self, retried after a failure, at most 3 runs.
+  # Exit 0 is resumed, already running or skipped; the outcome line says which.
+  # One skip is NOT final: "another resume-self is running" means a hand-started
+  # run holds the lock, and that run can wait up to its own 600 s timeout and
+  # then fail. So a lock skip is retried without using up a run, for up to
+  # RESUME_LOCK_WAIT (720) s from the FIRST skip of a streak (a holder that took the lock late in
+  # this worker's life gets its whole window), and only then counts as a
+  # failure. Returns 1 after giving up.
+  local attempt=1 rc line out lock_until=""
+  while :; do
+    out=$(timeout 700 python3 -I "$RESUME_SCRIPT" resume-self --timeout 600 </dev/null 2>&1)
+    rc=$?
+    while IFS= read -r line; do echo "pocket-dev: supervisor-resume: $line" >&2; done <<<"$out"
+    if [ "$rc" = 0 ] && [[ $out == *"another resume-self is running"* ]]; then
+      [ -z "$lock_until" ] && lock_until=$((SECONDS + RESUME_LOCK_WAIT))
+      if [ "$SECONDS" -lt "$lock_until" ]; then
+        sleep "$RESUME_RETRY"
+        continue
+      fi
+    elif [ "$rc" = 0 ]; then
+      return 0
+    fi
+    lock_until=""
+    [ "$attempt" -ge 3 ] && break
+    echo "pocket-dev: supervisor-resume: run $attempt exited $rc; retrying in ${RESUME_RETRY}s" >&2
+    attempt=$((attempt + 1))
+    sleep "$RESUME_RETRY"
+  done
+  echo "pocket-dev: supervisor-resume: gave up after 3 runs (last exit $rc); by hand: python3 -I $RESUME_SCRIPT resume-self" >&2
+  return 1
+}
+
+resume_supervisor() {
+  # Called on every pass that finds the daemon up; does anything at most once
+  # per process, and launches resume-self at most once per container boot.
+  [ -n "$resume_checked" ] && return 0
+  resume_checked=1
+  [ "${PD_SUPERVISOR_RESUME:-1}" = "0" ] && return 0
+  if [ "$(id -u)" = "0" ]; then
+    # The supervisor is claude's; a root run would leave root-owned state in its home.
+    echo "pocket-dev: supervisor-resume: running as root, not claude; skipped" >&2
+    return 0
+  fi
+  if [ ! -f "$RESUME_SCRIPT" ]; then
+    echo "pocket-dev: supervisor-resume: no supervisor skill ($RESUME_SCRIPT); skipped" >&2
+    return 0
+  fi
+  local key
+  if ! key=$(boot_key) || [ -z "$key" ]; then
+    echo "pocket-dev: supervisor-resume: cannot tell this boot from /proc; skipped" >&2
+    return 0
+  fi
+  if ! { mkdir -p "$RESUME_DIR" && mkdir "$RESUME_DIR/$key"; } 2>/dev/null; then
+    if [ -d "$RESUME_DIR/$key" ]; then
+      echo "pocket-dev: supervisor-resume: already launched this boot ($RESUME_DIR/$key); skipped" >&2
+      return 0
+    fi
+    # The marker only stops a second loop in the same boot from repeating the
+    # run; resume-self's own lock and its "already running" check make one
+    # extra run harmless, so an unwritable marker is not a reason to leave the
+    # supervisor down.
+    echo "pocket-dev: supervisor-resume: cannot write the marker $RESUME_DIR/$key; resuming without it" >&2
+  fi
+  echo "pocket-dev: supervisor-resume: daemon is up; resuming the supervisor in the background" >&2
+  run_resume &
 }
 
 read_state() {
@@ -136,15 +269,19 @@ while :; do
           # PATH finds the image's older npm fallback, and moving a newer daemon
           # onto it would undo the update. An unparseable version proves nothing.
           say "not-newer:$pair" "daemon runs CLI $4 and PATH has $5, which is not newer; leaving the daemon"
+          resume_supervisor  # the daemon still runs, on its current CLI
         elif [ "$pair" = "$restarted_for" ]; then
           say "stuck:$pair" "daemon still runs CLI $4 after a restart onto $5; not restarting again"
+          resume_supervisor  # the daemon still runs, on its current CLI
         elif ! timeout 90 happier daemon stop >/dev/null 2>&1; then
           # Not recorded as done: a transient failure is retried next pass.
           say "stop-failed:$pair" "could not stop the daemon (CLI $4) to move it onto CLI $5; retrying every ${INTERVAL}s"
+          resume_supervisor  # the daemon still runs, on its current CLI
         else
           restarted_for="$pair"
           if timeout 90 happier daemon start >/dev/null 2>&1; then
             say "restarted:$pair" "daemon restarted onto CLI $5 (was $4)"
+            resume_supervisor
           else
             say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
           fi
@@ -152,10 +289,12 @@ while :; do
         ;;
       "true true "*)
         say running "daemon running"
+        resume_supervisor
         ;;
       "true false "*)
         if timeout 90 happier daemon start >/dev/null 2>&1; then
           say running "daemon started"
+          resume_supervisor
         else
           say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
         fi
