@@ -50,6 +50,13 @@
 # reports the old version afterwards, it says so and does not restart in a
 # loop. A stop that fails is retried on the next pass.
 #
+# IT ALSO CLEARS A DAEMON RECORD A PREVIOUS CONTAINER LEFT, right before it
+# starts a daemon that is not running. ~/.happier outlives a recreate and the
+# PID namespace does not, so the record can name a PID an unrelated process
+# holds now, and Happier 0.2.17's start then dies on it (process_identity_unverified)
+# after making `daemon start` wait 60 s. Only records written before this
+# container's PID 1 started are removed; see clear_stale_daemon_records.
+#
 # IT ALSO RESUMES THIS MACHINE'S STANDING SUPERVISOR SESSION, ONCE PER BOOT.
 # The supervisor (a Happier-managed Claude session in ~/supervisor, the
 # `supervisor` skill) dies with the container, and nothing else here brings it
@@ -130,27 +137,188 @@ newer() {
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }
 
-boot_key() {
-  # This container boot's identity: the host's boot id plus PID 1's start time
-  # (field 22 of /proc/1/stat, clock ticks since the HOST booted). A `docker
-  # restart` or recreate changes the start time; a host reboot changes the boot
-  # id, and both are needed because a marker in /tmp outlives a host reboot and
-  # the container can come back up at the same tick. Field 22 is read after the
-  # last ")" because field 2 is the command name in parentheses.
-  # PD_SUPERVISOR_BOOT_KEY is a test seam.
-  if [ -n "${PD_SUPERVISOR_BOOT_KEY:-}" ]; then
-    printf '%s' "$PD_SUPERVISOR_BOOT_KEY"
-    return
-  fi
-  local stat host
-  host=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
-  [[ $host =~ ^[0-9a-f-]+$ ]] || return 1
+pid1_start_ticks() {
+  # PID 1's start time: field 22 of /proc/1/stat, clock ticks since the HOST
+  # booted. Read after the last ")" because field 2 is the command name in
+  # parentheses.
+  local stat
   stat=$(cat /proc/1/stat 2>/dev/null) || return 1
   stat=${stat##*) }
   # shellcheck disable=SC2086
   set -- $stat
   [[ ${20:-} =~ ^[0-9]+$ ]] || return 1
-  printf '%s-%s' "$host" "${20}"
+  printf '%s' "${20}"
+}
+
+boot_key() {
+  # This container boot's identity: the host's boot id plus PID 1's start time.
+  # A `docker restart` or recreate changes the start time; a host reboot
+  # changes the boot id, and both are needed because a marker in /tmp outlives
+  # a host reboot and the container can come back up at the same tick.
+  # PD_SUPERVISOR_BOOT_KEY is a test seam.
+  if [ -n "${PD_SUPERVISOR_BOOT_KEY:-}" ]; then
+    printf '%s' "$PD_SUPERVISOR_BOOT_KEY"
+    return
+  fi
+  local host ticks
+  host=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+  [[ $host =~ ^[0-9a-f-]+$ ]] || return 1
+  ticks=$(pid1_start_ticks) || return 1
+  printf '%s-%s' "$host" "$ticks"
+}
+
+boot_epoch() {
+  # When this container's PID 1 started, in whole seconds since the epoch:
+  # the host's boot time (btime in /proc/stat, not namespaced) plus PID 1's
+  # start ticks over CLK_TCK. The kernel rounds both down, so this is never
+  # later than the real start. Fails rather than guessing.
+  # PD_HAPPIER_BOOT_EPOCH is a test seam (set but not a number also fails).
+  if [ -n "${PD_HAPPIER_BOOT_EPOCH+set}" ]; then
+    [[ $PD_HAPPIER_BOOT_EPOCH =~ ^[0-9]{1,15}$ ]] || return 1
+    printf '%s' "$((10#$PD_HAPPIER_BOOT_EPOCH))"
+    return
+  fi
+  local btime ticks hz
+  btime=$(awk '$1 == "btime" { print $2; exit }' /proc/stat 2>/dev/null)
+  [[ $btime =~ ^[0-9]+$ ]] || return 1
+  ticks=$(pid1_start_ticks) || return 1
+  hz=$(getconf CLK_TCK 2>/dev/null)
+  [[ $hz =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' $((btime + ticks / hz))
+}
+
+is_live_daemon() {
+  # True when $1 is the PID of a running `happier daemon start-sync` here: a
+  # `happier` executable (any directory; happier.mjs and the like too, for the
+  # npm copy run by node) followed by "daemon" and "start-sync" as separate
+  # arguments, the shape of the real one (<cli>/versions/<v>/happier daemon
+  # start-sync). Anything else at that PID is not a daemon to protect.
+  [[ $1 =~ ^[1-9][0-9]*$ ]] || return 1
+  local -a argv
+  local i
+  mapfile -d '' -t argv 2>/dev/null <"/proc/$1/cmdline" || return 1
+  for ((i = 0; i + 2 < ${#argv[@]}; i++)); do
+    [[ ${argv[i]##*/} == happier* ]] && [ "${argv[i + 1]}" = daemon ] \
+      && [ "${argv[i + 2]}" = start-sync ] && return 0
+  done
+  return 1
+}
+
+reclaim_file() {
+  # Deletes $1 only if it is still the exact file judged stale, identified by
+  # $2 ("<inode>:<mtime>"). It is renamed aside first, to a fresh unique name,
+  # and checked there, so a file a concurrent start wrote under the same name
+  # in between (Happier writes its state by rename and its lock with O_EXCL,
+  # both new inodes) is put back instead of deleted. If the name has been taken
+  # again meanwhile, the moved file stays at the aside name and says so; it is
+  # never overwritten or deleted. Fails when the judged file was not removed.
+  local q got
+  q=$(mktemp -- "$1.pd-stale.XXXXXX" 2>/dev/null) || return 1
+  if ! mv -f -T -- "$1" "$q" 2>/dev/null; then
+    rm -f -- "$q"
+    return 1
+  fi
+  got=$(stat -c '%i:%Y' -- "$q" 2>/dev/null)
+  if [ "$got" = "$2" ]; then
+    rm -f -- "$q"
+    return 0
+  fi
+  # `mv -n` exits 0 on some coreutils even when it skipped, so look, not trust.
+  mv -n -T -- "$q" "$1" 2>/dev/null
+  [ -e "$q" ] && echo "pocket-dev: happier: left a changed daemon file at $q; $1 was taken again" >&2
+  return 1
+}
+
+clear_stale_daemon_records() {
+  # Removes every Happier daemon record a PREVIOUS container left, so the
+  # start that follows does not die on it. Called only when status says the
+  # daemon is not running, right before `happier daemon start`.
+  #
+  # WHY. ~/.happier is in the home mount and outlives a recreate; the PID
+  # namespace does not. A daemon killed with its container leaves
+  # servers/<profile>/daemon.state.json and its .lock naming a PID from the old
+  # namespace, and the new container's boot reuses low PIDs within seconds. When
+  # an unrelated process holds that PID, Happier 0.2.17 reports the daemon not
+  # running (`daemon status`), but `daemon start` runs stopDaemon(), whose
+  # forceKillKnownDaemonPid() refuses to signal a live process it cannot prove is
+  # a daemon and throws DaemonStopIncompleteError (process_identity_unverified),
+  # so the start-sync child exits 1 and `daemon start` waits out its whole 60 s
+  # budget. Measured 2026-11-03 20:47Z: PID 588, two minutes before the daemon
+  # and the supervisor came back. Happier's own cleanup (reclaimDeadDaemonPublication)
+  # removes these same two files, but only once the PID is free, which after a
+  # recreate is luck. Refusing to kill the stranger is right; this keeps it.
+  #
+  # WHAT COUNTS AS A PREVIOUS CONTAINER'S RECORD: every file of it (state and/or
+  # lock) last written more than 2 s before this container's PID 1 started. No
+  # process here can have written it, because everything in this PID namespace
+  # started after PID 1. boot_epoch is never later than the real start, so the
+  # 2 s are slack for a small forward clock step, not for rounding. Every
+  # uncertainty keeps the record and the start fails the old, slow way, never
+  # the other way round: a record inside the margin (a recreate under ~2 s, or
+  # a backward clock step), a state file that does not parse, an unreadable
+  # boot time. A record naming a PID that IS a live `happier daemon start-sync`
+  # here is kept too, and a profile directory that is a symlink is skipped.
+  # Only Happier's record names are touched (daemon.state.json and the
+  # per-ring daemon.preview.state.json and daemon.dev.state.json, each with its
+  # .lock), never access.key, the broker state or session data. The PID is
+  # never signalled. A live daemon is never at stake: status reports it running
+  # and this does not run.
+  #
+  # ASSUMES this container is the only one using this ~/.happier (checked
+  # 2026-11-03: no other container mounts it). A daemon in a second container
+  # sharing it would be invisible here, and its record could be removed, which
+  # Happier's own reclaim would do just the same.
+  #
+  # DO NOT replace this with `happier doctor clean` (kills every Happier
+  # process, sessions included) or with deleting the record unconditionally (a
+  # record written in this boot can belong to a daemon that is starting).
+  local boot dir name rec x m pid pids keep ids i
+  boot=$(boot_epoch) || return 0
+  for dir in "$HAPPIER_HOME"/servers/*/; do
+    dir=${dir%/}
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    for name in daemon.state.json daemon.preview.state.json daemon.dev.state.json; do
+      rec="$dir/$name"
+      [ -e "$rec" ] || [ -e "$rec.lock" ] || continue
+      keep="" pids="" ids=()
+      for x in "$rec" "$rec.lock"; do
+        [ -e "$x" ] || continue
+        m=$(stat -c '%i:%Y' -- "$x" 2>/dev/null)
+        if ! [[ $m =~ ^[0-9]+:[0-9]+$ ]] || [ "${m#*:}" -ge $((boot - 2)) ]; then
+          keep=1
+          break
+        fi
+        ids+=("$x" "$m")
+        if [ "$x" = "$rec" ]; then
+          if ! pid=$(node -e 'const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pid; if (!Number.isSafeInteger(p)) process.exit(1); process.stdout.write(String(p));' -- "$x" 2>/dev/null); then
+            keep=1  # a state file we cannot read: leave it to Happier
+            break
+          fi
+        elif ! pid=$(tr -d '[:space:]' 2>/dev/null <"$x"); then
+          keep=1  # a lock we cannot read could name anything: keep it
+          break
+        fi
+        [[ $pid =~ ^[1-9][0-9]*$ ]] || continue  # no PID, no process to protect
+        if is_live_daemon "$pid"; then
+          keep=1
+          break
+        fi
+        [[ " $pids " == *" $pid "* ]] || pids="${pids:+$pids }$pid"
+      done
+      # Both files gone between the glance above and the checks: nothing to do.
+      [ -n "$keep" ] || [ "${#ids[@]}" -eq 0 ] && continue
+      # State before lock, and stop at the first that changed, so a record is
+      # never split into a kept state file and a deleted lock.
+      for ((i = 0; i < ${#ids[@]}; i += 2)); do
+        reclaim_file "${ids[i]}" "${ids[i + 1]}" || { keep=1; break; }
+      done
+      if [ -n "$keep" ]; then
+        echo "pocket-dev: happier: could not clear the daemon record $rec; it changed while being checked" >&2
+      else
+        echo "pocket-dev: happier: cleared a daemon record from a previous container ($rec, PID ${pids:-none}); that PID belongs to another process now" >&2
+      fi
+    done
+  done
 }
 
 run_resume() {
@@ -232,6 +400,8 @@ read_state() {
     echo unknown
     return
   fi
+  # SC2016: the single quotes are deliberate; ${a} below is a JS template, not bash.
+  # shellcheck disable=SC2016
   printf '%s' "$out" | node -e '
     let s = "";
     process.stdin.on("data", (d) => { s += d; }).on("end", () => {
@@ -292,6 +462,7 @@ while :; do
         resume_supervisor
         ;;
       "true false "*)
+        clear_stale_daemon_records
         if timeout 90 happier daemon start >/dev/null 2>&1; then
           say running "daemon started"
           resume_supervisor
