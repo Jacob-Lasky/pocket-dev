@@ -189,7 +189,10 @@ cd mobile
 pnpm install
 pnpm test              # vitest (unit + server)
 pnpm test:e2e          # Playwright on chromium + firefox + webkit
+test/pid-sandbox.sh <repo root as the docker host sees it>   # tests that need a live process at a recorded PID
 ```
+
+`pnpm test` skips the few tests that put a live process at a PID the code under test reads; CI runs them in a throwaway container through `test/pid-sandbox.sh`. Never run them, or a mutation of that code, against a live container — see CLAUDE.md "Common gotchas".
 
 WebKit is in the matrix because mobile Safari's CSS engine has historically interpreted some properties (e.g. `word-break: break-word`) differently than Chromium and Firefox; without it, Safari-only mobile-UI regressions ship green.
 
