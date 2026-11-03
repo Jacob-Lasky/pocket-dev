@@ -25,12 +25,21 @@
 // `hostname` case in lavish.test.js compare the live container address against
 // what the test set up. Green in CI, red only inside pocket-dev, which is where
 // these tests get run at least as often.
-const SCRUBBED_PREFIXES = ['PD_', 'LAVISH_'];
+//
+// HAPPIER_ and BASH_ENV, added 2026-11-03 for a worse version of the same bug:
+// pd-happier-supervise reads HAPPIER_HOME_DIR before $HOME, and a Happier-
+// launched session carries HAPPIER_* variables. An inherited HAPPIER_HOME_DIR
+// would point the stale-daemon-record tests at the REAL ~/.happier, where their
+// future boot-time seam makes every live record look stale and deletes it.
+// BASH_ENV is sourced by every non-interactive bash a test starts, so an
+// inherited one runs arbitrary setup inside the script under test.
+const SCRUBBED_PREFIXES = ['PD_', 'LAVISH_', 'HAPPIER_'];
+const SCRUBBED_NAMES = ['BASH_ENV', 'ENV'];
 
 export function spawnEnv(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (SCRUBBED_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
+    if (SCRUBBED_NAMES.includes(key) || SCRUBBED_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
   }
   // PD_CODEX_RC=0 by DEFAULT, because entrypoint.sh's codex remote-control
   // block is the one part of these scripts that reaches the network: it curls

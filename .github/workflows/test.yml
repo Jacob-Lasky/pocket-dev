@@ -28,6 +28,9 @@ jobs:
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      # The tests that put a live process at a recorded PID, in a throwaway
+      # container (pnpm test skips them everywhere else; see the script).
+      - run: test/pid-sandbox.sh "$GITHUB_WORKSPACE"
   e2e:
     runs-on: ubuntu-latest
     defaults:

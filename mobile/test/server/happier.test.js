@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,6 +74,14 @@ describe('Dockerfile install', () => {
     expect(DOCKERFILE).toMatch(/&& opencode --version/);
   });
 
+  it('keeps the PID sandbox runner executable, as CI invokes it directly', () => {
+    // core.fileMode is false on Tower's shfs, so a chmod there never reaches
+    // the index; a CI checkout then gets 644 and exit 126.
+    expect(fs.statSync(path.join(ROOT, 'mobile/test/pid-sandbox.sh')).mode & 0o111).not.toBe(0);
+    const staged = spawnSync('git', ['ls-files', '-s', 'mobile/test/pid-sandbox.sh'], { cwd: ROOT, encoding: 'utf8' }).stdout;
+    expect(staged).toMatch(/^100755 /);
+  });
+
   it('ships the supervisor executable', () => {
     expect(DOCKERFILE).toMatch(/sed -i 's\/\\r\/\/' [^\n]*pd-happier-supervise/);
     expect(DOCKERFILE).toMatch(/chmod \+x [^\n]*\/mobile\/pd-happier-supervise/);
@@ -86,6 +94,8 @@ let tmproot, home, skel, cache, stubBin, stubLog;
 // A stand-in for the real CLI. `daemon status --json` records itself in
 // $STUB_LOG, prints $STUB_STATUS and exits $STUB_STATUS_EXIT; `daemon start`
 // and `daemon stop` record themselves and exit $STUB_START_EXIT / $STUB_STOP_EXIT.
+// `daemon start` also logs "start-saw-record" when $STUB_RECORD or its .lock
+// still exists at that moment, so a test can tell cleared-before-start from after.
 function writeStubHappier() {
   fs.mkdirSync(stubBin, { recursive: true });
   fs.writeFileSync(
@@ -94,7 +104,7 @@ function writeStubHappier() {
       '#!/bin/bash',
       'case "$*" in',
       '  "daemon status --json") echo status >> "$STUB_LOG"; printf "%s" "$STUB_STATUS"; exit "${STUB_STATUS_EXIT:-0}" ;;',
-      '  "daemon start") echo start >> "$STUB_LOG"; exit "${STUB_START_EXIT:-0}" ;;',
+      '  "daemon start") echo start >> "$STUB_LOG"; [ -n "${STUB_RECORD:-}" ] && { [ -e "$STUB_RECORD" ] || [ -e "$STUB_RECORD.lock" ]; } && echo start-saw-record >> "$STUB_LOG"; exit "${STUB_START_EXIT:-0}" ;;',
       '  "daemon stop") echo stop >> "$STUB_LOG"; exit "${STUB_STOP_EXIT:-0}" ;;',
       '  *) exit 9 ;;',
       'esac',
@@ -118,6 +128,9 @@ function supervise(env, opts = {}) {
   return spawnSync('bash', [SUPERVISOR], {
     env: spawnEnv({
       HOME: home,
+      // Pinned, not just defaulted from HOME: the script reads it first, and the
+      // real ~/.happier must be unreachable from every test (pdEnv.js scrubs it too).
+      HAPPIER_HOME_DIR: path.join(home, '.happier'),
       PATH: `${stubBin}:${process.env.PATH}`,
       STUB_LOG: stubLog,
       PD_HAPPIER_ONCE: '1',
@@ -346,6 +359,383 @@ describe('pd-happier-supervise', () => {
     expect(child.stderr).toContain('no Happier sign-in yet');
     expect(child.stderr).toContain('daemon started');
     expect(starts()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// A record's PID, for every test that needs no real process behind it: above
+// the kernel's PID_MAX_LIMIT (4194304), so no process can ever hold it, and a
+// defect that signals a recorded PID cannot reach anything. DO NOT plant a real
+// PID (1, a spawned child's, any live one) outside the PID sandbox below: on
+// 2026-11-03 a `kill $pids` mutant plus a {"pid":1} stub record SIGTERMed
+// tini and killed the live pocket-dev twice.
+const NO_SUCH_PID = 4194305;
+
+// The tests that need a LIVE process at the recorded PID run only inside a
+// throwaway container started by test/pid-sandbox.sh: its PID 1 carries the
+// argument "pd-pid-sandbox", which neither pocket-dev's docker-init nor a CI
+// VM's systemd has, so a stray PD_PID_SANDBOX=1 is not enough on its own.
+const PID_SANDBOX = (() => {
+  if (process.env.PD_PID_SANDBOX !== '1') return false;
+  try {
+    return fs.readFileSync('/proc/1/cmdline', 'utf8').split('\0').includes('pd-pid-sandbox');
+  } catch {
+    return false;
+  }
+})();
+
+describe('pd-happier-supervise clears a daemon record a previous container left', () => {
+  // ~/.happier outlives a recreate but the PID namespace does not, so the
+  // record's PID can belong to an UNRELATED live process here. Happier 0.2.17
+  // then reports the daemon not running, yet `happier daemon start` dies with
+  // DaemonStopIncompleteError (process_identity_unverified) and waits out its
+  // 60 s budget before saying so: 2 minutes to the supervisor on 2026-11-03.
+  // The loop removes such a record before the start, and nothing else.
+  const BOOT = 1_800_000_000; // PD_HAPPIER_BOOT_EPOCH: when this container started
+  let dir;
+  beforeEach(() => {
+    signIn();
+    dir = path.join(home, '.happier/servers/tower');
+  });
+
+  // A daemon record (state file, its .lock, or one of them) last written at
+  // `mtime` (epoch seconds), naming `pid`.
+  function plant({ name = 'daemon.state.json', pid = NO_SUCH_PID, mtime = BOOT - 60, state = true, lock = true } = {}) {
+    const rec = path.join(dir, name);
+    if (state) {
+      fs.writeFileSync(rec, JSON.stringify({ pid, httpPort: 9, startedAt: (mtime - 3600) * 1000, controlToken: 't' }));
+      fs.utimesSync(rec, mtime, mtime);
+    }
+    if (lock) {
+      fs.writeFileSync(`${rec}.lock`, String(pid));
+      fs.utimesSync(`${rec}.lock`, mtime, mtime);
+    }
+    return rec;
+  }
+  const run = (env = {}, opts = {}) =>
+    supervise(
+      {
+        STUB_STATUS: STATUS(true, false),
+        PD_HAPPIER_BOOT_EPOCH: String(BOOT),
+        STUB_RECORD: path.join(dir, 'daemon.state.json'),
+        ...env,
+      },
+      opts,
+    );
+  const exists = (p) => fs.existsSync(p);
+  const leftovers = () => fs.readdirSync(dir).filter((f) => f.includes('pd-stale'));
+
+  it('removes a record older than this container before starting', () => {
+    const rec = plant();
+    const res = run();
+    expect(exists(rec)).toBe(false);
+    expect(exists(`${rec}.lock`)).toBe(false);
+    expect(starts()).toBe(1);
+    expect(calls('start-saw-record')).toBe(0);
+    expect(res.stderr).toContain(`cleared a daemon record from a previous container (${rec}, PID ${NO_SUCH_PID})`);
+    expect(res.stderr).toContain('daemon started');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('removes a stale lock with no state file', () => {
+    // Happier fails the same way on a bare lock whose PID is taken.
+    const rec = plant({ state: false });
+    run();
+    expect(exists(`${rec}.lock`)).toBe(false);
+    expect(starts()).toBe(1);
+  });
+
+  it('removes a stale state file with no lock', () => {
+    const rec = plant({ lock: false });
+    run();
+    expect(exists(rec)).toBe(false);
+  });
+
+  it('removes the release-ring records too, in every server profile', () => {
+    // daemon.preview.state.json and daemon.dev.state.json are Happier's
+    // legacy per-ring names.
+    const preview = plant({ name: 'daemon.preview.state.json' });
+    const dev = plant({ name: 'daemon.dev.state.json' });
+    const other = path.join(home, '.happier/servers/cloud');
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, 'daemon.state.json.lock'), String(NO_SUCH_PID));
+    fs.utimesSync(path.join(other, 'daemon.state.json.lock'), BOOT - 60, BOOT - 60);
+    run();
+    for (const rec of [preview, dev]) {
+      expect(exists(rec)).toBe(false);
+      expect(exists(`${rec}.lock`)).toBe(false);
+    }
+    expect(exists(path.join(other, 'daemon.state.json.lock'))).toBe(false);
+  });
+
+  it.each([
+    ['written after this container started', BOOT + 30],
+    ['written in the second it started', BOOT],
+    ['written within the 2 s clock margin', BOOT - 2],
+  ])('keeps a record %s', (_name, mtime) => {
+    const rec = plant({ mtime });
+    const res = run();
+    expect(exists(rec)).toBe(true);
+    expect(exists(`${rec}.lock`)).toBe(true);
+    expect(starts()).toBe(1);
+    expect(res.stderr).not.toContain('cleared a daemon record');
+  });
+
+  it('keeps the whole record when either half was written in this boot', () => {
+    const rec = plant();
+    fs.utimesSync(`${rec}.lock`, BOOT + 5, BOOT + 5);
+    run();
+    expect(exists(rec)).toBe(true);
+    expect(exists(`${rec}.lock`)).toBe(true);
+  });
+
+  it('keeps a stale state file it cannot parse, and leaves it to Happier', () => {
+    const rec = plant({ lock: false });
+    fs.writeFileSync(rec, '{not json');
+    fs.utimesSync(rec, BOOT - 60, BOOT - 60);
+    run();
+    expect(exists(rec)).toBe(true);
+  });
+
+  // A stub `node` (what reads the state file's PID) that replaces the state
+  // file the way a concurrent start would (by rename: a new inode), landing
+  // exactly between the check and the removal.
+  const replacement = JSON.stringify({ pid: NO_SUCH_PID, replaced: true });
+  function racingNode(rec) {
+    const bin = path.join(tmproot, 'racebin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, 'node'),
+      `#!/bin/bash\nfor a in "$@"; do [ "$a" = "${rec}" ] && { printf '%s' '${replacement}' > "${rec}.new"; mv -f "${rec}.new" "${rec}"; }; done\nexec "${process.execPath}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    return bin;
+  }
+
+  it('puts back a file that changed under it, and leaves the record whole', () => {
+    const rec = plant();
+    const res = run({ PATH: `${racingNode(rec)}:${stubBin}:${process.env.PATH}` });
+    expect(fs.readFileSync(rec, 'utf8')).toBe(replacement);
+    // Never split: the lock of a record whose state changed stays too.
+    expect(exists(`${rec}.lock`)).toBe(true);
+    expect(res.stderr).toContain(`could not clear the daemon record ${rec}`);
+    expect(res.stderr).not.toContain('cleared a daemon record from');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('never overwrites a changed file when its name was taken again meanwhile', () => {
+    // A second writer takes the name while the changed file is set aside:
+    // the stub `stat`, called on the aside copy, writes a new file at the
+    // original name first. Both survive; the aside copy is reported.
+    const rec = plant({ lock: false });
+    const bin = racingNode(rec);
+    fs.writeFileSync(
+      path.join(bin, 'stat'),
+      `#!/bin/bash\ncase "$*" in *pd-stale.*) printf second > "${rec}" ;; esac\nexec /usr/bin/stat "$@"\n`,
+      { mode: 0o755 },
+    );
+    const res = run({ PATH: `${bin}:${stubBin}:${process.env.PATH}` });
+    expect(fs.readFileSync(rec, 'utf8')).toBe('second');
+    const aside = leftovers();
+    expect(aside).toHaveLength(1);
+    // A fresh unique name, not one derived from the loop's PID, which a
+    // previous container's leftover could already hold and `mv -f` would clobber.
+    expect(aside[0]).not.toBe(`daemon.state.json.pd-stale.${res.pid}`);
+    expect(aside[0]).toMatch(/^daemon\.state\.json\.pd-stale\.[A-Za-z0-9]{6}$/);
+    expect(fs.readFileSync(path.join(dir, aside[0]), 'utf8')).toBe(replacement);
+    expect(res.stderr).toContain(`left a changed daemon file at ${path.join(dir, aside[0])}`);
+  });
+
+  it.skipIf(process.getuid() === 0)('keeps a stale lock it cannot read', () => {
+    // It could name a live daemon; unreadable is not "no PID".
+    const rec = plant({ state: false });
+    fs.chmodSync(`${rec}.lock`, 0o000);
+    run();
+    expect(exists(`${rec}.lock`)).toBe(true);
+  });
+
+  it('touches nothing else in the profile', () => {
+    plant();
+    const keep = ['access.key', 'connected-service-broker.state.json', 'daemon.state.json.tmp', 'daemon-notes.state.json', 'daemon.other.state.json'];
+    for (const f of keep.slice(1)) {
+      fs.writeFileSync(path.join(dir, f), '{}');
+      fs.utimesSync(path.join(dir, f), BOOT - 60, BOOT - 60);
+    }
+    run();
+    for (const f of keep) expect(exists(path.join(dir, f))).toBe(true);
+  });
+
+  it('skips a profile directory that is a symlink', () => {
+    const elsewhere = path.join(tmproot, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(elsewhere, path.join(home, '.happier/servers/linked'));
+    fs.writeFileSync(path.join(elsewhere, 'daemon.state.json.lock'), String(NO_SUCH_PID));
+    fs.utimesSync(path.join(elsewhere, 'daemon.state.json.lock'), BOOT - 60, BOOT - 60);
+    run();
+    expect(exists(path.join(elsewhere, 'daemon.state.json.lock'))).toBe(true);
+  });
+
+  it('handles a Happier home whose path starts with a dash', () => {
+    // A relative HAPPIER_HOME_DIR like "-h" must not reach node as an option.
+    const dash = path.join(tmproot, '-h/servers/tower');
+    fs.mkdirSync(dash, { recursive: true });
+    fs.writeFileSync(path.join(dash, 'access.key'), 'x');
+    fs.writeFileSync(path.join(dash, 'daemon.state.json'), JSON.stringify({ pid: NO_SUCH_PID }));
+    fs.utimesSync(path.join(dash, 'daemon.state.json'), BOOT - 60, BOOT - 60);
+    const res = run({ HAPPIER_HOME_DIR: '-h' }, { cwd: tmproot });
+    expect(exists(path.join(dash, 'daemon.state.json'))).toBe(false);
+    expect(res.stderr).toContain(`PID ${NO_SUCH_PID}`);
+  });
+
+  it('touches nothing while the daemon runs', () => {
+    const rec = plant();
+    run({ STUB_STATUS: STATUS(true, true) });
+    expect(exists(rec)).toBe(true);
+    expect(exists(`${rec}.lock`)).toBe(true);
+  });
+
+  it('touches nothing when status cannot be read', () => {
+    const rec = plant();
+    run({ STUB_STATUS: 'not json' });
+    expect(exists(rec)).toBe(true);
+    expect(exists(`${rec}.lock`)).toBe(true);
+  });
+
+  it.each(['', 'abc', '-5', '1e9'])('touches nothing, and still starts, when the boot time is unreadable (%j)', (epoch) => {
+    const rec = plant();
+    run({ PD_HAPPIER_BOOT_EPOCH: epoch });
+    expect(exists(rec)).toBe(true);
+    expect(starts()).toBe(1);
+  });
+
+  it('reads a zero-padded epoch as decimal, not octal', () => {
+    // Bash arithmetic would read "08..." as a bad octal number and die.
+    const rec = plant();
+    const res = run({ PD_HAPPIER_BOOT_EPOCH: `0${BOOT}` });
+    expect(res.status).toBe(0);
+    expect(exists(rec)).toBe(false);
+  });
+
+  it('reads the real boot time from /proc, on both sides of the boundary', () => {
+    // Oracle: procps' own reading of PID 1's start (`ps -o lstart`), not the
+    // script's arithmetic. Clear 4 s before it, keep 1 s before it (inside
+    // the 2 s margin, with 1 s for the oracle's own rounding).
+    const lstart = spawnSync('ps', ['-o', 'lstart=', '-p', '1'], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout.trim();
+    const start = Math.floor(Date.parse(`${lstart} UTC`) / 1000);
+    expect(Number.isFinite(start)).toBe(true);
+    const old = plant({ name: 'daemon.state.json', mtime: start - 4 });
+    const fresh = plant({ name: 'daemon.preview.state.json', mtime: start - 1 });
+    supervise({ STUB_STATUS: STATUS(true, false) });
+    expect(exists(old)).toBe(false);
+    expect(exists(fresh)).toBe(true);
+  });
+
+  // Live processes at the recorded PID. PID sandbox ONLY (see PID_SANDBOX):
+  // run them with `test/pid-sandbox.sh`. Belt and braces inside it too: bash's
+  // builtin `kill` is disabled through BASH_ENV and a PATH `kill` only logs,
+  // so the script under test cannot signal anything even there.
+  if (process.env.PD_PID_SANDBOX === '1' && !PID_SANDBOX) {
+    // Asked for the sandbox but PID 1 is not its sentinel: fail loudly rather
+    // than skip, so a broken runner cannot pass by running nothing.
+    it('runs the PID sandbox tests (PID sandbox)', () => {
+      throw new Error('PD_PID_SANDBOX=1 but /proc/1/cmdline lacks "pd-pid-sandbox"; use test/pid-sandbox.sh');
+    });
+  }
+  describe.skipIf(!PID_SANDBOX)('with a live process at the recorded PID (PID sandbox)', () => {
+    let guardBin, bashEnv;
+    beforeEach(() => {
+      guardBin = path.join(tmproot, 'killguard');
+      fs.mkdirSync(guardBin);
+      fs.writeFileSync(path.join(guardBin, 'kill'), '#!/bin/sh\necho "kill $*" >> "$STUB_LOG"\nexit 0\n', { mode: 0o755 });
+      bashEnv = path.join(tmproot, 'bash_env');
+      fs.writeFileSync(bashEnv, 'enable -n kill\n');
+    });
+    const guarded = (env = {}) => run({ PATH: `${guardBin}:${stubBin}:${process.env.PATH}`, BASH_ENV: bashEnv, ...env });
+    const killsAttempted = () =>
+      fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l.startsWith('kill')) : [];
+    // Running or sleeping, read from /proc (not dead, a zombie or stopped):
+    // a child's exitCode cannot change while spawnSync holds the event loop,
+    // so it proves nothing here.
+    const alive = (pid) => {
+      try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+        return !'ZXxTt'.includes(stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3));
+      } catch {
+        return false;
+      }
+    };
+    // Polls /proc/<pid>/cmdline until test(cmdline) holds; returns it.
+    const cmdlineOf = (pid, test) => {
+      let cmd = '';
+      for (let i = 0; i < 100; i++) {
+        cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+        if (test(cmd)) break;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+      return cmd;
+    };
+
+    it('removes the record of an unrelated live process, and never signals it', () => {
+      const victim = spawn('sleep', ['30'], { stdio: 'ignore' });
+      try {
+        const rec = plant({ pid: victim.pid });
+        const res = guarded();
+        expect(exists(rec)).toBe(false);
+        expect(res.stderr).toContain(`PID ${victim.pid}`);
+        expect(killsAttempted()).toEqual([]);
+        expect(alive(victim.pid)).toBe(true);
+      } finally {
+        victim.kill();
+      }
+    });
+
+    it('keeps an old record whose PID is a live Happier daemon here', () => {
+      // Cannot happen with a sane clock (that daemon would have rewritten it),
+      // so it is the belt to the mtime braces: never orphan a live daemon. The
+      // stand-in has the real one's argument shape: <dir>/happier daemon start-sync.
+      const daemon = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', '/opt/x/happier', 'daemon', 'start-sync'], { stdio: 'ignore' });
+      try {
+        expect(cmdlineOf(daemon.pid, (c) => c.endsWith('\0/opt/x/happier\0daemon\0start-sync\0'))).toMatch(/\0\/opt\/x\/happier\0daemon\0start-sync\0$/);
+        const rec = plant({ pid: daemon.pid });
+        const res = guarded();
+        expect(exists(rec)).toBe(true);
+        expect(exists(`${rec}.lock`)).toBe(true);
+        expect(res.stderr).not.toContain('cleared a daemon record');
+        expect(killsAttempted()).toEqual([]);
+        expect(alive(daemon.pid)).toBe(true);
+      } finally {
+        daemon.kill();
+      }
+    });
+
+    it('does not mistake a non-Happier process with "daemon start-sync" arguments for a daemon', () => {
+      const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', 'daemon', 'start-sync'], { stdio: 'ignore' });
+      try {
+        expect(cmdlineOf(other.pid, (c) => c.endsWith('\0daemon\0start-sync\0'))).toMatch(/\0daemon\0start-sync\0$/);
+        const rec = plant({ pid: other.pid });
+        guarded();
+        expect(exists(rec)).toBe(false);
+        expect(killsAttempted()).toEqual([]);
+        expect(alive(other.pid)).toBe(true);
+      } finally {
+        other.kill();
+      }
+    });
+
+    it('does not mistake a process that only has those words in one argument for a daemon', () => {
+      // Happier's classifier would not take it for one either, so the record
+      // would still break the start.
+      const spoof = spawn('bash', ['-c', 'exec -a "happier daemon start-sync" sleep 30'], { stdio: 'ignore' });
+      try {
+        expect(cmdlineOf(spoof.pid, (c) => c.startsWith('happier daemon start-sync\0'))).toMatch(/^happier daemon start-sync\0/);
+        const rec = plant({ pid: spoof.pid });
+        guarded();
+        expect(exists(rec)).toBe(false);
+        expect(killsAttempted()).toEqual([]);
+        expect(alive(spoof.pid)).toBe(true);
+      } finally {
+        spoof.kill();
+      }
+    });
   });
 });
 
