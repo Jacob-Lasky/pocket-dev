@@ -78,8 +78,11 @@ describe('Dockerfile install', () => {
     // core.fileMode is false on Tower's shfs, so a chmod there never reaches
     // the index; a CI checkout then gets 644 and exit 126.
     expect(fs.statSync(path.join(ROOT, 'mobile/test/pid-sandbox.sh')).mode & 0o111).not.toBe(0);
-    const staged = spawnSync('git', ['ls-files', '-s', 'mobile/test/pid-sandbox.sh'], { cwd: ROOT, encoding: 'utf8' }).stdout;
-    expect(staged).toMatch(/^100755 /);
+    // The index check needs a git checkout; pid-sandbox.sh runs this file from a plain copy with no git,
+    // where only the file mode above can be checked (CI's normal unit run still checks the index).
+    const ls = spawnSync('git', ['ls-files', '-s', 'mobile/test/pid-sandbox.sh'], { cwd: ROOT, encoding: 'utf8' });
+    if (ls.error || ls.status !== 0) return;
+    expect(ls.stdout).toMatch(/^100755 /);
   });
 
   it('ships the supervisor executable', () => {
