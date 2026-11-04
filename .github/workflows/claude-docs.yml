@@ -31,6 +31,16 @@ name: Auto-Document PR
 #
 # Actions are pinned to reviewed commit SHAs (claude-code-action v1.0.235,
 # checkout v6) because a moving tag is incompatible with a hard boundary.
+#
+# DO NOT stage the bot's working tree except through docs-bot-guard.mjs.
+# claude-code-action resets the root CLAUDE.md (and .claude/, CLAUDE.local.md,
+# .husky, .gitmodules, ...) to the BASE branch before Claude runs, because the
+# PR head's copy is untrusted, and leaves that revert unstaged. A bare
+# `git add -A` commits it: on #104, #107 and #108 that replaced the PR's
+# CLAUDE.md with main's and deleted the sections the PR had just added. The
+# guard returns restored paths to the PR head, merges the bot's CLAUDE.md edit
+# onto the PR's version, and holds back (as a PR comment) any bot change that
+# removes documentation the PR head has. See .github/scripts/docs-bot-guard.mjs.
 
 on:
   pull_request:
@@ -70,16 +80,20 @@ jobs:
           echo "start_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git diff "origin/$BASE_REF...HEAD" > "$RUNNER_TEMP/pr.diff"
           wc -c "$RUNNER_TEMP/pr.diff"
+          # Copied out before Claude runs, so the guard that judges its edits
+          # is the one this commit carries, whatever happens to the tree.
+          cp .github/scripts/docs-bot-guard.mjs "$RUNNER_TEMP/docs-bot-guard.mjs"
 
       - name: Update documentation with Claude
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The "deliberate edit" rule below is load-bearing. Measured on PR
-          # #104, 2026-10-19: without it this job reverted three corrections
-          # the PR made to CLAUDE.md, restoring claims the PR had just
-          # disproved, because the fix they described lives in ~/.claude and
-          # was invisible from this checkout.
+          # The "deliberate edit" and "never delete" rules below are requests;
+          # docs-bot-guard.mjs in the last step is what enforces them. The
+          # reverts on #104, #107 and #108 that the first rule was written
+          # for were NOT the model: the action had reset CLAUDE.md to main
+          # and this job committed that (see the header). The rules stay so
+          # the bot proposes fewer edits the guard has to hold back.
           prompt: |
             You are updating documentation for a pull request. The full diff of
             this PR (branch vs base) is in the file ${{ runner.temp }}/pr.diff —
@@ -102,6 +116,17 @@ jobs:
               describe something outside the repo (a hook in the user's
               ~/.claude, a live measurement) that you cannot see. Your job is
               the documentation the diff left stale ELSEWHERE.
+            - The root CLAUDE.md in your working tree is the BASE branch's
+              version, not this PR's: the action resets it for security. The
+              PR's version is .claude-pr/CLAUDE.md; read it, and do not edit
+              anything under .claude-pr/. Edit CLAUDE.md itself as usual: your
+              edit is merged onto the PR's version afterwards. Do not re-add
+              what pr.diff shows the PR already adding.
+            - Never delete documentation. Add text, or adjust a stale fact in
+              place. A check after you compares each file you touch with the
+              PR head and drops your whole change to that file if it removes
+              a heading, removes lines, or drops more than 40 words in one
+              place.
             - If the documentation is already accurate, change nothing and say so.
           # DO NOT change --model to a moving alias (opus, opus[1m]). The
           # Dockerfile's cdspo/cdsps deliberately use aliases so they follow
@@ -128,16 +153,25 @@ jobs:
             --allowedTools "Read,Glob,Grep,Edit(**/*.md),Write(**/*.md)"
             --disallowedTools "Bash"
 
-      - name: Validate markdown-only changes, then commit and push
+      - name: Guard and validate markdown-only changes, then commit and push
         env:
           BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           START_SHA: ${{ steps.prep.outputs.start_sha }}
           PR_NUM: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$(git rev-parse HEAD)" != "$START_SHA" ]; then
             echo "::error::HEAD moved during the Claude step; refusing to continue."
             exit 1
+          fi
+          # Must run before anything is staged: see the header.
+          report="$RUNNER_TEMP/docs-held-back.md"
+          node "$RUNNER_TEMP/docs-bot-guard.mjs" \
+            --head "$START_SHA" --base "origin/$BASE_REF" --report "$report"
+          if [ -s "$report" ]; then
+            gh pr comment "$PR_NUM" --repo "$GITHUB_REPOSITORY" --body-file "$report"
           fi
           validate() {
             local f bad=0
@@ -154,7 +188,7 @@ jobs:
             git ls-files --others --exclude-standard -z
           } | validate
           if [ -z "$(git status --porcelain)" ]; then
-            echo "Documentation already accurate; nothing to commit."
+            echo "Nothing to commit: documentation already accurate, or every change was held back."
             exit 0
           fi
           git add -A
