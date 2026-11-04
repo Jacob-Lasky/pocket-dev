@@ -241,49 +241,54 @@ function countBy(items) {
   return m;
 }
 
-// A YAML front-matter block (a first line of "---" closed by "---" or "..."), as
-// SKILL.md files carry: the index of its closing line, or -1. Only YAML-shaped
-// lines inside ("key:", indented, "- item", "# ..."), so a page that merely
-// opens with a "---" rule keeps a prose line under it as the setext heading it is.
+// CRLF is read as LF: a JS `.` does not match \r, so without that a CRLF file
+// has no headings at all and deleting one would go unseen.
+const lfLines = (text) => text.replace(/\r\n/g, '\n').split('\n');
+// A BOM at the very start of the file is read as nothing, as GitHub does:
+// "\uFEFF# Safety" there renders as a heading, and a guard that kept the BOM
+// would let the bot delete it unseen. DO NOT strip a BOM from any other line:
+// GitHub renders a later "\uFEFF# Safety" as a paragraph, and a "\uFEFF---" as
+// text, not a front-matter closer, so stripping there lets the bot turn a
+// heading into prose, or close front matter over one, unseen.
+const toLines = (text) => lfLines(text.replace(/^\uFEFF/, ''));
+
+// A front-matter block, as SKILL.md files carry: a first line of "---" closed by
+// a later "---" or "...". Returns the closing line's index, or -1. It does not
+// check that the inside is YAML, on purpose: violations() freezes the block.
+// DO NOT stop at the first closer: a reader that only takes "..." or a bare
+// "---" ends the block later, and a YAML repair past the first closer could
+// then hide a heading GitHub rendered. So the block runs to the furthest of
+// the first "---", the first "--- " (trailing blanks) and the first "...".
+// Freezing too much only holds back an edit; freezing too little loses one.
 function frontMatterEnd(lines) {
   if (!/^---[ \t]*$/.test(lines[0] ?? '')) return -1;
-  const end = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)[ \t]*$/.test(l));
-  const yamlish = (l) => l.trim() === '' || /^([A-Za-z0-9_.-]+[ \t]*:|[ \t]|- |#)/.test(l);
-  return end !== -1 && lines.slice(1, end).every(yamlish) ? end : -1;
+  const first = (re) => lines.findIndex((l, i) => i > 0 && re.test(l));
+  return Math.max(first(/^---$/), first(/^---[ \t]*$/), first(/^\.\.\.[ \t]*$/));
 }
 
-const toLines = (text) => text.replace(/\r\n/g, '\n').split('\n');
+// The raw text of a file's front-matter block (CRLF read as LF, a BOM kept), or null.
+function frontMatter(text) {
+  const end = frontMatterEnd(toLines(text));
+  return end === -1 ? null : lfLines(text).slice(0, end + 1).join('\n');
+}
+
 const ATX = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const atxHeading = (m) => `${m[1]} ${(m[2] ?? '').trim()}`.trimEnd();
 
 // The headings of a markdown text, each normalised to ATX form ("## Title"),
 // so converting a setext heading to ATX is not a rename. Lines inside fenced
 // code blocks are not headings (a "# comment" in a bash block is code), and
-// neither is a line indented four spaces. CRLF is read as LF: a JS `.` does
-// not match \r, so without that a CRLF file has no headings at all and
-// deleting one would go unseen. Front matter is metadata: its "key: value" line
-// before the closing "---" is not a setext heading.
+// neither is a line indented four spaces. Front matter is skipped whole: a
+// "key: value" line before its closing "---" is not a setext heading, and
+// whether GitHub renders anything in it depends on whether the YAML parses,
+// which the guard cannot tell. DO NOT read headings out of the block instead of
+// freezing it: violations() holds back any bot change to the block, so when it
+// is the same on both sides it hides the same things on both sides.
 export function headings(text) {
   const lines = toLines(text);
   const out = [];
   let fence = null;
-  let start = 0;
-  const end = frontMatterEnd(lines);
-  if (end !== -1) {
-    // DO NOT drop the "# ..." lines in the block as mere YAML comments. The
-    // guard has no YAML parser, and when the block is not valid YAML GitHub
-    // renders "# Safety" in it as a real heading, which the bot could then
-    // remove unseen. So they stay protected like headings (violations() also
-    // freezes such a block). DO NOT tag them with a suffix: "# Safety (in front
-    // matter)" is a heading a page can have. Every body key starts with "#", so
-    // the "[front matter] " prefix cannot match one, and moving a body heading
-    // into the block (where valid YAML hides it) still reads as removing it.
-    for (const l of lines.slice(1, end)) {
-      const m = l.match(ATX);
-      if (m) out.push(`[front matter] ${atxHeading(m)}`);
-    }
-    start = end + 1;
-  }
+  const start = frontMatterEnd(lines) + 1;
   for (let i = start; i < lines.length; i += 1) {
     const line = lines[i];
     if (fence) {
@@ -317,18 +322,13 @@ export function headings(text) {
 // each re-ended line is one removed and one added line with the same words.
 export function violations(oldText, newText, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS) {
   const found = [];
-  // A front-matter block with a "#" line may render that line as a heading or
-  // hide it as a comment, depending on whether the YAML parses. Without a YAML
-  // parser the guard cannot tell which, so the bot may not change such a block
-  // at all: repairing "title: [broken" alone turns a rendered heading into a
-  // hidden comment with every heading key and line count unchanged.
-  const oldLines = toLines(oldText);
-  const fm = frontMatterEnd(oldLines);
-  if (fm !== -1 && oldLines.slice(1, fm).some((l) => ATX.test(l))) {
-    const block = oldLines.slice(0, fm + 1).join('\n');
-    if (toLines(newText).slice(0, fm + 1).join('\n') !== block) {
-      found.push('changes a front-matter block that has a "#" line (GitHub renders it as a heading when the YAML is invalid)');
-    }
+  // DO NOT let the bot edit, add or remove front matter, even a harmless value:
+  // without a YAML parser the guard cannot tell what GitHub renders from it.
+  // Repairing "title: [broken" alone can turn a rendered line, or a "# Safety"
+  // in the block, into hidden YAML with every heading key and line count
+  // unchanged. Compared raw, so adding or dropping a BOM there is a change too.
+  if (frontMatter(oldText) !== frontMatter(newText)) {
+    found.push('adds, removes or changes the front matter (the bot may not touch it)');
   }
   const after = countBy(headings(newText));
   for (const [h, n] of countBy(headings(oldText))) {

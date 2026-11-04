@@ -497,56 +497,65 @@ describe('docs-bot-guard: violations()', () => {
     expect(headings('~~~ lang`ok\n## In code\n~~~\n')).toEqual([]);
   });
 
-  it('reads YAML front matter as metadata, not a setext heading', () => {
+  it('skips front matter when reading headings, and reads a leading BOM as nothing', () => {
+    expect(headings('---\nname: thing\n---\n\n# Body\n')).toEqual(['# Body']);
+    // Valid YAML or not, the block is skipped: violations() freezes it instead.
+    expect(headings('---\nSome prose\n---\n# Title\n')).toEqual(['# Title']);
+    expect(headings('---\n# Title\n---\n')).toEqual([]);
+    expect(headings('---\n# Hidden\n...\n# Body\n')).toEqual(['# Body']);
+    expect(headings('---\n# Hidden\n--- \n# Body\n')).toEqual(['# Body']);
+    // With no closing line it is not front matter, and the "---" is just a rule.
+    expect(headings('---\n# Title\n')).toEqual(['# Title']);
+    // A BOM at the start of the file is read as nothing, as GitHub does; one on a
+    // later line is text, and GitHub renders "\uFEFF# x" there as a paragraph.
+    expect(headings('\uFEFF# Safety\n\nText\n\uFEFF# Not a heading\n')).toEqual(['# Safety']);
+    expect(headings('\uFEFF---\ntitle: x\n---\n# Body\n')).toEqual(['# Body']);
+  });
+
+  it('holds back any bot change that touches, adds or removes front matter', () => {
+    const reason = 'adds, removes or changes the front matter (the bot may not touch it)';
     const doc = '---\nname: thing\ndescription: Old words\n---\n\n# Body\n';
-    expect(headings(doc)).toEqual(['# Body']);
-    expect(violations(doc, doc.replace('Old words', 'New words'))).toEqual([]);
-    // A page that opens with a rule keeps headings outside YAML-shaped lines.
-    expect(headings('---\nSome prose\n---\n# Title\n')).toEqual(['## Some prose', '# Title']);
-    // A "# x" line in the block is kept, tagged, because the guard cannot tell
-    // a YAML comment from a heading GitHub renders when the YAML is invalid.
-    expect(headings('---\n# Title\n---\n')).toEqual(['[front matter] # Title']);
-    // Wrapping headings in a fake front-matter block does not hide removing them.
-    expect(violations('# A\n\nx: 1\n', '---\nx: 1\n---\n\nx: 1\n')).toContain('removes or renames the heading "# A"');
-    expect(violations('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toContain('removes or renames the heading "# A"');
-  });
-
-  it('treats front matter with a "#" line as front matter, and protects the "#" line', () => {
-    const doc = '---\n# yaml note\ntitle: X\n---\n# Body\n';
-    expect(headings(doc)).toEqual(['[front matter] # yaml note', '# Body']);
-    // Invalid YAML: GitHub shows "# Safety" as a heading, so the bot may not drop it.
-    const broken = '---\n# Safety\ntitle: [broken\n---\n\nSafety steps follow.\n';
-    expect(violations(broken, broken.replace('# Safety', 'revised text'))).toContain(
-      'removes or renames the heading "[front matter] # Safety"',
+    // Even a one-word value edit in valid YAML.
+    expect(violations(doc, doc.replace('Old words', 'New words'))).toEqual([reason]);
+    // Round-3 repro: repairing invalid YAML, which GitHub may render as a "title: [broken" heading.
+    const broken = '---\ntitle: [broken\n---\n\nSafety steps follow.\n';
+    expect(violations(broken, broken.replace('[broken', 'fixed'))).toEqual([reason]);
+    // Removing the block, adding one, and moving a line out of it.
+    expect(violations(doc, doc.replace(/^---\n[^]*?\n---\n/, ''))).toContain(reason);
+    expect(violations('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toEqual(
+      expect.arrayContaining([reason, 'removes or renames the heading "# A"']),
     );
-  });
-
-  it('holds back any change to front matter that has a "#" line, since that can flip it to rendering', () => {
-    // Repairing the YAML turns a rendered "# Safety" heading into a hidden comment,
-    // with every line count and heading key unchanged.
-    const broken = '---\n# Safety\ntitle: [broken\n---\n\nSafety steps follow.\n';
-    const reason = 'changes a front-matter block that has a "#" line (GitHub renders it as a heading when the YAML is invalid)';
-    expect(violations(broken, broken.replace('title: [broken', 'title: fixed'))).toEqual([reason]);
-    // Even a value edit in valid front matter with a YAML comment: a false hold, the safe direction.
-    const doc = '---\n# yaml note\ntitle: X\n---\n# Body\n';
-    expect(violations(doc, doc.replace('title: X', 'title: Y'))).toEqual([reason]);
-    // Breaking the block so it stops being front matter is held back too.
-    expect(violations(doc, doc.replace('title: X', 'Some prose'))).toContain(reason);
-    // Front matter without a "#" line stays freely editable, and so does the body.
-    const plain = '---\ntitle: X\n---\n# Body\n';
-    expect(violations(plain, plain.replace('title: X', 'title: Y'))).toEqual([]);
+    expect(violations(doc, '---\nname: thing\n---\ndescription: Old words\n\n# Body\n')).toContain(reason);
+    // A reader that only takes a bare "---" as the closer ends the block later
+    // than "..." or "--- ": the freeze reaches the furthest closer, so repairing
+    // YAML there (which can hide "# Safety" from GitHub's render) is held back.
+    const late = '---\na: 1\n...\n--- \ntitle: [broken\n# Safety\n---\n\n# Body\n';
+    expect(headings(late)).toEqual(['# Body']);
+    expect(violations(late, late.replace('[broken', 'fixed'))).toEqual([reason]);
+    // Adding a BOM in front of the block changes it too.
+    expect(violations(doc, `\uFEFF${doc}`)).toContain(reason);
+    // The body after unchanged front matter stays editable, as does a file without any.
     expect(violations(doc, `${doc}\nMore words.\n`)).toEqual([]);
+    expect(violations('# Body\n', '# Body\n\nMore words.\n')).toEqual([]);
     // A CRLF-to-LF change of the same block is no change.
     expect(violations(doc.replace(/\n/g, '\r\n'), doc)).toEqual([]);
   });
 
-  it('cannot match a front-matter tag against a real heading of the same text', () => {
-    // GitHub renders the head's heading; in valid YAML the bot's "# Safety" is a comment.
-    const head = '# Safety (in front matter)\n\nSafety steps follow.\n';
+  it('sees a BOM-prefixed first heading, so hiding or deleting it is held back', () => {
+    // Round-3 repro: GitHub renders "\uFEFF# Safety" as a heading.
+    const head = '\uFEFF# Safety\n\nSafety steps follow.\n';
     const bot = '---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n';
-    expect(violations(head, bot)).toContain('removes or renames the heading "# Safety (in front matter)"');
-    const head2 = '# [front matter] # Safety\n\nSafety steps follow.\n';
-    expect(violations(head2, bot)).toContain('removes or renames the heading "# [front matter] # Safety"');
+    expect(violations(head, bot)).toContain('removes or renames the heading "# Safety"');
+    expect(violations(head, 'Safety steps follow.\n')).toContain('removes or renames the heading "# Safety"');
+    // A BOM on a later line is not stripped: GitHub renders that line as prose.
+    expect(violations('# Safety\n', '\n\uFEFF# Safety\n')).toContain('removes or renames the heading "# Safety"');
+    // Nor is a BOM-prefixed "---" a closer: the bot's later "---" would close the
+    // block and hide "# Safety", which the unclosed head renders.
+    const unclosed = '---\n# Safety\ntitle: [\n\uFEFF---\n]\n\n';
+    expect(violations(unclosed, `${unclosed}---\n`)).toEqual(expect.arrayContaining([
+      'adds, removes or changes the front matter (the bot may not touch it)',
+      'removes or renames the heading "# Safety"',
+    ]));
   });
 
   it('reads CRLF headings: a line-ending change passes, a deleted heading does not', () => {
