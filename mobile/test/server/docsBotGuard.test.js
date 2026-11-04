@@ -501,10 +501,52 @@ describe('docs-bot-guard: violations()', () => {
     const doc = '---\nname: thing\ndescription: Old words\n---\n\n# Body\n';
     expect(headings(doc)).toEqual(['# Body']);
     expect(violations(doc, doc.replace('Old words', 'New words'))).toEqual([]);
-    // A page that only opens with a rule keeps its headings.
-    expect(headings('---\n# Title\n---\n')).toEqual(['# Title']);
+    // A page that opens with a rule keeps headings outside YAML-shaped lines.
+    expect(headings('---\nSome prose\n---\n# Title\n')).toEqual(['## Some prose', '# Title']);
+    // A "# x" line in the block is kept, tagged, because the guard cannot tell
+    // a YAML comment from a heading GitHub renders when the YAML is invalid.
+    expect(headings('---\n# Title\n---\n')).toEqual(['[front matter] # Title']);
     // Wrapping headings in a fake front-matter block does not hide removing them.
     expect(violations('# A\n\nx: 1\n', '---\nx: 1\n---\n\nx: 1\n')).toContain('removes or renames the heading "# A"');
+    expect(violations('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toContain('removes or renames the heading "# A"');
+  });
+
+  it('treats front matter with a "#" line as front matter, and protects the "#" line', () => {
+    const doc = '---\n# yaml note\ntitle: X\n---\n# Body\n';
+    expect(headings(doc)).toEqual(['[front matter] # yaml note', '# Body']);
+    // Invalid YAML: GitHub shows "# Safety" as a heading, so the bot may not drop it.
+    const broken = '---\n# Safety\ntitle: [broken\n---\n\nSafety steps follow.\n';
+    expect(violations(broken, broken.replace('# Safety', 'revised text'))).toContain(
+      'removes or renames the heading "[front matter] # Safety"',
+    );
+  });
+
+  it('holds back any change to front matter that has a "#" line, since that can flip it to rendering', () => {
+    // Repairing the YAML turns a rendered "# Safety" heading into a hidden comment,
+    // with every line count and heading key unchanged.
+    const broken = '---\n# Safety\ntitle: [broken\n---\n\nSafety steps follow.\n';
+    const reason = 'changes a front-matter block that has a "#" line (GitHub renders it as a heading when the YAML is invalid)';
+    expect(violations(broken, broken.replace('title: [broken', 'title: fixed'))).toEqual([reason]);
+    // Even a value edit in valid front matter with a YAML comment: a false hold, the safe direction.
+    const doc = '---\n# yaml note\ntitle: X\n---\n# Body\n';
+    expect(violations(doc, doc.replace('title: X', 'title: Y'))).toEqual([reason]);
+    // Breaking the block so it stops being front matter is held back too.
+    expect(violations(doc, doc.replace('title: X', 'Some prose'))).toContain(reason);
+    // Front matter without a "#" line stays freely editable, and so does the body.
+    const plain = '---\ntitle: X\n---\n# Body\n';
+    expect(violations(plain, plain.replace('title: X', 'title: Y'))).toEqual([]);
+    expect(violations(doc, `${doc}\nMore words.\n`)).toEqual([]);
+    // A CRLF-to-LF change of the same block is no change.
+    expect(violations(doc.replace(/\n/g, '\r\n'), doc)).toEqual([]);
+  });
+
+  it('cannot match a front-matter tag against a real heading of the same text', () => {
+    // GitHub renders the head's heading; in valid YAML the bot's "# Safety" is a comment.
+    const head = '# Safety (in front matter)\n\nSafety steps follow.\n';
+    const bot = '---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n';
+    expect(violations(head, bot)).toContain('removes or renames the heading "# Safety (in front matter)"');
+    const head2 = '# [front matter] # Safety\n\nSafety steps follow.\n';
+    expect(violations(head2, bot)).toContain('removes or renames the heading "# [front matter] # Safety"');
   });
 
   it('reads CRLF headings: a line-ending change passes, a deleted heading does not', () => {
@@ -547,6 +589,25 @@ describe('docs-bot-guard: the PR comment', () => {
       expect(body).toContain(`- ${h.reasons[0]}`);
     }
     expect(body).not.toContain('report truncated');
+  });
+
+  it('keeps every proposal whole when the whole report fits, even with no room to spare', () => {
+    // Rendered length is not monotone in the proposal limit: a proposal that
+    // fits whole loses its "... (truncated)" suffix. A plain binary search
+    // over the limit therefore truncated proposals in a report that fit.
+    const held = (c) => [20000, 20000, c].map((n, i) => ({
+      file: `docs/f${i}.md`, reasons: [`reason ${i}`], proposal: 'x'.repeat(n),
+    }));
+    // Overhead of an untruncated report, measured on small proposals of known size.
+    const small = [10, 10, 10].map((n, i) => ({ file: `docs/f${i}.md`, reasons: [`reason ${i}`], proposal: 'x'.repeat(n) }));
+    const overhead = renderReport(small).length - 1 - 30;
+    const c = 60000 - overhead - 40000;
+    expect(c).toBeLessThan(20000);
+    const body = renderReport(held(c));
+    expect(body.length - 1).toBe(60000);
+    expect(body).not.toContain('(truncated)');
+    expect(body).toContain(`\n${'x'.repeat(c)}\n`);
+    expect(body.split('x'.repeat(20000)).length - 1).toBe(2);
   });
 
   it('cuts a file\'s long reason list before it drops a file', () => {

@@ -241,27 +241,48 @@ function countBy(items) {
   return m;
 }
 
+// A YAML front-matter block (a first line of "---" closed by "---" or "..."), as
+// SKILL.md files carry: the index of its closing line, or -1. Only YAML-shaped
+// lines inside ("key:", indented, "- item", "# ..."), so a page that merely
+// opens with a "---" rule keeps a prose line under it as the setext heading it is.
+function frontMatterEnd(lines) {
+  if (!/^---[ \t]*$/.test(lines[0] ?? '')) return -1;
+  const end = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)[ \t]*$/.test(l));
+  const yamlish = (l) => l.trim() === '' || /^([A-Za-z0-9_.-]+[ \t]*:|[ \t]|- |#)/.test(l);
+  return end !== -1 && lines.slice(1, end).every(yamlish) ? end : -1;
+}
+
+const toLines = (text) => text.replace(/\r\n/g, '\n').split('\n');
+const ATX = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const atxHeading = (m) => `${m[1]} ${(m[2] ?? '').trim()}`.trimEnd();
+
 // The headings of a markdown text, each normalised to ATX form ("## Title"),
 // so converting a setext heading to ATX is not a rename. Lines inside fenced
 // code blocks are not headings (a "# comment" in a bash block is code), and
 // neither is a line indented four spaces. CRLF is read as LF: a JS `.` does
 // not match \r, so without that a CRLF file has no headings at all and
-// deleting one would go unseen. A YAML front-matter block (a first line of
-// "---" closed by "---" or "..."), as SKILL.md files carry, is metadata: its
-// "key: value" line before the closing "---" is not a setext heading. Hiding a
-// heading by wrapping it in front matter still fails, because the bot's version
-// is read the same way and the heading counts as removed.
+// deleting one would go unseen. Front matter is metadata: its "key: value" line
+// before the closing "---" is not a setext heading.
 export function headings(text) {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const lines = toLines(text);
   const out = [];
   let fence = null;
   let start = 0;
-  if (/^---[ \t]*$/.test(lines[0] ?? '')) {
-    const end = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)[ \t]*$/.test(l));
-    // Only YAML-shaped lines inside ("key:", indented, "- item"), so a page
-    // that merely opens with a "---" rule keeps its "# Title" a heading.
-    const yamlish = (l) => l.trim() === '' || /^([A-Za-z0-9_.-]+[ \t]*:|[ \t]|- )/.test(l);
-    if (end !== -1 && lines.slice(1, end).every(yamlish)) start = end + 1;
+  const end = frontMatterEnd(lines);
+  if (end !== -1) {
+    // DO NOT drop the "# ..." lines in the block as mere YAML comments. The
+    // guard has no YAML parser, and when the block is not valid YAML GitHub
+    // renders "# Safety" in it as a real heading, which the bot could then
+    // remove unseen. So they stay protected like headings (violations() also
+    // freezes such a block). DO NOT tag them with a suffix: "# Safety (in front
+    // matter)" is a heading a page can have. Every body key starts with "#", so
+    // the "[front matter] " prefix cannot match one, and moving a body heading
+    // into the block (where valid YAML hides it) still reads as removing it.
+    for (const l of lines.slice(1, end)) {
+      const m = l.match(ATX);
+      if (m) out.push(`[front matter] ${atxHeading(m)}`);
+    }
+    start = end + 1;
   }
   for (let i = start; i < lines.length; i += 1) {
     const line = lines[i];
@@ -277,9 +298,9 @@ export function headings(text) {
       fence = open[1];
       continue;
     }
-    const atx = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/);
+    const atx = line.match(ATX);
     if (atx) {
-      out.push(`${atx[1]} ${(atx[2] ?? '').trim()}`.trimEnd());
+      out.push(atxHeading(atx));
       continue;
     }
     const underline = lines[i + 1]?.match(/^ {0,3}(=+|-+)[ \t]*$/);
@@ -296,6 +317,19 @@ export function headings(text) {
 // each re-ended line is one removed and one added line with the same words.
 export function violations(oldText, newText, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS) {
   const found = [];
+  // A front-matter block with a "#" line may render that line as a heading or
+  // hide it as a comment, depending on whether the YAML parses. Without a YAML
+  // parser the guard cannot tell which, so the bot may not change such a block
+  // at all: repairing "title: [broken" alone turns a rendered heading into a
+  // hidden comment with every heading key and line count unchanged.
+  const oldLines = toLines(oldText);
+  const fm = frontMatterEnd(oldLines);
+  if (fm !== -1 && oldLines.slice(1, fm).some((l) => ATX.test(l))) {
+    const block = oldLines.slice(0, fm + 1).join('\n');
+    if (toLines(newText).slice(0, fm + 1).join('\n') !== block) {
+      found.push('changes a front-matter block that has a "#" line (GitHub renders it as a heading when the YAML is invalid)');
+    }
+  }
   const after = countBy(headings(newText));
   for (const [h, n] of countBy(headings(oldText))) {
     if ((after.get(h) ?? 0) < n) found.push(`removes or renames the heading ${preview(h)}`);
@@ -453,20 +487,29 @@ export function renderReport(held, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS) 
   // Every held file and its reasons must reach the comment, so the proposals
   // give way first: the largest per-proposal limit whose RENDERED body fits is
   // found by measuring, not estimated, because a proposal's fence grows with
-  // the longest backtick run inside it. Rendered length only grows with the
-  // limit, so a binary search finds it. Only if the files and reasons alone do
-  // not fit are the reasons cut down, and only past that is the body sliced.
+  // the longest backtick run inside it. Rendered length grows with the limit
+  // EXCEPT where a proposal stops being cut and sheds its "... (truncated)"
+  // suffix, so a binary search alone can settle below a limit that fits. The
+  // search only ever keeps limits it has measured to fit; each proposal's own
+  // length and the cap are then tried too, and the largest that fits wins.
+  // Only if the files and reasons alone do not fit are the reasons cut down,
+  // and only past that is the body sliced.
   const render = (reasonCap, limit) => [intro, ...held.map((h) => renderHeld(h, reasonCap, limit))].join('\n');
   for (const reasonCap of [20, 3, 1]) {
-    if (render(reasonCap, 0).length > MAX_REPORT_CHARS) continue;
+    const fits = (limit) => render(reasonCap, limit).length <= MAX_REPORT_CHARS;
+    if (!fits(0)) continue;
     let lo = 0;
     let hi = MAX_PROPOSAL_CHARS;
     while (lo < hi) {
       const mid = Math.ceil((lo + hi) / 2);
-      if (render(reasonCap, mid).length <= MAX_REPORT_CHARS) lo = mid;
+      if (fits(mid)) lo = mid;
       else hi = mid - 1;
     }
-    return `${render(reasonCap, lo)}\n`;
+    const whole = [MAX_PROPOSAL_CHARS, ...held.map((h) => h.proposal.length)]
+      .filter((n) => n > lo && n <= MAX_PROPOSAL_CHARS)
+      .sort((a, b) => b - a);
+    const best = whole.find(fits) ?? lo;
+    return `${render(reasonCap, best)}\n`;
   }
   const body = render(1, 0);
   return `${body.slice(0, MAX_REPORT_CHARS)}\n\n... (report truncated; every held file is named in the workflow log)\n`;
