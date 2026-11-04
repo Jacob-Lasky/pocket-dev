@@ -102,7 +102,10 @@ function run(mode = 'completed', input = THREAD_ID, timeoutMs = 1000) {
     }),
     input: `${input}\n`,
     encoding: 'utf8',
-    timeout: 2_000,
+    // Only bounds a broken helper; the deadline under test is
+    // PD_CODEX_STATUS_TIMEOUT_MS, and the 'hang' test times it separately.
+    // 2 s killed healthy launches (status null) on a loaded host, 2026-11-04.
+    timeout: 20_000,
   });
 }
 
@@ -127,7 +130,9 @@ function runServerReader(mode = 'completed', input = THREAD_ID, { batch = false 
     encoding: 'utf8',
     // This nests two Node launches around the fake App Server. The behavior's
     // own deadline remains 1 second; this outer limit only bounds test setup.
-    timeout: 6_000,
+    // 6 s was too tight when the whole suite loads the host: on 2026-11-04 a
+    // full local run killed two of these launches (status null) that pass alone.
+    timeout: 20_000,
   });
 }
 
