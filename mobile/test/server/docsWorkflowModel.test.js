@@ -135,11 +135,12 @@ describe('claude-docs workflow model pin', () => {
   });
 });
 
-// The docs job reverted three corrections PR #104 made to CLAUDE.md, restoring
-// claims that PR had just disproved, because what they described (a hook in
-// ~/.claude) is invisible from the checkout. The prompt now forbids touching
-// markdown the PR diff itself changed. Guarded here because a prompt rewrite
-// that drops the rule would ship green and only show up as a silent revert.
+// The prompt forbids touching markdown the PR diff itself changed. It was
+// written after the docs job reverted PR #104's CLAUDE.md corrections, which
+// was later traced to the action resetting CLAUDE.md to main, not to the model
+// (docs-bot-guard.mjs is the enforcement; docsBotGuard.test.js guards it). The
+// rule stays as a request so the bot proposes fewer edits the guard must hold
+// back, and is guarded here so a prompt rewrite cannot drop it silently.
 describe('claude-docs workflow prompt', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../.github/workflows/claude-docs.yml'),
