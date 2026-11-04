@@ -37,7 +37,7 @@ const WORKFLOW = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/claude-
 const FIXTURES = path.join(__dirname, 'fixtures/docs-bot-guard-renders.json');
 const render = fixtureRenderer(FIXTURES);
 const hs = (text) => renderedHeadings(render(text));
-const HIDES = 'hides text the page showed while the source keeps it (an HTML comment, a closed <details>, markup): ';
+const HIDES = 'hides text the page showed while the source keeps it (an HTML comment, a closed <details>): ';
 const v = (oldText, newText, max = DEFAULT_MAX_DROPPED_WORDS) => violations(oldText, newText, max, render);
 
 // Isolated from the caller's git config: a global hooksPath or signing setting
@@ -308,7 +308,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     expect(s.read('README.md')).toBe(BASE_README);
     expect(r.dirty).toBe('');
     expect(r.report).toContain('### `README.md`');
-    expect(r.report).toContain('removes, renames or demotes the heading "## Testing"');
+    expect(r.report).toContain('removes, renames, demotes or folds away the heading "## Testing"');
     expect(r.report).toContain('-Run pnpm test.');
     expect(r.stdout).toContain('::warning::docs bot change to README.md held back');
   });
@@ -320,7 +320,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('CLAUDE.md')).toBe(PR_CLAUDE);
     expect(r.dirty).toBe('');
-    expect(r.report).toContain('removes, renames or demotes the heading "## Architecture"');
+    expect(r.report).toContain('removes, renames, demotes or folds away the heading "## Architecture"');
   });
 
   it('rejects removing a section the PR itself added', () => {
@@ -330,7 +330,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     const r = s.run();
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('README.md')).toBe(prReadme);
-    expect(r.report).toContain('removes, renames or demotes the heading "## Added by the PR"');
+    expect(r.report).toContain('removes, renames, demotes or folds away the heading "## Added by the PR"');
   });
 
   it('keeps the PR\'s CLAUDE.md even if the action did not restore it and the bot cut a section', () => {
@@ -486,7 +486,7 @@ describe('docs-bot-guard: refuses changes that are not plain text edits', () => 
 describe('docs-bot-guard: violations()', () => {
   it('treats a renamed heading as a removal', () => {
     expect(v('# A\n\n## B\n', '# A\n\n## B2\n')).toEqual([
-      'removes, renames or demotes the heading "## B"',
+      'removes, renames, demotes or folds away the heading "## B"',
     ]);
   });
 
@@ -525,7 +525,7 @@ describe('docs-bot-guard: violations()', () => {
 
   it('treats a heading moved into a code fence as removed', () => {
     expect(v('## Safety\n\nNever do X.\n', '```\n## Safety\n```\n\nNever do X.\n')).toEqual([
-      'removes, renames or demotes the heading "## Safety"',
+      'removes, renames, demotes or folds away the heading "## Safety"',
     ]);
   });
 
@@ -543,7 +543,7 @@ describe('docs-bot-guard: violations()', () => {
     expect(v(setext, '## Safety\n\nNever do X.\n\n# Title\n').filter((v) => v.includes('heading'))).toEqual([]);
     // Swapped for the same number of lines, so only the heading rule can see it.
     expect(v(setext, 'Some intro\nmore intro\n\nNever do X.\n\nTitle\n=====\n')).toEqual([
-      'removes, renames or demotes the heading "## Safety"',
+      'removes, renames, demotes or folds away the heading "## Safety"',
     ]);
   });
 
@@ -552,7 +552,7 @@ describe('docs-bot-guard: violations()', () => {
     const doc = '```lang`bad\n## Safety\n```\n';
     expect(hs(doc)).toEqual(['## Safety']);
     expect(v(doc, doc.replace('## Safety', 'Safety prose'))).toEqual([
-      'removes, renames or demotes the heading "## Safety"',
+      'removes, renames, demotes or folds away the heading "## Safety"',
     ]);
     // A tilde fence may carry a backtick in its info string, and still hides.
     expect(hs('~~~ lang`ok\n## In code\n~~~\n')).toEqual([]);
@@ -563,7 +563,7 @@ describe('docs-bot-guard: violations()', () => {
   });
 
   it('round-1 repros: headings a hand-written parser misread are judged as GitHub renders them', () => {
-    const lost = ['removes, renames or demotes the heading "# Safety"'];
+    const lost = ['removes, renames, demotes or folds away the heading "# Safety"'];
     // A lone CR ends a line, so "# Safety" is a heading of its own.
     expect(v('# Safety\rBody\n', 'Safety\rBody\n')).toEqual(lost);
     // Wrapped in an HTML comment, it is not rendered at all; only lines were added.
@@ -580,8 +580,11 @@ describe('docs-bot-guard: violations()', () => {
     // A section folded into a collapsed block: both headings still render.
     const guide = '# Guide\n\n## Safety\nKeep keys private.\n';
     const folded = '# Guide\n\n<details>\n<summary>Archived</summary>\n\n## Safety\nKeep keys private.\n\n</details>\n';
-    expect(hs(folded)).toEqual(['# Guide', '## Safety']);
-    expect(v(guide, folded)).toEqual([`${HIDES}"Safety Keep keys private"`]);
+    expect(hs(folded)).toEqual(['# Guide', '## Safety (in a closed <details>)']);
+    expect(v(guide, folded)).toEqual([
+      'removes, renames, demotes or folds away the heading "## Safety"',
+      `${HIDES}"Safety Keep keys private"`,
+    ]);
     // Shown open, nothing is hidden; nor is new text added in a closed block.
     expect(v(guide, folded.replace('<details>', '<details open>'))).toEqual([]);
     expect(v(guide, `${guide}\n<details>\n<summary>More</summary>\n\nNew notes.\n\n</details>\n`)).toEqual([]);
@@ -589,17 +592,35 @@ describe('docs-bot-guard: violations()', () => {
     const safety = '# Guide\n\n## Safety\nNever expose secrets.\n';
     expect(v(safety, '# Guide\n\n## Safety\n<!--\nNever expose secrets.\n-->\n')).toEqual([`${HIDES}"Never expose secrets"`]);
     expect(v('<!-- note -->\nNever expose secrets.\n', '<!-- note\nNever expose secrets. -->\n')).toEqual([`${HIDES}"Never expose secrets"`]);
-    // Moved into a link's URL: the words stay in the source, the page loses them.
-    expect(v('Use the staging host.\n', 'Use the [host](staging).\n')).toEqual([`${HIDES}"staging"`]);
+    // Round-2 repro: labelling a bare URL hides nothing; the link still shows where it goes.
+    expect(v('See https://example.com/docs.\n', 'See the [docs](https://example.com/docs).\n')).toEqual([]);
     // Reworded text is the word checks' business, not this one.
     expect(v('Never expose secrets.\n', 'Do not expose secrets.\n')).toEqual([]);
   });
 
   it('reads the words a page shows: no comments, attributes or closed <details> bodies', () => {
-    const html = '<p>A <a href="https://hidden.example">link</a> &amp; <code><span>foo</span><span>bar</span></code></p>\n'
+    const html = '<p>A <a href="https://site.example/docs" title="gone">docs</a> &amp; <code><span>foo</span><span>bar</span></code>'
+      + ' <a href="#anchor">here</a> <img src="x.png" alt="Alt words"></p>\n'
       + '<!-- gone -->\n<details><summary>Shown</summary><p>folded</p><details open><summary>inner</summary><p>deep</p></details></details>\n'
       + '<details open><summary>Top</summary><p>visible</p><details><summary>nested</summary><p>closed</p></details></details>\n';
-    expect(visibleWords(html)).toEqual(['A', 'link', 'foobar', 'Shown', 'Top', 'visible', 'nested']);
+    // A link adds the words of its target its text lacks; an in-page anchor adds none.
+    expect(visibleWords(html)).toEqual(['A', 'docs', 'https', 'site', 'example', 'foobar', 'here', 'Alt', 'words', 'Shown', 'Top', 'visible', 'nested']);
+  });
+
+  it('round-2 repros: a heading folded away under a summary that repeats it, and an image heading renamed', () => {
+    const folded = '<details><summary>Recovery</summary>\n\n## Recovery\n\n</details>\n';
+    expect(hs(folded)).toEqual(['## Recovery (in a closed <details>)']);
+    expect(v('## Recovery\n', folded)).toEqual(['removes, renames, demotes or folds away the heading "## Recovery"']);
+    expect(v('## Recovery\n', folded.replace('<details>', '<details open>'))).toEqual([]);
+    const img = (alt) => `## ![${alt}](https://example.com/safety.png)\n`;
+    expect(hs(img('Safety'))).toEqual(['## Safety']);
+    expect(v(img('Safety'), img('Danger'))).toContain('removes, renames, demotes or folds away the heading "## Safety"');
+  });
+
+  it('counts headings, so losing one of two identical headings is a loss', () => {
+    expect(v('## Safety\n\n## Safety\n', '## Safety\n\nSafety\n')).toEqual([
+      'removes, renames, demotes or folds away the heading "## Safety"',
+    ]);
   });
 
   it('also judges the body after front matter on its own, as GitHub\'s file view shows it', () => {
@@ -608,7 +629,7 @@ describe('docs-bot-guard: violations()', () => {
     // "# Safety" after it, so turning it into prose loses a heading.
     const doc = '---\n```\n---\n# Safety\n\nSteps.\n';
     expect(hs(doc)).toEqual([]);
-    expect(v(doc, doc.replace('# Safety', 'Safety'))).toEqual(['removes, renames or demotes the heading "# Safety"']);
+    expect(v(doc, doc.replace('# Safety', 'Safety'))).toEqual(['removes, renames, demotes or folds away the heading "# Safety"']);
   });
 
   it('holds the change back when the API cannot be asked, or no longer marks headings as it did', () => {
@@ -623,6 +644,14 @@ describe('docs-bot-guard: violations()', () => {
       /^could not be checked with GitHub's Markdown API, so it is held back: the API's heading markup changed/,
     );
     expect(hs(CANARY)).toEqual(CANARY_HEADINGS);
+    // Round-2 repro: an empty 200 for a document with words would read as a
+    // page with nothing to lose.
+    const empty = (text) => (text === CANARY ? render(text) : '');
+    expect(violations('# Safety\n', 'Safety\n', DEFAULT_MAX_DROPPED_WORDS, empty)[0]).toMatch(
+      /^could not be checked with GitHub's Markdown API, so it is held back: an empty render of a document with words in it/,
+    );
+    // A document with no words may render empty.
+    expect(violations('\n', '\n\n', DEFAULT_MAX_DROPPED_WORDS, empty)).toEqual([]);
   });
 
   it('holds back any bot change that touches, adds or removes front matter', () => {
@@ -637,7 +666,7 @@ describe('docs-bot-guard: violations()', () => {
     // Removing the block, adding one, and moving a line out of it.
     expect(v(doc, doc.replace(/^---\n[^]*?\n---\n/, ''))).toContain(reason);
     expect(v('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toEqual(
-      expect.arrayContaining([reason, 'removes, renames or demotes the heading "# A"']),
+      expect.arrayContaining([reason, 'removes, renames, demotes or folds away the heading "# A"']),
     );
     expect(v(doc, '---\nname: thing\n---\ndescription: Old words\n\n# Body\n')).toContain(reason);
     // A reader that only takes a bare "---" as the closer ends the block later
@@ -658,16 +687,16 @@ describe('docs-bot-guard: violations()', () => {
     // Round-3 repro: GitHub renders "\uFEFF# Safety" as a heading.
     const head = '\uFEFF# Safety\n\nSafety steps follow.\n';
     const bot = '---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n';
-    expect(v(head, bot)).toContain('removes, renames or demotes the heading "# Safety"');
-    expect(v(head, 'Safety steps follow.\n')).toContain('removes, renames or demotes the heading "# Safety"');
+    expect(v(head, bot)).toContain('removes, renames, demotes or folds away the heading "# Safety"');
+    expect(v(head, 'Safety steps follow.\n')).toContain('removes, renames, demotes or folds away the heading "# Safety"');
     // A BOM on a later line is not stripped: GitHub renders that line as prose.
-    expect(v('# Safety\n', '\n\uFEFF# Safety\n')).toContain('removes, renames or demotes the heading "# Safety"');
+    expect(v('# Safety\n', '\n\uFEFF# Safety\n')).toContain('removes, renames, demotes or folds away the heading "# Safety"');
     // Nor is a BOM-prefixed "---" a closer: the bot's later "---" would close the
     // block and hide "# Safety", which the unclosed head renders.
     const unclosed = '---\n# Safety\ntitle: [\n\uFEFF---\n]\n\n';
     expect(v(unclosed, `${unclosed}---\n`)).toEqual(expect.arrayContaining([
       'adds, removes or changes the front matter (the bot may not touch it)',
-      'removes, renames or demotes the heading "# Safety"',
+      'removes, renames, demotes or folds away the heading "# Safety"',
     ]));
   });
 
@@ -677,7 +706,7 @@ describe('docs-bot-guard: violations()', () => {
     expect(hs(crlf)).toEqual(['# A', '## B']);
     expect(v(crlf, lf)).toEqual([]);
     expect(v(crlf, crlf.replace('## B ##', 'Bee text'))).toEqual([
-      'removes, renames or demotes the heading "## B"',
+      'removes, renames, demotes or folds away the heading "## B"',
     ]);
   });
 });
@@ -742,6 +771,8 @@ describe('docs-bot-guard: GitHub\'s Markdown API', () => {
       CANARY, '# Safety\rBody\n', '<!--\n# Safety\n-->\n', '- Item\n\n    # Safety\n', '\n\uFEFF# Safety\n', '---\n```\n---\n# Safety\n\nSteps.\n',
       '# Guide\n\n<details>\n<summary>Archived</summary>\n\n## Safety\nKeep keys private.\n\n</details>\n',
       '# Guide\n\n## Safety\n<!--\nNever expose secrets.\n-->\n',
+      '<details><summary>Recovery</summary>\n\n## Recovery\n\n</details>\n', '## ![Safety](https://example.com/safety.png)\n',
+      'See the [docs](https://example.com/docs).\n',
     ];
     for (const text of texts) {
       expect(Object.values(renders).some((r) => r.text === text), `recorded: ${JSON.stringify(text)}`).toBe(true);
@@ -756,7 +787,7 @@ describe('docs-bot-guard: the PR comment', () => {
   it('names every held file and stays under GitHub\'s comment limit, however big the proposals', () => {
     const held = Array.from({ length: 5 }, (_, i) => ({
       file: `docs/f${i}.md`,
-      reasons: ['removes, renames or demotes the heading "## X"'],
+      reasons: ['removes, renames, demotes or folds away the heading "## X"'],
       proposal: `@@ -1 +1 @@\n${'-x\n'.repeat(15000)}`,
     }));
     const body = renderReport(held);
@@ -805,7 +836,7 @@ describe('docs-bot-guard: the PR comment', () => {
   it('cuts a file\'s long reason list before it drops a file', () => {
     const held = Array.from({ length: 5 }, (_, i) => ({
       file: `docs/f${i}.md`,
-      reasons: Array.from({ length: 2000 }, (_, j) => `removes, renames or demotes the heading "## Heading ${j}"`),
+      reasons: Array.from({ length: 2000 }, (_, j) => `removes, renames, demotes or folds away the heading "## Heading ${j}"`),
       proposal: 'x'.repeat(30000),
     }));
     const body = renderReport(held);

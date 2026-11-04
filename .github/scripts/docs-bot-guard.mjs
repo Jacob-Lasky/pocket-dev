@@ -307,45 +307,73 @@ const decodeEntities = (s) => s.replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g,
   return n <= 0x10ffff ? String.fromCodePoint(n) : whole;
 });
 
-// The headings in HTML from GitHub's Markdown API, each as "## Text" (level as
-// hashes, inline markup dropped, whitespace collapsed).
-export function renderedHeadings(html) {
-  const out = [];
-  const visible = html.replace(/<!--[\s\S]*?-->/g, '');
-  for (const m of visible.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi)) {
-    const text = decodeEntities(m[2].replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
-    out.push(`${'#'.repeat(Number(m[1]))} ${text}`.trimEnd());
-  }
-  return out;
-}
+const attrValue = (attrs, name) => {
+  const m = attrs.match(new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return m ? decodeEntities(m[1] ?? m[2] ?? m[3]) : null;
+};
 
-// The words a reader of GitHub's page sees without clicking anything: the HTML
-// from the Markdown API less comments, tag attributes and the body of a closed
-// <details> block (its <summary> shows). Block tags become spaces and inline
-// tags nothing, so "foo<span>bar</span>" in highlighted code stays one word.
+// Reads HTML from GitHub's Markdown API the way a reader of the page sees it.
+//   headings: each as "## Text" (level as hashes, inline markup dropped, an
+//     image's alt text kept, whitespace collapsed), marked " (in a closed
+//     <details>)" when a reader has to click to see it.
+//   words: what the page shows without clicking: no comments, no tag
+//     attributes, no body of a closed <details> (its <summary> shows). An
+//     image counts as its alt text and a link also as the words of its target
+//     not already in its text, so labelling a bare URL hides nothing. Block
+//     tags become spaces and inline tags nothing, so "foo<span>bar</span>" in
+//     highlighted code stays one word.
 const BLOCK_TAG = /^(p|div|h[1-6]|li|ul|ol|t[dhr]|table|thead|tbody|br|hr|pre|blockquote|details|summary|dl|dt|dd|img|input)$/i;
-export function visibleWords(html) {
+function readPage(html) {
   const text = [];
+  const headings = [];
   const open = []; // per enclosing <details>: [is open, in its <summary>]
+  const links = []; // per enclosing <a>: [href, index in text where it starts]
+  let heading = null;
   const shown = () => open.every(([isOpen, inSummary], i) => isOpen || (inSummary && i === open.length - 1));
+  const emit = (s) => {
+    if (shown()) text.push(s);
+    heading?.parts.push(s);
+  };
   for (const m of html.matchAll(/<!--[\s\S]*?-->|<(\/?)([a-zA-Z][\w-]*)\b([^>]*)>|[^<]+|</g)) {
     const [whole, close, tag, attrs] = m;
     if (whole.startsWith('<!--')) continue;
     if (tag === undefined) {
-      if (shown()) text.push(decodeEntities(whole));
+      emit(decodeEntities(whole));
       continue;
     }
     const name = tag.toLowerCase();
     if (name === 'details') {
       if (close) open.pop();
-      else open.push([/\bopen\b/i.test(attrs), false]);
+      else open.push([/(?:^|\s)open\b/i.test(attrs), false]);
     } else if (name === 'summary' && open.length > 0) {
       open[open.length - 1][1] = !close;
+    } else if (/^h[1-6]$/.test(name)) {
+      if (!close) {
+        heading = { level: Number(name[1]), parts: [], shown: shown() };
+      } else if (heading) {
+        const body = heading.parts.join('').replace(/\s+/g, ' ').trim();
+        headings.push(`${'#'.repeat(heading.level)} ${body}`.trimEnd() + (heading.shown ? '' : ' (in a closed <details>)'));
+        heading = null;
+      }
+    } else if (name === 'img' && !close) {
+      emit(` ${attrValue(attrs, 'alt') ?? ''} `);
+    } else if (name === 'a') {
+      if (!close) {
+        links.push([attrValue(attrs, 'href'), text.length]);
+      } else {
+        const [href, start] = links.pop() ?? [null, text.length];
+        if (href && !href.startsWith('#') && shown()) {
+          text.push(` ${lostWords(words([href]), words([text.slice(start).join('')])).join(' ')} `);
+        }
+      }
     }
     if (BLOCK_TAG.test(name)) text.push(' ');
   }
-  return words([text.join('')]);
+  return { headings, words: words([text.join('')]) };
 }
+
+export const renderedHeadings = (html) => readPage(html).headings;
+export const visibleWords = (html) => readPage(html).words;
 
 // Each word in `from` beyond its count in `to`.
 function lostWords(from, to) {
@@ -457,35 +485,46 @@ const defaultRender = memoize(githubRender);
 // fails for any reason holds the change back: unchecked is not allowed.
 //
 // It also holds back text the page stops showing while the source keeps it:
-// wrapped in an HTML comment, folded into a closed <details>, moved into a link
-// URL. The word checks in violations() read the source and cannot see that, so
-// any word the rendered page loses beyond those the source loses is held back.
-// (A bare URL turned into a titled link reads as hidden too; that costs only a
-// PR comment.)
+// wrapped in an HTML comment or folded into a closed <details> (a heading
+// folded there counts as lost, even when its summary repeats the words). The
+// word checks in violations() read the source and cannot see that, so any
+// word the rendered page loses beyond those the source loses is held back.
 function renderViolations(oldText, newText, render) {
   const lost = new Set();
   const hidden = new Set();
   try {
     checkCanary(render);
+    const page = (text) => {
+      const html = render(text);
+      // An empty answer for a document with words in it (an error some proxy
+      // turned into an empty 200, say) would read as a page with nothing to
+      // lose. Words only in HTML comments render as nothing, so they do not
+      // count; a file of only link definitions renders empty too, and holding
+      // that back costs a PR comment.
+      if (html.trim() === '' && words([text.replace(/<!--[\s\S]*?-->/g, '')]).length > 0) {
+        throw new Error(`an empty render of a document with words in it, starting ${preview(text)}`);
+      }
+      return readPage(html);
+    };
     const sourceLost = lostWords(words([oldText]), words([newText]));
     const before = new Map(renderViews(oldText));
     const after = new Map(renderViews(newText));
     for (const view of new Set([...before.keys(), ...after.keys()])) {
-      const oldHtml = render(before.get(view) ?? oldText);
-      const newHtml = render(after.get(view) ?? newText);
-      const left = countBy(renderedHeadings(newHtml));
-      for (const [h, n] of countBy(renderedHeadings(oldHtml))) {
+      const oldPage = page(before.get(view) ?? oldText);
+      const newPage = page(after.get(view) ?? newText);
+      const left = countBy(newPage.headings);
+      for (const [h, n] of countBy(oldPage.headings)) {
         if ((left.get(h) ?? 0) < n) lost.add(h);
       }
-      const pageLost = lostWords(visibleWords(oldHtml), visibleWords(newHtml));
+      const pageLost = lostWords(oldPage.words, newPage.words);
       for (const w of lostWords(pageLost, sourceLost)) hidden.add(w);
     }
   } catch (err) {
     return [`could not be checked with GitHub's Markdown API, so it is held back: ${err.message}`];
   }
-  const found = [...lost].map((h) => `removes, renames or demotes the heading ${preview(h)}`);
+  const found = [...lost].map((h) => `removes, renames, demotes or folds away the heading ${preview(h)}`);
   if (hidden.size > 0) {
-    found.push(`hides text the page showed while the source keeps it (an HTML comment, a closed <details>, markup): ${preview([...hidden].join(' '))}`);
+    found.push(`hides text the page showed while the source keeps it (an HTML comment, a closed <details>): ${preview([...hidden].join(' '))}`);
   }
   return found;
 }
