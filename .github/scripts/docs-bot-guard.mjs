@@ -318,16 +318,32 @@ const attrValue = (attrs, name) => {
 //     <details>)" when a reader has to click to see it.
 //   words: what the page shows without clicking: no comments, no tag
 //     attributes, no body of a closed <details> (its <summary> shows). An
-//     image counts as its alt text and a link also as the words of its target
-//     not already in its text, so labelling a bare URL hides nothing. Block
-//     tags become spaces and inline tags nothing, so "foo<span>bar</span>" in
-//     highlighted code stays one word.
+//     image counts as its alt text. A link to a web address or to a place on
+//     the page also counts as the words of its target not already in its
+//     text, so labelling a bare URL or "#setup" hides nothing. DO NOT count a
+//     relative target the same way: "[Keep](keys/private)" puts the words where
+//     the page does not show them. Block tags become spaces and inline tags
+//     nothing, so "foo<span>bar</span>" in highlighted code stays one word.
+//   ownWords: the page's words without those link targets, every one of which
+//     should be a word of the source (see renderViolations).
 const BLOCK_TAG = /^(p|div|h[1-6]|li|ul|ol|t[dhr]|table|thead|tbody|br|hr|pre|blockquote|details|summary|dl|dt|dd|img|input)$/i;
+// Links GitHub adds itself: a heading's permalink, a footnote's reference and
+// back link, and the image proxy link around every image. Their targets are
+// not words of the document.
+const generatedLink = (attrs, href) =>
+  /(?:^|\s)class\s*=\s*["']?anchor\b/i.test(attrs)
+  || /(?:^|\s)data-footnote-(?:ref|backref)\b/i.test(attrs)
+  || /^https:\/\/camo\.githubusercontent\.com\//i.test(href);
+// True when the tag has an attribute named "open". The values go first, so
+// title="foo open bar" or title= open does not count.
+const hasOpenAttr = (attrs) =>
+  /(?:^|\s)open(?:\s|\/|$)/i.test(attrs.replace(/\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+)/g, ''));
 function readPage(html) {
   const text = [];
+  const linkTargets = new Set(); // indexes in text that hold link target words
   const headings = [];
   const open = []; // per enclosing <details>: [is open, in its <summary>]
-  const links = []; // per enclosing <a>: [href, index in text where it starts]
+  const links = []; // per enclosing <a>: [href, index in text where it starts, made by GitHub]
   let heading = null;
   const shown = () => open.every(([isOpen, inSummary], i) => isOpen || (inSummary && i === open.length - 1));
   const emit = (s) => {
@@ -344,7 +360,7 @@ function readPage(html) {
     const name = tag.toLowerCase();
     if (name === 'details') {
       if (close) open.pop();
-      else open.push([/(?:^|\s)open\b/i.test(attrs), false]);
+      else open.push([hasOpenAttr(attrs), false]);
     } else if (name === 'summary' && open.length > 0) {
       open[open.length - 1][1] = !close;
     } else if (/^h[1-6]$/.test(name)) {
@@ -359,17 +375,23 @@ function readPage(html) {
       emit(` ${attrValue(attrs, 'alt') ?? ''} `);
     } else if (name === 'a') {
       if (!close) {
-        links.push([attrValue(attrs, 'href'), text.length]);
+        const href = attrValue(attrs, 'href');
+        links.push([href, text.length, href !== null && generatedLink(attrs, href)]);
       } else {
-        const [href, start] = links.pop() ?? [null, text.length];
-        if (href && !href.startsWith('#') && shown()) {
+        const [href, start, generated] = links.pop() ?? [null, text.length, true];
+        if (href && !generated && /^(?:https?:|mailto:|#)/i.test(href) && shown()) {
+          linkTargets.add(text.length);
           text.push(` ${lostWords(words([href]), words([text.slice(start).join('')])).join(' ')} `);
         }
       }
     }
     if (BLOCK_TAG.test(name)) text.push(' ');
   }
-  return { headings, words: words([text.join('')]) };
+  return {
+    headings,
+    words: words([text.join('')]),
+    ownWords: words([text.filter((_, i) => !linkTargets.has(i)).join('')]),
+  };
 }
 
 export const renderedHeadings = (html) => readPage(html).headings;
@@ -485,8 +507,9 @@ const defaultRender = memoize(githubRender);
 // fails for any reason holds the change back: unchecked is not allowed.
 //
 // It also holds back text the page stops showing while the source keeps it:
-// wrapped in an HTML comment or folded into a closed <details> (a heading
-// folded there counts as lost, even when its summary repeats the words). The
+// wrapped in an HTML comment, folded into a closed <details> (a heading
+// folded there counts as lost, even when its summary repeats the words) or
+// moved into a relative link target. The
 // word checks in violations() read the source and cannot see that, so any
 // word the rendered page loses beyond those the source loses is held back.
 function renderViolations(oldText, newText, render) {
@@ -504,7 +527,22 @@ function renderViolations(oldText, newText, render) {
       if (html.trim() === '' && words([text.replace(/<!--[\s\S]*?-->/g, '')]).length > 0) {
         throw new Error(`an empty render of a document with words in it, starting ${preview(text)}`);
       }
-      return readPage(html);
+      // A page is made of its document's words, so a word the source does not
+      // have (an error page some proxy answered with, say) means the answer is
+      // not a render of it. Case is ignored, entities are read both ways (for
+      // "&eacute;"), and the source is also read with its markup taken out,
+      // because "`exec`s" or "**Ui**Camera" render as one word.
+      const read = readPage(html);
+      const plain = decodeEntities(text)
+        .replace(/<[^>]*>/g, '')
+        .replace(/\]\([^)]*\)/g, '')
+        .replace(/[`*_~\\[\]^]/g, '');
+      const known = new Set(words([text, decodeEntities(text), plain]).map((w) => w.toLowerCase()));
+      const strange = read.ownWords.filter((w) => !known.has(w.toLowerCase()));
+      if (strange.length > 0) {
+        throw new Error(`the answer shows words the document does not have (${preview(strange.slice(0, 8).join(' '))}), so it is not a render of it`);
+      }
+      return read;
     };
     const sourceLost = lostWords(words([oldText]), words([newText]));
     const before = new Map(renderViews(oldText));

@@ -184,8 +184,9 @@ describe('docs-bot-guard: the CLAUDE.md restore', () => {
   });
 
   // The restore is the root-cause fix and must not lean on the heading check:
-  // run the #108 and #107 sequences with a renderer that reports no headings
-  // in anything (the canary still answers, so the check runs and sees nothing).
+  // run the #108 and #107 sequences with a renderer that shows each document
+  // as one paragraph of its own words, with no headings (the canary still
+  // answers, so the check runs and sees nothing).
   // The PR's section must still survive, through the restore and the merge alone.
   it.each([
     ['#108 (no bot edit)', null],
@@ -196,7 +197,7 @@ describe('docs-bot-guard: the CLAUDE.md restore', () => {
     const code = `
       import { guard, CANARY, fixtureRenderer } from ${JSON.stringify(pathToFileURL(GUARD).href)};
       const real = fixtureRenderer(${JSON.stringify(FIXTURES)});
-      const blind = (t) => (t === CANARY ? real(t) : '<p>no headings here</p>');
+      const blind = (t) => (t === CANARY ? real(t) : \`<p>\${t.replace(/[<>&]/g, ' ')}</p>\`);
       const held = guard({ base: 'origin/main', render: blind, log: () => {} });
       process.stdout.write(JSON.stringify(held));
     `;
@@ -594,17 +595,36 @@ describe('docs-bot-guard: violations()', () => {
     expect(v('<!-- note -->\nNever expose secrets.\n', '<!-- note\nNever expose secrets. -->\n')).toEqual([`${HIDES}"Never expose secrets"`]);
     // Round-2 repro: labelling a bare URL hides nothing; the link still shows where it goes.
     expect(v('See https://example.com/docs.\n', 'See the [docs](https://example.com/docs).\n')).toEqual([]);
+    // Round-3 repros: nor does labelling an in-page anchor, but words moved
+    // into a relative link target are off the page, and a title that says
+    // "open" does not open the block.
+    const setup = (see) => `${see}\n\n## Setup\n\nSteps.\n`;
+    expect(v(setup('See #setup.'), setup('See [instructions](#setup).'))).toEqual([]);
+    expect(v('Keep keys private.\n', '[Keep](keys/private).\n')).toEqual([`${HIDES}"keys private"`]);
+    const titled = '<details title="foo open bar">\n<summary>S</summary>\n\nKeep keys private.\n\n</details>\n';
+    expect(v('Keep keys private.\n', titled)).toEqual([`${HIDES}"Keep keys private"`]);
+    // GitHub's own links (footnote references, the image proxy) are not text.
+    expect(v('Note[^1].\n\n[^1]: The footnote.\n', 'Note[^1].\n\n[^1]: The footnote, longer.\n')).toEqual([]);
+    expect(v('![Logo](https://example.com/a.png)\n', '![Logo](https://example.com/b.png)\n')).toEqual([]);
     // Reworded text is the word checks' business, not this one.
     expect(v('Never expose secrets.\n', 'Do not expose secrets.\n')).toEqual([]);
   });
 
   it('reads the words a page shows: no comments, attributes or closed <details> bodies', () => {
     const html = '<p>A <a href="https://site.example/docs" title="gone">docs</a> &amp; <code><span>foo</span><span>bar</span></code>'
-      + ' <a href="#anchor">here</a> <img src="x.png" alt="Alt words"></p>\n'
+      + ' <a href="#anchor">here</a> <img src="x.png" alt="Alt words">'
+      + ' <a href="keys/private">Keep</a><a id="user-content-x" class="anchor" aria-label="Permalink: X" href="#x"></a>'
+      + ' <sup><a href="#fn-1" id="user-content-fnref-1" data-footnote-ref="">1</a></sup></p>\n'
+      + '<details title="foo open bar"><summary>T</summary><p>shut</p></details>\n'
       + '<!-- gone -->\n<details><summary>Shown</summary><p>folded</p><details open><summary>inner</summary><p>deep</p></details></details>\n'
       + '<details open><summary>Top</summary><p>visible</p><details><summary>nested</summary><p>closed</p></details></details>\n';
-    // A link adds the words of its target its text lacks; an in-page anchor adds none.
-    expect(visibleWords(html)).toEqual(['A', 'docs', 'https', 'site', 'example', 'foobar', 'here', 'Alt', 'words', 'Shown', 'Top', 'visible', 'nested']);
+    // A link to a web address or an in-page anchor adds the words of its
+    // target its text lacks; a relative link and GitHub's own links (a
+    // heading's permalink, a footnote reference) add none.
+    expect(visibleWords(html)).toEqual([
+      'A', 'docs', 'https', 'site', 'example', 'foobar', 'here', 'anchor', 'Alt', 'words', 'Keep', '1', 'T',
+      'Shown', 'Top', 'visible', 'nested',
+    ]);
   });
 
   it('round-2 repros: a heading folded away under a summary that repeats it, and an image heading renamed', () => {
@@ -615,6 +635,14 @@ describe('docs-bot-guard: violations()', () => {
     const img = (alt) => `## ![${alt}](https://example.com/safety.png)\n`;
     expect(hs(img('Safety'))).toEqual(['## Safety']);
     expect(v(img('Safety'), img('Danger'))).toContain('removes, renames, demotes or folds away the heading "## Safety"');
+  });
+
+  it('reads every heading level, so demoting a deep one or turning it to prose is a loss', () => {
+    expect(hs('### Three\n\n#### Four\n\n##### Five\n\n###### Six\n')).toEqual(['### Three', '#### Four', '##### Five', '###### Six']);
+    expect(v('### Safety\n', 'Safety\n')).toEqual(['removes, renames, demotes or folds away the heading "### Safety"']);
+    expect(v('### Safety\n', '#### Safety\n')).toEqual(['removes, renames, demotes or folds away the heading "### Safety"']);
+    // Seven hashes is prose.
+    expect(v('###### Safety\n', '####### Safety\n')).toEqual(['removes, renames, demotes or folds away the heading "###### Safety"']);
   });
 
   it('counts headings, so losing one of two identical headings is a loss', () => {
@@ -652,6 +680,16 @@ describe('docs-bot-guard: violations()', () => {
     );
     // A document with no words may render empty.
     expect(violations('\n', '\n\n', DEFAULT_MAX_DROPPED_WORDS, empty)).toEqual([]);
+    // Round-3 repro: a page that is not a render of the document at all, an
+    // error page some proxy answered with as a 200 of HTML.
+    const proxy = (text) => (text === CANARY ? render(text) : '<p>Service unavailable</p>\n');
+    expect(violations('# Safety\n', 'Safety\n', DEFAULT_MAX_DROPPED_WORDS, proxy)).toEqual([
+      'could not be checked with GitHub\'s Markdown API, so it is held back: the answer shows words the document does not have ("Service unavailable"), so it is not a render of it',
+    ]);
+    // Markup inside a word renders as one word the source never spells out;
+    // that is still a render of it.
+    const joined = 'Run `exec`s on the **Ui**Camera and <b>foo</b>bar [lin](https://example.com)ks.\n';
+    expect(v(joined, joined.replace('Run', 'Then run'))).toEqual([]);
   });
 
   it('holds back any bot change that touches, adds or removes front matter', () => {
@@ -773,6 +811,9 @@ describe('docs-bot-guard: GitHub\'s Markdown API', () => {
       '# Guide\n\n## Safety\n<!--\nNever expose secrets.\n-->\n',
       '<details><summary>Recovery</summary>\n\n## Recovery\n\n</details>\n', '## ![Safety](https://example.com/safety.png)\n',
       'See the [docs](https://example.com/docs).\n',
+      'See [instructions](#setup).\n\n## Setup\n\nSteps.\n', '[Keep](keys/private).\n',
+      '<details title="foo open bar">\n<summary>S</summary>\n\nKeep keys private.\n\n</details>\n',
+      'Note[^1].\n\n[^1]: The footnote.\n', '### Three\n\n#### Four\n\n##### Five\n\n###### Six\n',
     ];
     for (const text of texts) {
       expect(Object.values(renders).some((r) => r.text === text), `recorded: ${JSON.stringify(text)}`).toBe(true);

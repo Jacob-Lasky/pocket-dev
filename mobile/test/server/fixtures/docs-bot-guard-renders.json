@@ -62,6 +62,18 @@
       "text": "# proj\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n- claude-docs.yml keeps the markdown in sync.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
       "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n<li>claude-docs.yml keeps the markdown in sync.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Gotchas</h2><a id=\"user-content-gotchas\" class=\"anchor\" aria-label=\"Permalink: Gotchas\" href=\"#gotchas\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>Do not run the PID tests against the live container.</li>\n</ul>\n"
     },
+    "23a3e13357728766b556a2821481066ce5a40f5f70c8310847a6fc81c8a309ec": {
+      "text": "Note[^1].\n\n[^1]: The footnote, longer.\n",
+      "html": "<p>Note<sup><a href=\"#fn-1\" id=\"user-content-fnref-1\" data-footnote-ref=\"\">1</a></sup>.</p>\n<section data-footnotes=\"\">\n<ol>\n<li id=\"user-content-fn-1\">\n<p>The footnote, longer. <a href=\"#fnref-1\" data-footnote-backref=\"\" aria-label=\"Back to reference 1\">↩</a></p>\n</li>\n</ol>\n</section>\n"
+    },
+    "283312b976c623635dbf0be0779a0a592789ce92138b4be320f0e74043e2272f": {
+      "text": "###### Safety\n",
+      "html": "<div class=\"markdown-heading\"><h6 class=\"heading-element\">Safety</h6><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "299e9675964b7715698b87ee10a4009a304a567fd7c4821961ebaa1d141d3c9d": {
+      "text": "Note[^1].\n\n[^1]: The footnote.\n",
+      "html": "<p>Note<sup><a href=\"#fn-1\" id=\"user-content-fnref-1\" data-footnote-ref=\"\">1</a></sup>.</p>\n<section data-footnotes=\"\">\n<ol>\n<li id=\"user-content-fn-1\">\n<p>The footnote. <a href=\"#fnref-1\" data-footnote-backref=\"\" aria-label=\"Back to reference 1\">↩</a></p>\n</li>\n</ol>\n</section>\n"
+    },
     "30b24be6eee5036d620b759c9e024c37cca54c3ce5b1e52b7f289d8b21c6bb05": {
       "text": "---\nname: thing\ndescription: New words\n---\n\n# Body\n",
       "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: New words</h2><a id=\"user-content-name-thingdescription-new-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: New words\" href=\"#name-thingdescription-new-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
@@ -82,6 +94,10 @@
       "text": "﻿# Safety\n\nText\n\n﻿# Not a heading\n",
       "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Text</p>\n<p>﻿# Not a heading</p>\n"
     },
+    "37dcc9a85d21f1866f4ef2181469e4742eccc3690f4aaff8dc1c31d0ddcb3aef": {
+      "text": "### Safety\n",
+      "html": "<div class=\"markdown-heading\"><h3 class=\"heading-element\">Safety</h3><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
     "3897f33f2857c000c76f3467aefeae887d4c2d6d4036d1d25b7a5a99c15f407b": {
       "text": "~~~ lang`ok\n## In code\n~~~\n",
       "html": "<pre lang=\"lang`ok\"><code>## In code\n</code></pre>\n"
@@ -89,6 +105,10 @@
     "3b3d7cfed0cdfa82a1018c0078d4e576c7f70d42832c65daea9c23a17c0ab12f": {
       "text": "one two three four\n",
       "html": "<p>one two three four</p>\n"
+    },
+    "3b41787305e815f1a6d8a4887fafbb597b7174067a6e3cd38912f818876787c2": {
+      "text": "### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
+      "html": "<div class=\"markdown-heading\"><h3 class=\"heading-element\">Three</h3><a id=\"user-content-three\" class=\"anchor\" aria-label=\"Permalink: Three\" href=\"#three\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h4 class=\"heading-element\">Four</h4><a id=\"user-content-four\" class=\"anchor\" aria-label=\"Permalink: Four\" href=\"#four\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h5 class=\"heading-element\">Five</h5><a id=\"user-content-five\" class=\"anchor\" aria-label=\"Permalink: Five\" href=\"#five\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h6 class=\"heading-element\">Six</h6><a id=\"user-content-six\" class=\"anchor\" aria-label=\"Permalink: Six\" href=\"#six\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
     },
     "3be92ded2c716f611f665a453301716c4e75730d9401bb011efb88a176264834": {
       "text": "# A\r\n\r\nBee text\r\n\r\ntext\r\n",
@@ -166,6 +186,10 @@
       "text": "---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n",
       "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">title: Guide</h2><a id=\"user-content-title-guide\" class=\"anchor\" aria-label=\"Permalink: title: Guide\" href=\"#title-guide\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
     },
+    "5ce56739bdcebfb39ed5c75ef28690c0935e65107a1aa9f42dac739ba9f18710": {
+      "text": "Then run `exec`s on the **Ui**Camera and <b>foo</b>bar [lin](https://example.com)ks.\n",
+      "html": "<p>Then run <code>exec</code>s on the <strong>Ui</strong>Camera and <b>foo</b>bar <a href=\"https://example.com\" rel=\"nofollow\">lin</a>ks.</p>\n"
+    },
     "640abc24e1052c9430d446bb96f2d117b8983f0da75bcf0a55db4e253d3d82ad": {
       "text": "<details open><summary>Recovery</summary>\n\n## Recovery\n\n</details>\n",
       "html": "<details open=\"\"><summary>Recovery</summary>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Recovery</h2><a id=\"user-content-recovery\" class=\"anchor\" aria-label=\"Permalink: Recovery\" href=\"#recovery\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n</details>\n"
@@ -173,6 +197,10 @@
     "64378ddbc5f5cde14bf7ed49b5b1eb93787464d877abf48400db85865cfbf075": {
       "text": "## Safety\n\nNever do X.\n\n# Title\n",
       "html": "<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Never do X.</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Title</h1><a id=\"user-content-title\" class=\"anchor\" aria-label=\"Permalink: Title\" href=\"#title\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "6617644be67192dd5c39b8e14f7b242800ddd8b3bbbd637b936a398b2ec5c716": {
+      "text": "#### Safety\n",
+      "html": "<div class=\"markdown-heading\"><h4 class=\"heading-element\">Safety</h4><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
     },
     "6a03049a95a194aee8ef8bc6950708117c939b1a694337bb733412b0e9ed7c6c": {
       "text": "---\r\nname: thing\r\ndescription: Old words\r\n---\r\n\r\n# Body\r\n",
@@ -185,6 +213,10 @@
     "6c8539e5441ab6097ddabcfb22354e4d583430793a50cb002ec9b119d5497365": {
       "text": "--- \ntitle: fixed\n# Safety\n---\n\n# Body\n",
       "html": "<hr>\n<p>title: fixed</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "73e9d8c9ff35a1e6eea64cb777bb9e48bdef2fa5c42a2de48fddc4488d6d80fc": {
+      "text": "![Logo](https://example.com/a.png)\n",
+      "html": "<p><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/5c7e6565b3f40cc1fe6675de6ac726f61e38c25df5a1846bf86904af7b14d030/68747470733a2f2f6578616d706c652e636f6d2f612e706e67\"><img src=\"https://camo.githubusercontent.com/5c7e6565b3f40cc1fe6675de6ac726f61e38c25df5a1846bf86904af7b14d030/68747470733a2f2f6578616d706c652e636f6d2f612e706e67\" alt=\"Logo\" data-canonical-src=\"https://example.com/a.png\" style=\"max-width: 100%;\"></a></p>\n"
     },
     "770423513bd0765c18e500000baec91976bcd8267a245437b32572665c6ac370": {
       "text": "a\n\nb\n",
@@ -222,6 +254,18 @@
       "text": "---\ntitle: [broken\n---\n\nSafety steps follow.\n",
       "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">title: [broken</h2><a id=\"user-content-title-broken\" class=\"anchor\" aria-label=\"Permalink: title: [broken\" href=\"#title-broken\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
     },
+    "89bd25d4633a2ee7de601fd718713edf80dac159fba024eb716c70e2570f4459": {
+      "text": "####### Safety\n",
+      "html": "<p>####### Safety</p>\n"
+    },
+    "8c497559a46f038cfd1602e423419d647b9e44157a8d46b1ecf09720116409c4": {
+      "text": "See #setup.\n\n## Setup\n\nSteps.\n",
+      "html": "<p>See #setup.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Setup</h2><a id=\"user-content-setup\" class=\"anchor\" aria-label=\"Permalink: Setup\" href=\"#setup\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Steps.</p>\n"
+    },
+    "8dcacd222fc09d8d3eae2c29bb34d98d5e1aa9c45443babd98e1fc1fab9d7730": {
+      "text": "<details title=\"foo open bar\">\n<summary>S</summary>\n\nKeep keys private.\n\n</details>\n",
+      "html": "<details title=\"foo open bar\">\n<summary>S</summary>\n<p>Keep keys private.</p>\n</details>\n"
+    },
     "9075eb52d25f8fd37b55e1f0301db73baa18af8e5e740a562fe74499d17d4294": {
       "text": "---\n# Safety\ntitle: [\n﻿---\n]\n\n---\n",
       "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>title: [\n﻿---\n]</p>\n<hr>\n"
@@ -229,6 +273,10 @@
     "9142f0f27bf6be8a2cc38b2b818acc9815621316af988d9660d5157f4ab46410": {
       "text": "p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2\np3w0 p3w1 p3w2 p3w3 p3w4 p3w5 p3w6 p3w7 p3w8 p3w9 p3w10 p3w11 p3w12 p3w13 p3w14 p3w15 p3w16 p3w17 p3w18 p3w19 p3w20 p3w21 p3w22 p3w23 p3w24 p3w25 p3w26 p3w27 p3w28 p3w29 p3w30 p3w31 p3w32 p3w33 p3w34\nkeep 3\n",
       "html": "<p>p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2\np3w0 p3w1 p3w2 p3w3 p3w4 p3w5 p3w6 p3w7 p3w8 p3w9 p3w10 p3w11 p3w12 p3w13 p3w14 p3w15 p3w16 p3w17 p3w18 p3w19 p3w20 p3w21 p3w22 p3w23 p3w24 p3w25 p3w26 p3w27 p3w28 p3w29 p3w30 p3w31 p3w32 p3w33 p3w34\nkeep 3</p>\n"
+    },
+    "93fe1f6b23a8cbf7ed50b4bb1dfb74fc26885698935f6d724523580aef35f8ec": {
+      "text": "[Keep](keys/private).\n",
+      "html": "<p><a href=\"keys/private\">Keep</a>.</p>\n"
     },
     "946920e3055f041bd2734d2f99d7581fddf5f08ef9ac6adab5446badd698f4b5": {
       "text": "# proj\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
@@ -245,6 +293,10 @@
     "9a451718e9c08271fb53c240997c8fd03c0920ed0e635fa6a5396bf8cbf7dc5b": {
       "text": "# Guide\n\n## Safety\nKeep keys private.\n",
       "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Guide</h1><a id=\"user-content-guide\" class=\"anchor\" aria-label=\"Permalink: Guide\" href=\"#guide\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Keep keys private.</p>\n"
+    },
+    "9ab3512b7bd0851762fd2611feeed46ee029e0c2ff13ac9339ab98071af2d6f2": {
+      "text": "![Logo](https://example.com/b.png)\n",
+      "html": "<p><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/f873810044c64b76bf631bf74d5db8b71695c5f036816922c365a4c2efde7c2c/68747470733a2f2f6578616d706c652e636f6d2f622e706e67\"><img src=\"https://camo.githubusercontent.com/f873810044c64b76bf631bf74d5db8b71695c5f036816922c365a4c2efde7c2c/68747470733a2f2f6578616d706c652e636f6d2f622e706e67\" alt=\"Logo\" data-canonical-src=\"https://example.com/b.png\" style=\"max-width: 100%;\"></a></p>\n"
     },
     "9b52315b129cb24fd679b073bb7fdc08aed6758f447ed329c8488d3834912d77": {
       "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\n## Testing\n\nRun pnpm test.\n",
@@ -282,6 +334,10 @@
       "text": "<!-- note -->\nNever expose secrets.\n",
       "html": "\n<p>Never expose secrets.</p>\n"
     },
+    "bc8a9466fa1ad97821acff308bb8340a204135205dfb200d8d902ab8bbe6441d": {
+      "text": "See [instructions](#setup).\n\n## Setup\n\nSteps.\n",
+      "html": "<p>See <a href=\"#setup\">instructions</a>.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Setup</h2><a id=\"user-content-setup\" class=\"anchor\" aria-label=\"Permalink: Setup\" href=\"#setup\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Steps.</p>\n"
+    },
     "bd20651c29fad1c937531300515a2b4667bf26c4caba066c09f5c77f1cd0ae79": {
       "text": "# Doc\n\n```bash\n# start it\nnpm start\n```\n",
       "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Doc</h1><a id=\"user-content-doc\" class=\"anchor\" aria-label=\"Permalink: Doc\" href=\"#doc\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"highlight highlight-source-shell\"><pre><span class=\"pl-c\"><span class=\"pl-c\">#</span> start it</span>\nnpm start</pre></div>\n"
@@ -313,6 +369,14 @@
     "ce96f80801f2c8bfacefd8641570d62181837ab6a793ded1c67e3cbcc344f58e": {
       "text": "<details><summary>Recovery</summary>\n\n## Recovery\n\n</details>\n",
       "html": "<details><summary>Recovery</summary>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Recovery</h2><a id=\"user-content-recovery\" class=\"anchor\" aria-label=\"Permalink: Recovery\" href=\"#recovery\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n</details>\n"
+    },
+    "cfced453a307fc35ede3c505a77b1fc084ab874ed68425346145fbdd9cabf87d": {
+      "text": "Keep keys private.\n",
+      "html": "<p>Keep keys private.</p>\n"
+    },
+    "d34762f308e14886a20d09b75c920a11772aa8c31f08c76b8e4b49b4401d6815": {
+      "text": "Run `exec`s on the **Ui**Camera and <b>foo</b>bar [lin](https://example.com)ks.\n",
+      "html": "<p>Run <code>exec</code>s on the <strong>Ui</strong>Camera and <b>foo</b>bar <a href=\"https://example.com\" rel=\"nofollow\">lin</a>ks.</p>\n"
     },
     "d54e326dbf051a7ce76bea360d22bcc85c3f69c97b932dc96cd7a41ef26162ff": {
       "text": "# Safety\rBody\n",
@@ -357,6 +421,10 @@
     "e7aed39269fa774d02c5da9be659b37b26b5354b0f39aaf511b706482f3fcfec": {
       "text": "# Canary\n\nText.\n\n## Second *canary* &amp; more\n",
       "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Canary</h1><a id=\"user-content-canary\" class=\"anchor\" aria-label=\"Permalink: Canary\" href=\"#canary\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Text.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Second <em>canary</em> &amp; more</h2><a id=\"user-content-second-canary--more\" class=\"anchor\" aria-label=\"Permalink: Second canary &amp; more\" href=\"#second-canary--more\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "e7dfbbbbc7e2f23802a15fa0f7e8d7e89490ae49a630ae5b0150615eadf9b03b": {
+      "text": "Safety\n",
+      "html": "<p>Safety</p>\n"
     },
     "e9607d18d8413662e913d6cbecdeeae297a045142420da977c6ed91520e4f3bd": {
       "text": "---\n```\n---\nSafety\n\nSteps.\n",
