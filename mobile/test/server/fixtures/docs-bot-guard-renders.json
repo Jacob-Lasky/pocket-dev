@@ -1,0 +1,338 @@
+{
+  "source": "POST https://api.github.com/markdown with mode \"markdown\", through gh api; each entry keyed by the sha256 of its text",
+  "recorded": "2026-11-04",
+  "renders": {
+    "0263829989b6fd954f72baaf2fc64bc2e2f01d692d4de72986ea808f6e99813f": {
+      "text": "b\n",
+      "html": "<p>b</p>\n"
+    },
+    "027a5ededce52be784245b557e9cebe5c29b9905aa559bdbacb371586ae883e6": {
+      "text": "---\nname: thing\n---\ndescription: Old words\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing</h2><a id=\"user-content-name-thing\" class=\"anchor\" aria-label=\"Permalink: name: thing\" href=\"#name-thing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>description: Old words</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "0a8ace39aa48e6428f3c537957cdbb83dca230090e92736feed9aa89423ab231": {
+      "text": "---\nname: thing\ndescription: Old words\n---\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: Old words</h2><a id=\"user-content-name-thingdescription-old-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: Old words\" href=\"#name-thingdescription-old-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "0c8cf43612f86a04c6906795ce5b6d1b19a16c52216571f063da83d851d2ac34": {
+      "text": "# proj\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n"
+    },
+    "1019ff9afa253fa9d672f7035b2e05bd1857180b6905434ea21aadd2c944a0f5": {
+      "text": "# proj\n\nA docs-bot intro line.\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>A docs-bot intro line.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n"
+    },
+    "1085400783aa3f9098ef779971189a2c6997b3d36460617a0f15c78f55b8533d": {
+      "text": "# A\n\n## B2\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">B2</h2><a id=\"user-content-b2\" class=\"anchor\" aria-label=\"Permalink: B2\" href=\"#b2\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "13ad290e96af38477cc09fa4e8c907dd7eb446b976bea4c9b32b81ad359bf7c1": {
+      "text": "# Safety\n\nSteps.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Steps.</p>\n"
+    },
+    "14ff0114529dbdf43f11a718e02e094622c932ae240f68d85bfc0d4515d4ae31": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119</p>\n"
+    },
+    "174614072444ce00992b2be8fb49da46dd054d1e787009acad9815fe4686cefc": {
+      "text": "---\n# Safety\ntitle: [\n﻿---\n]\n\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>title: [\n﻿---\n]</p>\n"
+    },
+    "1f7250cd573b69b5a9d21481af8e60d92b370d5734d94b8dc92d17352dd665d4": {
+      "text": "# Doc\n\n```bash\n# start the server\nnpm start\n```\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Doc</h1><a id=\"user-content-doc\" class=\"anchor\" aria-label=\"Permalink: Doc\" href=\"#doc\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"highlight highlight-source-shell\"><pre><span class=\"pl-c\"><span class=\"pl-c\">#</span> start the server</span>\nnpm start</pre></div>\n"
+    },
+    "231d3170a53057758333bbc0813ebc39f1986882972a05bca5825b943ddf8b78": {
+      "text": "# proj\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n- claude-docs.yml keeps the markdown in sync.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n<li>claude-docs.yml keeps the markdown in sync.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Gotchas</h2><a id=\"user-content-gotchas\" class=\"anchor\" aria-label=\"Permalink: Gotchas\" href=\"#gotchas\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>Do not run the PID tests against the live container.</li>\n</ul>\n"
+    },
+    "30b24be6eee5036d620b759c9e024c37cca54c3ce5b1e52b7f289d8b21c6bb05": {
+      "text": "---\nname: thing\ndescription: New words\n---\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: New words</h2><a id=\"user-content-name-thingdescription-new-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: New words\" href=\"#name-thingdescription-new-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "31bb4f60e2f09f76e3f4c107944c13caa3473098a6a3f11ec1f09acb40154e65": {
+      "text": "Some intro\nmore intro\n\nNever do X.\n\nTitle\n=====\n",
+      "html": "<p>Some intro\nmore intro</p>\n<p>Never do X.</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Title</h1><a id=\"user-content-title\" class=\"anchor\" aria-label=\"Permalink: Title\" href=\"#title\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "3361e8f14d33579a0c3a4a0c8fba1bc13d209c2d4570d590a75e1b9819f83e3e": {
+      "text": "one two\nthree four\n",
+      "html": "<p>one two\nthree four</p>\n"
+    },
+    "3754a14c8c42d8723c00bbbac0783966e39d84d6d39fb186ab945b274eab7b55": {
+      "text": "﻿# Safety\n\nText\n\n﻿# Not a heading\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Text</p>\n<p>﻿# Not a heading</p>\n"
+    },
+    "3897f33f2857c000c76f3467aefeae887d4c2d6d4036d1d25b7a5a99c15f407b": {
+      "text": "~~~ lang`ok\n## In code\n~~~\n",
+      "html": "<pre lang=\"lang`ok\"><code>## In code\n</code></pre>\n"
+    },
+    "3b3d7cfed0cdfa82a1018c0078d4e576c7f70d42832c65daea9c23a17c0ab12f": {
+      "text": "one two three four\n",
+      "html": "<p>one two three four</p>\n"
+    },
+    "3be92ded2c716f611f665a453301716c4e75730d9401bb011efb88a176264834": {
+      "text": "# A\r\n\r\nBee text\r\n\r\ntext\r\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Bee text</p>\n<p>text</p>\n"
+    },
+    "3c9062feb676e9f670470eecd59b107a2fc90dae5319465291e9f0fae661ec18": {
+      "text": "- Item\n\n    Safety\n",
+      "html": "<ul>\n<li>\n<p>Item</p>\n<p>Safety</p>\n</li>\n</ul>\n"
+    },
+    "3d0303c8653517735b39148a5f5ca18d7e2f2391ac930f9954e30879343139b9": {
+      "text": "--- \ntitle: [broken\n# Safety\n---\n\n# Body\n",
+      "html": "<hr>\n<p>title: [broken</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "400848c66b2ef364f83ef64b887d9936f814928b621a3e44486cd9ae66e2da31": {
+      "text": "```\n## Safety\n```\n\nNever do X.\n",
+      "html": "<pre><code>## Safety\n</code></pre>\n<p>Never do X.</p>\n"
+    },
+    "42449b68577e94f3e54d3fe69513b717357aee8b8f5c8cabe4a8faeb051b0b4b": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\n## Testing\n\nRun pnpm test.\n\n## Added by the PR\n\nA reviewed note.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Testing</h2><a id=\"user-content-testing\" class=\"anchor\" aria-label=\"Permalink: Testing\" href=\"#testing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Run pnpm test.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Added by the PR</h2><a id=\"user-content-added-by-the-pr\" class=\"anchor\" aria-label=\"Permalink: Added by the PR\" href=\"#added-by-the-pr\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>A reviewed note.</p>\n"
+    },
+    "4467aeaced8df8037d281360e94e5588b3875cba8f3f5a24d4cb1616612a22ed": {
+      "text": "See https://example.com/s0/s1/s2/s3/s4/s5/s6/s7/s8/s9/s10/s11/s12/s13/s14/s15/s16/s17/s18/s19/s20/s21/s22/s23/s24/s25/s26/s27/s28/s29/s30/s31/s32/s33/s34/s35/s36/s37/s38/s39/s40/s41/s42/s43/s44\n",
+      "html": "<p>See <a href=\"https://example.com/s0/s1/s2/s3/s4/s5/s6/s7/s8/s9/s10/s11/s12/s13/s14/s15/s16/s17/s18/s19/s20/s21/s22/s23/s24/s25/s26/s27/s28/s29/s30/s31/s32/s33/s34/s35/s36/s37/s38/s39/s40/s41/s42/s43/s44\" rel=\"nofollow\">https://example.com/s0/s1/s2/s3/s4/s5/s6/s7/s8/s9/s10/s11/s12/s13/s14/s15/s16/s17/s18/s19/s20/s21/s22/s23/s24/s25/s26/s27/s28/s29/s30/s31/s32/s33/s34/s35/s36/s37/s38/s39/s40/s41/s42/s43/s44</a></p>\n"
+    },
+    "46658b1b56733e9f0a42353d6978d0450b79ace816fa781806e456a06b753e98": {
+      "text": "# proj\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Gotchas</h2><a id=\"user-content-gotchas\" class=\"anchor\" aria-label=\"Permalink: Gotchas\" href=\"#gotchas\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>Do not run the PID tests against the live container.</li>\n</ul>\n"
+    },
+    "489afbfd9b544cb609b6b61fad260f7c728c746f230d825982c3b41676fd5029": {
+      "text": "```lang`bad\n## Safety\n```\n",
+      "html": "<p>```lang`bad</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<pre><code></code></pre>\n"
+    },
+    "4b36ff871e096e2f1a69429480295b741d5830c21c6175d0ec61bf9452055337": {
+      "text": "# Body\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "4e388df58f74b35079386624c49b1a1f18fade4f3c78a3521b84df2fbad9ead1": {
+      "text": "short 0\nkeep 0\nshort 1\nkeep 1\nshort 2\nkeep 2\n",
+      "html": "<p>short 0\nkeep 0\nshort 1\nkeep 1\nshort 2\nkeep 2</p>\n"
+    },
+    "51791303ff725b93e8637d50c6969d3a3cee60843e16c00168cad603ca0e93bf": {
+      "text": "## Safety\n\nNever do X.\n",
+      "html": "<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Never do X.</p>\n"
+    },
+    "52afdbbbce31aa85719cb70e810506101c13cbc3b76c6751c32a2067e6265b75": {
+      "text": "title: [broken\n# Safety\n---\n\n# Body\n",
+      "html": "<p>title: [broken</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "5323d77278cf406950115a9be099beb15cefedac83226e2660afc0608253502a": {
+      "text": "# proj\n\n## Architecture\n\nThe server hosts N tmux sessions, one pty each, all in one browser tab.\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Architecture</h2><a id=\"user-content-architecture\" class=\"anchor\" aria-label=\"Permalink: Architecture\" href=\"#architecture\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>The server hosts N tmux sessions, one pty each, all in one browser tab.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Gotchas</h2><a id=\"user-content-gotchas\" class=\"anchor\" aria-label=\"Permalink: Gotchas\" href=\"#gotchas\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>Do not run the PID tests against the live container.</li>\n</ul>\n"
+    },
+    "55a66bb6732144c22043175d78c37fb08d437bd1a4852bcaa5fb5ec5e70bd975": {
+      "text": "a\nnew\nb\n",
+      "html": "<p>a\nnew\nb</p>\n"
+    },
+    "56b01a2e60daa0a0cfe0db23a6e2e152c624f0c8416c887b73d02b9c63fbc20d": {
+      "text": "---\na: 1\n...\n--- \ntitle: [broken\n# Safety\n---\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">a: 1\n...</h2><a id=\"user-content-a-1\" class=\"anchor\" aria-label=\"Permalink: a: 1\n...\" href=\"#a-1\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>title: [broken</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "57d427b7326033ba696a6af505f13733bc894bcc1c0c05e706229e584ea8c5f3": {
+      "text": "short 0\nkeep 0\nshort 1\nkeep 1\nshort 2\nkeep 2\nshort 3\nkeep 3\n",
+      "html": "<p>short 0\nkeep 0\nshort 1\nkeep 1\nshort 2\nkeep 2\nshort 3\nkeep 3</p>\n"
+    },
+    "5c32976106a08196107ae9b323e70b485d96339a8a5d66bbadaace581383b328": {
+      "text": "---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">title: Guide</h2><a id=\"user-content-title-guide\" class=\"anchor\" aria-label=\"Permalink: title: Guide\" href=\"#title-guide\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
+    },
+    "64378ddbc5f5cde14bf7ed49b5b1eb93787464d877abf48400db85865cfbf075": {
+      "text": "## Safety\n\nNever do X.\n\n# Title\n",
+      "html": "<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Never do X.</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Title</h1><a id=\"user-content-title\" class=\"anchor\" aria-label=\"Permalink: Title\" href=\"#title\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "6a03049a95a194aee8ef8bc6950708117c939b1a694337bb733412b0e9ed7c6c": {
+      "text": "---\r\nname: thing\r\ndescription: Old words\r\n---\r\n\r\n# Body\r\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: Old words</h2><a id=\"user-content-name-thingdescription-old-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: Old words\" href=\"#name-thingdescription-old-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "6aca13d027e072658cb4330dcc4fa57eb2a1f092fb4029c0a427e0c40a269c82": {
+      "text": "\r\n# Body\r\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "6c8539e5441ab6097ddabcfb22354e4d583430793a50cb002ec9b119d5497365": {
+      "text": "--- \ntitle: fixed\n# Safety\n---\n\n# Body\n",
+      "html": "<hr>\n<p>title: fixed</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "770423513bd0765c18e500000baec91976bcd8267a245437b32572665c6ac370": {
+      "text": "a\n\nb\n",
+      "html": "<p>a</p>\n<p>b</p>\n"
+    },
+    "7a1c39af9da3d5aab56dc7744d626e8fb09f7141feb34c988a2a9ddd4e367767": {
+      "text": "Safety\n\nSteps.\n",
+      "html": "<p>Safety</p>\n<p>Steps.</p>\n"
+    },
+    "7c625e3eab1e144984ed6d982baa06222965772ae3b678968b4deebc7ba6115c": {
+      "text": "Safety\rBody\n",
+      "html": "<p>Safety\nBody</p>\n"
+    },
+    "7e9c865fd874ec302ea01847aeacccae66d3b16252bf3f5a669e04147e043863": {
+      "text": "﻿---\nname: thing\ndescription: Old words\n---\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: Old words</h2><a id=\"user-content-name-thingdescription-old-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: Old words\" href=\"#name-thingdescription-old-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "7f25573ea50f06bbaa4d8900618f9a8f7b1b36c1878648233ca4a5a302e6d463": {
+      "text": "\nSafety steps follow.\n",
+      "html": "<p>Safety steps follow.</p>\n"
+    },
+    "7fc06c3b7457d142a6db5d7865ff79935337720c1e561728503a460e05ab87cf": {
+      "text": "---\n# A\n---\n\ntext\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<p>text</p>\n"
+    },
+    "88b9381d473ff70137926d89ef039be692e661e115d146bb74296353712d7cd4": {
+      "text": "---\ntitle: [broken\n---\n\nSafety steps follow.\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">title: [broken</h2><a id=\"user-content-title-broken\" class=\"anchor\" aria-label=\"Permalink: title: [broken\" href=\"#title-broken\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
+    },
+    "9075eb52d25f8fd37b55e1f0301db73baa18af8e5e740a562fe74499d17d4294": {
+      "text": "---\n# Safety\ntitle: [\n﻿---\n]\n\n---\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>title: [\n﻿---\n]</p>\n<hr>\n"
+    },
+    "9142f0f27bf6be8a2cc38b2b818acc9815621316af988d9660d5157f4ab46410": {
+      "text": "p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2\np3w0 p3w1 p3w2 p3w3 p3w4 p3w5 p3w6 p3w7 p3w8 p3w9 p3w10 p3w11 p3w12 p3w13 p3w14 p3w15 p3w16 p3w17 p3w18 p3w19 p3w20 p3w21 p3w22 p3w23 p3w24 p3w25 p3w26 p3w27 p3w28 p3w29 p3w30 p3w31 p3w32 p3w33 p3w34\nkeep 3\n",
+      "html": "<p>p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2\np3w0 p3w1 p3w2 p3w3 p3w4 p3w5 p3w6 p3w7 p3w8 p3w9 p3w10 p3w11 p3w12 p3w13 p3w14 p3w15 p3w16 p3w17 p3w18 p3w19 p3w20 p3w21 p3w22 p3w23 p3w24 p3w25 p3w26 p3w27 p3w28 p3w29 p3w30 p3w31 p3w32 p3w33 p3w34\nkeep 3</p>\n"
+    },
+    "946920e3055f041bd2734d2f99d7581fddf5f08ef9ac6adab5446badd698f4b5": {
+      "text": "# proj\n\n## CI\n\n- test.yml runs the suite every (60) seconds.\n\n## Supervisor resume\n\nIt also resumes the standing supervisor once per container boot, because nothing else does.\n\n## Gotchas\n\n- Do not run the PID tests against the live container.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">CI</h2><a id=\"user-content-ci\" class=\"anchor\" aria-label=\"Permalink: CI\" href=\"#ci\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>test.yml runs the suite every (60) seconds.</li>\n</ul>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Supervisor resume</h2><a id=\"user-content-supervisor-resume\" class=\"anchor\" aria-label=\"Permalink: Supervisor resume\" href=\"#supervisor-resume\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>It also resumes the standing supervisor once per container boot, because nothing else does.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Gotchas</h2><a id=\"user-content-gotchas\" class=\"anchor\" aria-label=\"Permalink: Gotchas\" href=\"#gotchas\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<ul>\n<li>Do not run the PID tests against the live container.</li>\n</ul>\n"
+    },
+    "97297212e9a4a501a570465093ace4872c8f5294bc64669a50661a7b2448df6a": {
+      "text": "# Body\n\nMore words.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>More words.</p>\n"
+    },
+    "9b52315b129cb24fd679b073bb7fdc08aed6758f447ed329c8488d3834912d77": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\n## Testing\n\nRun pnpm test.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Testing</h2><a id=\"user-content-testing\" class=\"anchor\" aria-label=\"Permalink: Testing\" href=\"#testing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Run pnpm test.</p>\n"
+    },
+    "9d58db57d6ef783b62358724d75eaef2c394a2ee91188db1c3da53f997d62e70": {
+      "text": "\n# Body\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "a5f90b4c93dc374311d0f897afc54fc37027572776cbc16e6becbca0eb9623ae": {
+      "text": "description: Old words\n\n# Body\n",
+      "html": "<p>description: Old words</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "a8f1edb1739a80da8c251f6be281a90c76f4850a66883fa71c64d13e3db80aea": {
+      "text": "<!--\n# Safety\n-->\n",
+      "html": "\n"
+    },
+    "ab3cbaaa5395721ebecb9bdd731e979c1fb427d11fe20e9fd713928433f33376": {
+      "text": "# A\r\n\r\n## B ##\r\n\r\ntext\r\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">B</h2><a id=\"user-content-b\" class=\"anchor\" aria-label=\"Permalink: B\" href=\"#b\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>text</p>\n"
+    },
+    "af40dd8f91a95f2cd1343100acf954679a1d474590cb62a1adf57fff5e7ec588": {
+      "text": "See the docs.\n",
+      "html": "<p>See the docs.</p>\n"
+    },
+    "b77d9d9ce4fc2a4a75e2512148455a885cbadc05b439f1a1e818b0e7c64cfebd": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\nA new note about the docs job.\n\n## Testing\n\nRun pnpm test.\n\n## New section\n\nMore text.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119</p>\n<p>A new note about the docs job.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Testing</h2><a id=\"user-content-testing\" class=\"anchor\" aria-label=\"Permalink: Testing\" href=\"#testing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Run pnpm test.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">New section</h2><a id=\"user-content-new-section\" class=\"anchor\" aria-label=\"Permalink: New section\" href=\"#new-section\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>More text.</p>\n"
+    },
+    "bd20651c29fad1c937531300515a2b4667bf26c4caba066c09f5c77f1cd0ae79": {
+      "text": "# Doc\n\n```bash\n# start it\nnpm start\n```\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Doc</h1><a id=\"user-content-doc\" class=\"anchor\" aria-label=\"Permalink: Doc\" href=\"#doc\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"highlight highlight-source-shell\"><pre><span class=\"pl-c\"><span class=\"pl-c\">#</span> start it</span>\nnpm start</pre></div>\n"
+    },
+    "bea0329cfee6d23b95a48d7d2f88b0eef84c1889163d5112f2830ca19f948f4c": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nA short summary of usage.\n\n## Testing\n\nRun pnpm test.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>A short summary of usage.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Testing</h2><a id=\"user-content-testing\" class=\"anchor\" aria-label=\"Permalink: Testing\" href=\"#testing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Run pnpm test.</p>\n"
+    },
+    "c25288adb2b44f296bb94fee981c1cb7d0bd16ae7ffc48989f531e3acb9bd31f": {
+      "text": "---\na: 1\n...\n--- \ntitle: fixed\n# Safety\n---\n\n# Body\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">a: 1\n...</h2><a id=\"user-content-a-1\" class=\"anchor\" aria-label=\"Permalink: a: 1\n...\" href=\"#a-1\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>title: fixed</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "c3469d8ca9d4bf8b45df33d75b6d029cf9b05097469a6d021c20ddb37a9d33a3": {
+      "text": "Safety\n------\n\nNever do X.\n\nTitle\n=====\n",
+      "html": "<div class=\"markdown-heading\"><h2 class=\"heading-element\">Safety</h2><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Never do X.</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Title</h1><a id=\"user-content-title\" class=\"anchor\" aria-label=\"Permalink: Title\" href=\"#title\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "c55a34c391b80d378a6f13b42b22b5284eab09b707f261398930f0de3b51ff84": {
+      "text": "p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2\n",
+      "html": "<p>p0w0 p0w1 p0w2 p0w3 p0w4 p0w5 p0w6 p0w7 p0w8 p0w9 p0w10 p0w11 p0w12 p0w13 p0w14 p0w15 p0w16 p0w17 p0w18 p0w19 p0w20 p0w21 p0w22 p0w23 p0w24 p0w25 p0w26 p0w27 p0w28 p0w29 p0w30 p0w31 p0w32 p0w33 p0w34\nkeep 0\np1w0 p1w1 p1w2 p1w3 p1w4 p1w5 p1w6 p1w7 p1w8 p1w9 p1w10 p1w11 p1w12 p1w13 p1w14 p1w15 p1w16 p1w17 p1w18 p1w19 p1w20 p1w21 p1w22 p1w23 p1w24 p1w25 p1w26 p1w27 p1w28 p1w29 p1w30 p1w31 p1w32 p1w33 p1w34\nkeep 1\np2w0 p2w1 p2w2 p2w3 p2w4 p2w5 p2w6 p2w7 p2w8 p2w9 p2w10 p2w11 p2w12 p2w13 p2w14 p2w15 p2w16 p2w17 p2w18 p2w19 p2w20 p2w21 p2w22 p2w23 p2w24 p2w25 p2w26 p2w27 p2w28 p2w29 p2w30 p2w31 p2w32 p2w33 p2w34\nkeep 2</p>\n"
+    },
+    "cb3d8a9d79703fd256cda6b586fd1d47fc07d299649e75378d361e8b7289b729": {
+      "text": "title: fixed\n# Safety\n---\n\n# Body\n",
+      "html": "<p>title: fixed</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<hr>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "d54e326dbf051a7ce76bea360d22bcc85c3f69c97b932dc96cd7a41ef26162ff": {
+      "text": "# Safety\rBody\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Body</p>\n"
+    },
+    "d94b8455fa367c90f8acd874ebf748ecbf693fbc009f8dacadd99c7936d6932b": {
+      "text": "# A\n\ntext\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>text</p>\n"
+    },
+    "ddecda55e18ecf52f308c5a39659a38d0dc6c81f19fe754b3ba7cb6e8a386a5c": {
+      "text": "# A\n\n## B ##\n\ntext\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">B</h2><a id=\"user-content-b\" class=\"anchor\" aria-label=\"Permalink: B\" href=\"#b\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>text</p>\n"
+    },
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+      "text": "",
+      "html": ""
+    },
+    "e4d6269db2ffbc40d2460238e40e30674bb70b4da5ed38e4a0b507215c4828f7": {
+      "text": "```lang`bad\nSafety prose\n```\n",
+      "html": "<p>```lang`bad\nSafety prose</p>\n<pre><code></code></pre>\n"
+    },
+    "e583ea09a4937a2dbc80a29318fbb813d1fc54749bdd1fcda0498f96e9a4d1a8": {
+      "text": "- Item\n\n    # Safety\n",
+      "html": "<ul>\n<li>\n<p>Item</p>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n</li>\n</ul>\n"
+    },
+    "e583f2ac043c6d8f894aed21f69d7a2c8bf74aa8cf7f5d992e14fe7bfa953e0a": {
+      "text": "\n﻿# Safety\n",
+      "html": "<p>﻿# Safety</p>\n"
+    },
+    "e7aed39269fa774d02c5da9be659b37b26b5354b0f39aaf511b706482f3fcfec": {
+      "text": "# Canary\n\nText.\n\n## Second *canary* &amp; more\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Canary</h1><a id=\"user-content-canary\" class=\"anchor\" aria-label=\"Permalink: Canary\" href=\"#canary\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Text.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Second <em>canary</em> &amp; more</h2><a id=\"user-content-second-canary--more\" class=\"anchor\" aria-label=\"Permalink: Second canary &amp; more\" href=\"#second-canary--more\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "e9607d18d8413662e913d6cbecdeeae297a045142420da977c6ed91520e4f3bd": {
+      "text": "---\n```\n---\nSafety\n\nSteps.\n",
+      "html": "<hr>\n<pre><code>---\nSafety\n\nSteps.\n</code></pre>\n"
+    },
+    "ed87ac2748dbc81b31564695c04b30ec27ca196a58f9b6a8b8528a165c63542e": {
+      "text": "---\n```\n---\n# Safety\n\nSteps.\n",
+      "html": "<hr>\n<pre><code>---\n# Safety\n\nSteps.\n</code></pre>\n"
+    },
+    "edfd6e3710f78591b19bbab954ac6db0872279b1ef4006d37a7d0e86195f96d5": {
+      "text": "---\nname: thing\ndescription: Old words\n---\n\n# Body\n\nMore words.\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">name: thing\ndescription: Old words</h2><a id=\"user-content-name-thingdescription-old-words\" class=\"anchor\" aria-label=\"Permalink: name: thing\ndescription: Old words\" href=\"#name-thingdescription-old-words\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>More words.</p>\n"
+    },
+    "eea0691c14578c5a53850ae10c48a32dd53df9f69b64ba010ae60163c04fd43a": {
+      "text": "a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24 a25 a26 a27 a28 a29 a30 a31 a32 a33 a34 a35 a36 a37 a38 a39\n",
+      "html": "<p>a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24 a25 a26 a27 a28 a29 a30 a31 a32 a33 a34 a35 a36 a37 a38 a39</p>\n"
+    },
+    "ef4d9fb622788fe2dd7eee9a5dfdc1faff9fed26e6e0796e7bdb41c41a0e0d37": {
+      "text": "\ntext\n",
+      "html": "<p>text</p>\n"
+    },
+    "f067541881402198b5f076a43fd17edd3e31ea76dcb0a444970798a1bbb4f07d": {
+      "text": "\n# Body\n\nMore words.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Body</h1><a id=\"user-content-body\" class=\"anchor\" aria-label=\"Permalink: Body\" href=\"#body\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>More words.</p>\n"
+    },
+    "f0c9b9892680309e00b5ca0eb14b43d358567cc1f8b114dd0ce82f178bb2748b": {
+      "text": "﻿# Safety\n\nSafety steps follow.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
+    },
+    "f0de164191de4f42e46546e3d3c428d3d4a7fdf24de96fcee636b0351efe2945": {
+      "text": "Safety steps follow.\n",
+      "html": "<p>Safety steps follow.</p>\n"
+    },
+    "f27379cb603c7fcb90eab56e866b166614e9edb69e2302b8daed970cffed04f0": {
+      "text": "---\ntitle: fixed\n---\n\nSafety steps follow.\n",
+      "html": "<hr>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">title: fixed</h2><a id=\"user-content-title-fixed\" class=\"anchor\" aria-label=\"Permalink: title: fixed\" href=\"#title-fixed\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Safety steps follow.</p>\n"
+    },
+    "f2bbfb203126105603085cd06f864879282b2e3a7968815f3777c93a206a9a7a": {
+      "text": "# proj\n\nIntro paragraph.\n\n## Usage\n\nword0 word1 word2 WORD3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 (now 120) word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119\n\n## Testing\n\nRun pnpm test.\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">proj</h1><a id=\"user-content-proj\" class=\"anchor\" aria-label=\"Permalink: proj\" href=\"#proj\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Intro paragraph.</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Usage</h2><a id=\"user-content-usage\" class=\"anchor\" aria-label=\"Permalink: Usage\" href=\"#usage\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>word0 word1 word2 WORD3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44 word45 word46 word47 word48 word49 word50 word51 word52 word53 word54 word55 word56 word57 (now 120) word58 word59 word60 word61 word62 word63 word64 word65 word66 word67 word68 word69 word70 word71 word72 word73 word74 word75 word76 word77 word78 word79 word80 word81 word82 word83 word84 word85 word86 word87 word88 word89 word90 word91 word92 word93 word94 word95 word96 word97 word98 word99 word100 word101 word102 word103 word104 word105 word106 word107 word108 word109 word110 word111 word112 word113 word114 word115 word116 word117 word118 word119</p>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">Testing</h2><a id=\"user-content-testing\" class=\"anchor\" aria-label=\"Permalink: Testing\" href=\"#testing\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<p>Run pnpm test.</p>\n"
+    },
+    "f316e51bfeae20bd24c4cb6085bb9819ba4499bd248ffec60b93ced17df39cb2": {
+      "text": "# Safety\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">Safety</h1><a id=\"user-content-safety\" class=\"anchor\" aria-label=\"Permalink: Safety\" href=\"#safety\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "f7dafe299ea3c47a60d2d5554014bf7eb4a703249d790eb12bffba989a1f8a6f": {
+      "text": "# A\n\n## B\n",
+      "html": "<div class=\"markdown-heading\"><h1 class=\"heading-element\">A</h1><a id=\"user-content-a\" class=\"anchor\" aria-label=\"Permalink: A\" href=\"#a\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n<div class=\"markdown-heading\"><h2 class=\"heading-element\">B</h2><a id=\"user-content-b\" class=\"anchor\" aria-label=\"Permalink: B\" href=\"#b\"><span aria-hidden=\"true\" class=\"octicon octicon-link\"></span></a></div>\n"
+    },
+    "fca9c47a1b95be7bd2422f0d89b930342e14279b1c1995bd8fdd09a835d14416": {
+      "text": "a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24 a25 a26 a27 a28 a29 a30 a31 a32 a33 a34 a35 a36 a37 a38 a39 a40\n",
+      "html": "<p>a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24 a25 a26 a27 a28 a29 a30 a31 a32 a33 a34 a35 a36 a37 a38 a39 a40</p>\n"
+    }
+  }
+}

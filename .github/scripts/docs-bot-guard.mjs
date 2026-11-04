@@ -7,6 +7,9 @@
 //   node docs-bot-guard.mjs --head <PR head sha> --base <origin/base ref> \
 //     --report <file> [--max-dropped-words 40]
 //
+// GH_TOKEN must be set for the gh CLI. --render-fixtures <file> is for the
+// tests only (see fixtureRenderer).
+//
 // WHY IT EXISTS. claude-code-action, on a pull_request event, resets every path
 // in RESTORED_PATHS (the root CLAUDE.md among them) to the BASE branch before
 // Claude starts, because the PR head's copy is untrusted CLI config. It leaves
@@ -25,11 +28,14 @@
 //      version (merge base: the base version). A conflict holds it back.
 //      If the PR itself deletes that file, the bot's edit is held back.
 //   3. Every markdown change left is then compared with the PR head, and held
-//      back whole if it removes or renames a heading, removes more lines than
-//      it adds in any one place, deletes the file, drops more than
-//      --max-dropped-words words from any one place or three times that from
-//      the whole file, or is not UTF-8 text. This is what makes "the bot can
-//      only add or adjust" mechanical rather than a prompt request.
+//      back whole if a heading GitHub renders (read from GitHub's Markdown API,
+//      not parsed here) is lost, renamed or demoted, if it touches front
+//      matter at all, removes more lines than it adds in any one place,
+//      deletes the file, drops more than --max-dropped-words words from any
+//      one place or three times that from the whole file, or is not UTF-8
+//      text. If the API cannot be reached or answers anything but 200, the
+//      change is held back. This is what makes "the bot can only add or
+//      adjust" mechanical rather than a prompt request.
 // A held-back change is reverted to the PR head and written to --report as a
 // PR comment carrying the bot's proposal. Non-markdown changes outside the
 // restored paths are left alone for the workflow's markdown-only check to
@@ -41,6 +47,7 @@
 // anything else = do not commit.
 
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -241,99 +248,202 @@ function countBy(items) {
   return m;
 }
 
-// CRLF is read as LF: a JS `.` does not match \r, so without that a CRLF file
-// has no headings at all and deleting one would go unseen.
-const lfLines = (text) => text.replace(/\r\n/g, '\n').split('\n');
-// A BOM at the very start of the file is read as nothing, as GitHub does:
-// "\uFEFF# Safety" there renders as a heading, and a guard that kept the BOM
-// would let the bot delete it unseen. DO NOT strip a BOM from any other line:
-// GitHub renders a later "\uFEFF# Safety" as a paragraph, and a "\uFEFF---" as
-// text, not a front-matter closer, so stripping there lets the bot turn a
-// heading into prose, or close front matter over one, unseen.
-const toLines = (text) => lfLines(text.replace(/^\uFEFF/, ''));
-
-// A front-matter block, as SKILL.md files carry: a first line of "---" closed by
-// a later "---" or "...". Returns the closing line's index, or -1. It does not
-// check that the inside is YAML, on purpose: violations() freezes the block.
-// DO NOT stop at the first closer: a reader that only takes "..." or a bare
-// "---" ends the block later, and a YAML repair past the first closer could
-// then hide a heading GitHub rendered. So the block runs to the furthest of
-// the first "---", the first "--- " (trailing blanks) and the first "...".
-// Freezing too much only holds back an edit; freezing too little loses one.
-function frontMatterEnd(lines) {
-  if (!/^---[ \t]*$/.test(lines[0] ?? '')) return -1;
-  const first = (re) => lines.findIndex((l, i) => i > 0 && re.test(l));
-  return Math.max(first(/^---$/), first(/^---[ \t]*$/), first(/^\.\.\.[ \t]*$/));
+// The lines of a text, each with the offset just past its line ending. CRLF,
+// CR and LF all end a line, as they do in CommonMark and GitHub's renderer.
+// A BOM at the very start of the file is read as nothing, as GitHub does. DO
+// NOT strip a BOM from any other line: GitHub renders "\uFEFF---" there as text,
+// not a front-matter closer, so stripping it would let the bot close front
+// matter over a heading unseen.
+function lineSpans(text) {
+  const spans = [];
+  let at = text.startsWith('\uFEFF') ? 1 : 0;
+  const eol = /\r\n|\r|\n/g;
+  eol.lastIndex = at;
+  for (let m = eol.exec(text); m !== null; m = eol.exec(text)) {
+    spans.push({ line: text.slice(at, m.index), end: eol.lastIndex });
+    at = eol.lastIndex;
+  }
+  if (at < text.length) spans.push({ line: text.slice(at), end: text.length });
+  return spans;
 }
 
-// The raw text of a file's front-matter block (CRLF read as LF, a BOM kept), or null.
+// Where a front-matter block (a first line of "---", as SKILL.md files carry)
+// could end: the line indexes of the first "---", the first "---" with trailing
+// blanks and the first "...", in order, or [] when there is no block. Readers
+// differ on which closes it, so every one is a candidate. It does not check
+// that the inside is YAML, on purpose: violations() freezes the block.
+function frontMatterEnds(spans) {
+  if (!/^---[ \t]*$/.test(spans[0]?.line ?? '')) return [];
+  const first = (re) => spans.findIndex((s, i) => i > 0 && re.test(s.line));
+  const ends = [first(/^---$/), first(/^---[ \t]*$/), first(/^\.\.\.[ \t]*$/)];
+  return [...new Set(ends.filter((i) => i > 0))].sort((a, b) => a - b);
+}
+
+// The raw text of a file's front-matter block, through the FURTHEST candidate
+// closer (line endings read as LF, a leading BOM kept), or null. Freezing too
+// much only holds back an edit; freezing too little loses one.
 function frontMatter(text) {
-  const end = frontMatterEnd(toLines(text));
-  return end === -1 ? null : lfLines(text).slice(0, end + 1).join('\n');
+  const spans = lineSpans(text);
+  const ends = frontMatterEnds(spans);
+  return ends.length === 0 ? null : text.slice(0, spans[ends.at(-1)].end).replace(/\r\n?/g, '\n');
 }
 
-const ATX = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
-const atxHeading = (m) => `${m[1]} ${(m[2] ?? '').trim()}`.trimEnd();
+// The texts to render for one file: whole, and with the front-matter block
+// cut at each candidate closer. GitHub's file view renders the body after a
+// block it recognises, and the Markdown API knows nothing of front matter, so
+// a heading hidden or revealed by where the block ends is only seen this way.
+function renderViews(text) {
+  const spans = lineSpans(text);
+  return [
+    ['whole', text],
+    ...frontMatterEnds(spans).map((i) => [`after line ${i + 1}`, text.slice(spans[i].end)]),
+  ];
+}
 
-// The headings of a markdown text, each normalised to ATX form ("## Title"),
-// so converting a setext heading to ATX is not a rename. Lines inside fenced
-// code blocks are not headings (a "# comment" in a bash block is code), and
-// neither is a line indented four spaces. Front matter is skipped whole: a
-// "key: value" line before its closing "---" is not a setext heading, and
-// whether GitHub renders anything in it depends on whether the YAML parses,
-// which the guard cannot tell. DO NOT read headings out of the block instead of
-// freezing it: violations() holds back any bot change to the block, so when it
-// is the same on both sides it hides the same things on both sides.
-export function headings(text) {
-  const lines = toLines(text);
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const decodeEntities = (s) => s.replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (whole, e) => {
+  if (e[0] !== '#') return ENTITIES[e.toLowerCase()] ?? whole;
+  const n = /^#x/i.test(e) ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+  return n <= 0x10ffff ? String.fromCodePoint(n) : whole;
+});
+
+// The headings in HTML from GitHub's Markdown API, each as "## Text" (level as
+// hashes, inline markup dropped, whitespace collapsed).
+export function renderedHeadings(html) {
   const out = [];
-  let fence = null;
-  const start = frontMatterEnd(lines) + 1;
-  for (let i = start; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (fence) {
-      const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
-      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
-      continue;
-    }
-    // A backtick fence's info string cannot contain a backtick (CommonMark):
-    // "```js`x" is inline code, not a fence that would hide the lines after it.
-    const open = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
-      fence = open[1];
-      continue;
-    }
-    const atx = line.match(ATX);
-    if (atx) {
-      out.push(atxHeading(atx));
-      continue;
-    }
-    const underline = lines[i + 1]?.match(/^ {0,3}(=+|-+)[ \t]*$/);
-    if (underline && line.trim() !== '' && !/^ {4}/.test(line)) {
-      out.push(`${underline[1][0] === '=' ? '#' : '##'} ${line.trim()}`);
-      i += 1;
-    }
+  const visible = html.replace(/<!--[\s\S]*?-->/g, '');
+  for (const m of visible.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi)) {
+    const text = decodeEntities(m[2].replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+    out.push(`${'#'.repeat(Number(m[1]))} ${text}`.trimEnd());
   }
   return out;
 }
 
+const RENDER_TIMEOUT_MS = 60_000;
+
+// Reads `gh api --include` output: the HTML body of a 200, or throws saying
+// why not. Every other outcome (gh missing or timed out, a non-zero exit, any
+// status but 200, a rate limit) throws, and the caller holds the edit back.
+export function readGhResponse(r) {
+  if (r.error) throw new Error(`gh api did not run: ${r.error.message}`);
+  const out = r.stdout ?? '';
+  const status = out.match(/^HTTP\/[\d.]+ (\d{3})/)?.[1] ?? 'with no status line';
+  const split = out.search(/\r?\n\r?\n/);
+  if (r.status === 0 && status === '200' && split !== -1) return out.slice(split).replace(/^\r?\n\r?\n/, '');
+  const headers = split === -1 ? out : out.slice(0, split);
+  const limited = /^x-ratelimit-remaining: *0\s*$/im.test(headers) || status === '429' ? ', rate limited' : '';
+  const detail = `${r.stderr ?? ''} ${split === -1 ? '' : out.slice(split)}`.replace(/\s+/g, ' ').trim().slice(0, 300);
+  throw new Error(`GitHub's Markdown API answered HTTP ${status}${limited} (gh exit ${r.status}): ${detail}`);
+}
+
+// Renders markdown the way GitHub renders a repository file (POST /markdown,
+// mode "markdown"), with the gh CLI and the GH_TOKEN the workflow step has.
+// Mode "markdown" is GitHub's GFM renderer as it shows a file such as
+// README.md; mode "gfm" is the same renderer as it shows a comment (hard line
+// breaks, issue and @ links). The file view is what a reader of CLAUDE.md sees,
+// so it is the one to ask. Measured 2026-11-04 over every recorded fixture
+// text: the two modes gave identical headings, so this choice changes nothing
+// the guard reads today.
+export function githubRender(text) {
+  return readGhResponse(spawnSync('gh', ['api', '--include', '--method', 'POST', 'markdown', '--input', '-'], {
+    input: JSON.stringify({ text, mode: 'markdown' }),
+    encoding: 'utf8',
+    maxBuffer: 1 << 30,
+    timeout: RENDER_TIMEOUT_MS,
+  }));
+}
+
+const memoize = (render) => {
+  const cache = new Map();
+  return (text) => {
+    if (!cache.has(text)) cache.set(text, render(text));
+    return cache.get(text);
+  };
+};
+
+// Test support only: renders from a JSON file of responses recorded from the
+// real API, keyed by the text's sha256. With DOCS_BOT_GUARD_RECORD=1 a missing
+// text is rendered live and added. DO NOT pass --render-fixtures in the
+// workflow: the guard would judge the bot's edits against recordings.
+export function fixtureRenderer(file) {
+  const key = (text) => crypto.createHash('sha256').update(text).digest('hex');
+  const load = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  return (text) => {
+    const hit = load().renders[key(text)];
+    if (hit) return hit.html;
+    if (process.env.DOCS_BOT_GUARD_RECORD !== '1') {
+      throw new Error(`no recorded render of ${preview(text)} in ${path.basename(file)}; record it with DOCS_BOT_GUARD_RECORD=1`);
+    }
+    const html = githubRender(text);
+    const data = load();
+    data.recorded = new Date().toISOString().slice(0, 10);
+    data.renders[key(text)] = { text, html };
+    data.renders = Object.fromEntries(Object.entries(data.renders).sort(([a], [b]) => a.localeCompare(b)));
+    fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+    return html;
+  };
+}
+
+// Rendered once per renderer before any file is judged by it. If the API ever
+// stops marking headings the way renderedHeadings() reads them, every file
+// would have none, nothing would read as lost, and the check would pass
+// everything; this makes that a hold instead.
+export const CANARY = '# Canary\n\nText.\n\n## Second *canary* &amp; more\n';
+export const CANARY_HEADINGS = ['# Canary', '## Second canary & more'];
+const canaryChecked = new WeakSet();
+
+function checkCanary(render) {
+  if (canaryChecked.has(render)) return;
+  const got = renderedHeadings(render(CANARY));
+  if (JSON.stringify(got) !== JSON.stringify(CANARY_HEADINGS)) {
+    throw new Error(`the API's heading markup changed: a known document rendered as ${JSON.stringify(got)}`);
+  }
+  canaryChecked.add(render);
+}
+
+const defaultRender = memoize(githubRender);
+
+// The headings GitHub renders in oldText and not in newText (lost, reworded or
+// moved to another level), compared as counts in each render view. A view only
+// one side has (front matter added, removed or moved, which is held back on
+// its own anyway) is compared with the other side read whole. DO NOT go back
+// to reading headings from the source with a hand-written parser: lone CRs,
+// HTML comments, list indentation and BOMs each made it disagree with GitHub,
+// and every disagreement was a way to hide a heading unseen. A render that
+// fails for any reason holds the change back: unchecked is not allowed.
+function headingViolations(oldText, newText, render) {
+  const lost = new Set();
+  try {
+    checkCanary(render);
+    const before = new Map(renderViews(oldText));
+    const after = new Map(renderViews(newText));
+    for (const view of new Set([...before.keys(), ...after.keys()])) {
+      const left = countBy(renderedHeadings(render(after.get(view) ?? newText)));
+      for (const [h, n] of countBy(renderedHeadings(render(before.get(view) ?? oldText)))) {
+        if ((left.get(h) ?? 0) < n) lost.add(h);
+      }
+    }
+  } catch (err) {
+    return [`could not be checked with GitHub's Markdown API, so it is held back: ${err.message}`];
+  }
+  return [...lost].map((h) => `removes, renames or demotes the heading ${preview(h)}`);
+}
+
 // Why a change from oldText to newText is not a pure add-or-adjust. Empty
-// array = allowed. A CRLF-to-LF change passes: headings() reads both as LF, and
-// each re-ended line is one removed and one added line with the same words.
-export function violations(oldText, newText, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS) {
+// array = allowed. A CRLF-to-LF change passes: it renders the same, and each
+// re-ended line is one removed and one added line with the same words.
+export function violations(oldText, newText, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS, render = defaultRender) {
   const found = [];
   // DO NOT let the bot edit, add or remove front matter, even a harmless value:
-  // without a YAML parser the guard cannot tell what GitHub renders from it.
-  // Repairing "title: [broken" alone can turn a rendered line, or a "# Safety"
-  // in the block, into hidden YAML with every heading key and line count
-  // unchanged. Compared raw, so adding or dropping a BOM there is a change too.
+  // GitHub's file view renders a block it recognises as YAML, the Markdown API
+  // does not, and without a YAML parser the guard cannot tell which GitHub
+  // will do. Repairing "title: [broken" alone can turn a rendered "# Safety"
+  // in the block into hidden YAML. Compared raw, so a BOM added or dropped in
+  // front of it is a change too.
   if (frontMatter(oldText) !== frontMatter(newText)) {
     found.push('adds, removes or changes the front matter (the bot may not touch it)');
   }
-  const after = countBy(headings(newText));
-  for (const [h, n] of countBy(headings(oldText))) {
-    if ((after.get(h) ?? 0) < n) found.push(`removes or renames the heading ${preview(h)}`);
-  }
+  found.push(...headingViolations(oldText, newText, render));
   let droppedInFile = 0;
   for (const h of hunks(oldText, newText)) {
     const removed = nonBlank(h.removed);
@@ -385,7 +495,7 @@ function resetToHead(file, head) {
   }
 }
 
-export function guard({ base, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS, log = console.log }) {
+export function guard({ base, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS, render = defaultRender, log = console.log }) {
   if (git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { allowStatus: [0, 1] }).status !== 0) {
     throw new Error(`base ref ${base} does not resolve; refusing to judge the bot's edits without it`);
   }
@@ -459,7 +569,7 @@ export function guard({ base, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS, log =
     } else if (work === null) {
       reasons = ['deletes the file'];
     } else {
-      reasons = violations(headText, workText, maxDroppedWords);
+      reasons = violations(headText, workText, maxDroppedWords, render);
     }
     if (reasons.length > 0) {
       held.push({
@@ -480,7 +590,8 @@ export function renderReport(held, maxDroppedWords = DEFAULT_MAX_DROPPED_WORDS) 
     '',
     'The docs bot proposed edits that would remove documentation this PR\'s head already has, '
       + 'so `.github/scripts/docs-bot-guard.mjs` reverted them instead of committing. '
-      + `It allows additions and in-place adjustments only: no removed headings, no net-removed lines, at most ${maxDroppedWords} dropped words in one place and ${maxDroppedWords * FILE_DROPPED_WORDS_FACTOR} in one file. `
+      + 'It allows additions and in-place adjustments only: no heading GitHub renders may be lost, renamed or demoted, no front matter touched, no net-removed lines, '
+      + `at most ${maxDroppedWords} dropped words in one place and ${maxDroppedWords * FILE_DROPPED_WORDS_FACTOR} in one file. `
       + 'Nothing below is on the branch. Apply any of it by hand if it is right.',
   ];
   const intro = parts.join('\n');
@@ -546,6 +657,7 @@ function parseArgs(argv) {
     else if (k === '--base') opts.base = v;
     else if (k === '--report') opts.report = v;
     else if (k === '--max-dropped-words') opts.maxDroppedWords = Number(v);
+    else if (k === '--render-fixtures') opts.render = memoize(fixtureRenderer(v));
     else throw new Error(`unknown argument ${k}`);
   }
   if (!opts.head || !opts.base || !opts.report) throw new Error('--head, --base and --report are required');

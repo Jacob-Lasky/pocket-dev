@@ -3,11 +3,17 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   RESTORED_PATHS,
   DEFAULT_MAX_DROPPED_WORDS,
   FILE_DROPPED_WORDS_FACTOR,
-  headings,
+  CANARY,
+  CANARY_HEADINGS,
+  fixtureRenderer,
+  githubRender,
+  readGhResponse,
+  renderedHeadings,
   renderReport,
   violations,
 } from '../../../.github/scripts/docs-bot-guard.mjs';
@@ -22,6 +28,15 @@ import {
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const GUARD = path.join(REPO_ROOT, '.github/scripts/docs-bot-guard.mjs');
 const WORKFLOW = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/claude-docs.yml'), 'utf8');
+
+// The guard reads headings from GitHub's Markdown API. These tests answer it
+// from responses recorded from the real API (the file's "recorded" date says
+// when; re-record a missing text with DOCS_BOT_GUARD_RECORD=1), and one live
+// test at the end checks the recordings still match what the API says.
+const FIXTURES = path.join(__dirname, 'fixtures/docs-bot-guard-renders.json');
+const render = fixtureRenderer(FIXTURES);
+const hs = (text) => renderedHeadings(render(text));
+const v = (oldText, newText, max = DEFAULT_MAX_DROPPED_WORDS) => violations(oldText, newText, max, render);
 
 // Isolated from the caller's git config: a global hooksPath or signing setting
 // must not leak into the scratch repo.
@@ -131,9 +146,9 @@ function scenario({ base = {}, pr = {}, prExtra = () => {}, restore = true }) {
   };
   const edit = (file, fn) => writeFiles(cwd, { [file]: fn(read(file)) });
   const report = path.join(cwd, '.git', 'held-back.md');
-  const run = (args = ['--head', head, '--base', 'origin/main']) => {
-    const r = spawnSync(process.execPath, [GUARD, ...args, '--report', report], {
-      cwd, env: GIT_ENV, encoding: 'utf8',
+  const run = (args = ['--head', head, '--base', 'origin/main'], fixtures = FIXTURES, env = {}) => {
+    const r = spawnSync(process.execPath, [GUARD, ...args, '--render-fixtures', fixtures, '--report', report], {
+      cwd, env: { ...GIT_ENV, ...env }, encoding: 'utf8',
     });
     return {
       ...r,
@@ -164,6 +179,31 @@ describe('docs-bot-guard: the CLAUDE.md restore', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('CLAUDE.md')).toBe(PR_CLAUDE.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`));
     expect(r.report).toBeNull();
+  });
+
+  // The restore is the root-cause fix and must not lean on the heading check:
+  // run the #108 and #107 sequences with a renderer that reports no headings
+  // in anything (the canary still answers, so the check runs and sees nothing).
+  // The PR's section must still survive, through the restore and the merge alone.
+  it.each([
+    ['#108 (no bot edit)', null],
+    ['#107 (a bot addition on the base copy)', '- claude-docs.yml keeps the markdown in sync.\n'],
+  ])('%s keeps the PR\'s CLAUDE.md section with the heading check blinded', (_, line) => {
+    const s = scenario({});
+    if (line) s.edit('CLAUDE.md', (t) => t.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`));
+    const code = `
+      import { guard, CANARY, fixtureRenderer } from ${JSON.stringify(pathToFileURL(GUARD).href)};
+      const real = fixtureRenderer(${JSON.stringify(FIXTURES)});
+      const blind = (t) => (t === CANARY ? real(t) : '<p>no headings here</p>');
+      const held = guard({ base: 'origin/main', render: blind, log: () => {} });
+      process.stdout.write(JSON.stringify(held));
+    `;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: s.cwd, env: GIT_ENV, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([]);
+    const want = line ? PR_CLAUDE.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`) : PR_CLAUDE;
+    expect(s.read('CLAUDE.md')).toBe(want);
+    expect(s.read('CLAUDE.md')).toContain(PR_SECTION);
   });
 
   it('keeps a deletion the PR author made in CLAUDE.md, under a bot edit too', () => {
@@ -247,7 +287,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     expect(s.read('README.md')).toBe(BASE_README);
     expect(r.dirty).toBe('');
     expect(r.report).toContain('### `README.md`');
-    expect(r.report).toContain('removes or renames the heading "## Testing"');
+    expect(r.report).toContain('removes, renames or demotes the heading "## Testing"');
     expect(r.report).toContain('-Run pnpm test.');
     expect(r.stdout).toContain('::warning::docs bot change to README.md held back');
   });
@@ -259,7 +299,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('CLAUDE.md')).toBe(PR_CLAUDE);
     expect(r.dirty).toBe('');
-    expect(r.report).toContain('removes or renames the heading "## Architecture"');
+    expect(r.report).toContain('removes, renames or demotes the heading "## Architecture"');
   });
 
   it('rejects removing a section the PR itself added', () => {
@@ -269,7 +309,7 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     const r = s.run();
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('README.md')).toBe(prReadme);
-    expect(r.report).toContain('removes or renames the heading "## Added by the PR"');
+    expect(r.report).toContain('removes, renames or demotes the heading "## Added by the PR"');
   });
 
   it('keeps the PR\'s CLAUDE.md even if the action did not restore it and the bot cut a section', () => {
@@ -424,25 +464,25 @@ describe('docs-bot-guard: refuses changes that are not plain text edits', () => 
 
 describe('docs-bot-guard: violations()', () => {
   it('treats a renamed heading as a removal', () => {
-    expect(violations('# A\n\n## B\n', '# A\n\n## B2\n')).toEqual([
-      'removes or renames the heading "## B"',
+    expect(v('# A\n\n## B\n', '# A\n\n## B2\n')).toEqual([
+      'removes, renames or demotes the heading "## B"',
     ]);
   });
 
   it('ignores blank lines and allows a pure insertion', () => {
-    expect(violations('a\n\nb\n', 'a\nnew\nb\n')).toEqual([]);
+    expect(v('a\n\nb\n', 'a\nnew\nb\n')).toEqual([]);
   });
 
   it('counts a net-removed line inside a replacement', () => {
-    expect(violations('one two\nthree four\n', 'one two three four\n')[0]).toMatch(/^removes 1 line\(s\) at line 1/);
+    expect(v('one two\nthree four\n', 'one two three four\n')[0]).toMatch(/^removes 1 line\(s\) at line 1/);
   });
 
   const ws = (n, p) => Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ');
 
   it('allows exactly the per-place word limit and rejects one more', () => {
     const limit = DEFAULT_MAX_DROPPED_WORDS;
-    expect(violations(`${ws(limit, 'a')}\n`, 'b\n')).toEqual([]);
-    const over = violations(`${ws(limit + 1, 'a')}\n`, 'b\n');
+    expect(v(`${ws(limit, 'a')}\n`, 'b\n')).toEqual([]);
+    const over = v(`${ws(limit + 1, 'a')}\n`, 'b\n');
     expect(over).toHaveLength(1);
     expect(over[0]).toMatch(new RegExp(`^drops ${limit + 1} words at line 1 \\(limit ${limit}\\), starting "a0 a1 `));
   });
@@ -453,127 +493,210 @@ describe('docs-bot-guard: violations()', () => {
     const cut = (n) => Array.from({ length: n }, (_, i) => `short ${i}\nkeep ${i}\n`).join('');
     const fileLimit = DEFAULT_MAX_DROPPED_WORDS * FILE_DROPPED_WORDS_FACTOR;
     expect(per * 3).toBeLessThanOrEqual(fileLimit);
-    expect(violations(doc(3), cut(3))).toEqual([]);
-    expect(violations(doc(4), cut(4))).toEqual([`drops ${per * 4} words across the file (limit ${fileLimit})`]);
+    expect(v(doc(3), cut(3))).toEqual([]);
+    expect(v(doc(4), cut(4))).toEqual([`drops ${per * 4} words across the file (limit ${fileLimit})`]);
   });
 
   it('counts a long token with no spaces (a URL) as the words in it', () => {
     const url = `https://example.com/${ws(45, 's').replace(/ /g, '/')}`;
-    expect(violations(`See ${url}\n`, 'See the docs.\n')[0]).toMatch(/^drops 4\d words at line 1/);
+    expect(v(`See ${url}\n`, 'See the docs.\n')[0]).toMatch(/^drops 4\d words at line 1/);
   });
 
   it('treats a heading moved into a code fence as removed', () => {
-    expect(violations('## Safety\n\nNever do X.\n', '```\n## Safety\n```\n\nNever do X.\n')).toEqual([
-      'removes or renames the heading "## Safety"',
+    expect(v('## Safety\n\nNever do X.\n', '```\n## Safety\n```\n\nNever do X.\n')).toEqual([
+      'removes, renames or demotes the heading "## Safety"',
     ]);
   });
 
   it('does not treat a "# comment" in a fenced block as a heading', () => {
     const doc = '# Doc\n\n```bash\n# start it\nnpm start\n```\n';
-    expect(headings(doc)).toEqual(['# Doc']);
-    expect(violations(doc, doc.replace('# start it\n', '# start the server\n'))).toEqual([]);
+    expect(hs(doc)).toEqual(['# Doc']);
+    expect(v(doc, doc.replace('# start it\n', '# start the server\n'))).toEqual([]);
   });
 
   it('recognises setext headings, and converting one to ATX is not a rename', () => {
     const setext = 'Safety\n------\n\nNever do X.\n\nTitle\n=====\n';
-    expect(headings(setext)).toEqual(['## Safety', '# Title']);
+    expect(hs(setext)).toEqual(['## Safety', '# Title']);
     // The dropped underline still counts as a removed line (held back, the safe
     // way); what matters here is that no heading reads as renamed.
-    expect(violations(setext, '## Safety\n\nNever do X.\n\n# Title\n').filter((v) => v.includes('heading'))).toEqual([]);
+    expect(v(setext, '## Safety\n\nNever do X.\n\n# Title\n').filter((v) => v.includes('heading'))).toEqual([]);
     // Swapped for the same number of lines, so only the heading rule can see it.
-    expect(violations(setext, 'Some intro\nmore intro\n\nNever do X.\n\nTitle\n=====\n')).toEqual([
-      'removes or renames the heading "## Safety"',
+    expect(v(setext, 'Some intro\nmore intro\n\nNever do X.\n\nTitle\n=====\n')).toEqual([
+      'removes, renames or demotes the heading "## Safety"',
     ]);
   });
 
   it('does not open a fence on a backtick line whose info string has a backtick', () => {
     // CommonMark: "```lang`bad" is not a fence, so the heading after it is real.
     const doc = '```lang`bad\n## Safety\n```\n';
-    expect(headings(doc)).toEqual(['## Safety']);
-    expect(violations(doc, doc.replace('## Safety', 'Safety prose'))).toEqual([
-      'removes or renames the heading "## Safety"',
+    expect(hs(doc)).toEqual(['## Safety']);
+    expect(v(doc, doc.replace('## Safety', 'Safety prose'))).toEqual([
+      'removes, renames or demotes the heading "## Safety"',
     ]);
     // A tilde fence may carry a backtick in its info string, and still hides.
-    expect(headings('~~~ lang`ok\n## In code\n~~~\n')).toEqual([]);
+    expect(hs('~~~ lang`ok\n## In code\n~~~\n')).toEqual([]);
   });
 
-  it('skips front matter when reading headings, and reads a leading BOM as nothing', () => {
-    expect(headings('---\nname: thing\n---\n\n# Body\n')).toEqual(['# Body']);
-    // Valid YAML or not, the block is skipped: violations() freezes it instead.
-    expect(headings('---\nSome prose\n---\n# Title\n')).toEqual(['# Title']);
-    expect(headings('---\n# Title\n---\n')).toEqual([]);
-    expect(headings('---\n# Hidden\n...\n# Body\n')).toEqual(['# Body']);
-    expect(headings('---\n# Hidden\n--- \n# Body\n')).toEqual(['# Body']);
-    // With no closing line it is not front matter, and the "---" is just a rule.
-    expect(headings('---\n# Title\n')).toEqual(['# Title']);
-    // A BOM at the start of the file is read as nothing, as GitHub does; one on a
-    // later line is text, and GitHub renders "\uFEFF# x" there as a paragraph.
-    expect(headings('\uFEFF# Safety\n\nText\n\uFEFF# Not a heading\n')).toEqual(['# Safety']);
-    expect(headings('\uFEFF---\ntitle: x\n---\n# Body\n')).toEqual(['# Body']);
+  it('reads a leading BOM as nothing and a later one as text, as GitHub does', () => {
+    expect(hs('\uFEFF# Safety\n\nText\n\n\uFEFF# Not a heading\n')).toEqual(['# Safety']);
+  });
+
+  it('round-1 repros: headings a hand-written parser misread are judged as GitHub renders them', () => {
+    const lost = ['removes, renames or demotes the heading "# Safety"'];
+    // A lone CR ends a line, so "# Safety" is a heading of its own.
+    expect(v('# Safety\rBody\n', 'Safety\rBody\n')).toEqual(lost);
+    // Wrapped in an HTML comment, it is not rendered at all; only lines were added.
+    expect(v('# Safety\n', '<!--\n# Safety\n-->\n')).toEqual(lost);
+    // Indented four spaces after a list item, it is the item's heading, not code.
+    expect(v('- Item\n\n    # Safety\n', '- Item\n\n    Safety\n')).toEqual(lost);
+    // A BOM on a later line makes it prose.
+    expect(v('# Safety\n', '\n\uFEFF# Safety\n')).toEqual(lost);
+  });
+
+  it('also judges the body after front matter on its own, as GitHub\'s file view shows it', () => {
+    // Read whole, the "```" in the block opens a fence that hides everything
+    // after it. GitHub's file view takes the block as front matter and renders
+    // "# Safety" after it, so turning it into prose loses a heading.
+    const doc = '---\n```\n---\n# Safety\n\nSteps.\n';
+    expect(hs(doc)).toEqual([]);
+    expect(v(doc, doc.replace('# Safety', 'Safety'))).toEqual(['removes, renames or demotes the heading "# Safety"']);
+  });
+
+  it('holds the change back when the API cannot be asked, or no longer marks headings as it did', () => {
+    const failing = () => { throw new Error('HTTP 403, rate limited'); };
+    expect(violations('# A\n', '# A\n\nMore.\n', DEFAULT_MAX_DROPPED_WORDS, failing)).toEqual([
+      'could not be checked with GitHub\'s Markdown API, so it is held back: HTTP 403, rate limited',
+    ]);
+    // Markup the guard cannot read would show no headings on either side and
+    // pass everything; the canary turns that into a hold.
+    const drifted = (text) => render(text).replace(/<(\/?)h([1-6])\b/g, '<$1div');
+    expect(violations('# A\n', 'B\n', DEFAULT_MAX_DROPPED_WORDS, drifted)[0]).toMatch(
+      /^could not be checked with GitHub's Markdown API, so it is held back: the API's heading markup changed/,
+    );
+    expect(hs(CANARY)).toEqual(CANARY_HEADINGS);
   });
 
   it('holds back any bot change that touches, adds or removes front matter', () => {
     const reason = 'adds, removes or changes the front matter (the bot may not touch it)';
     const doc = '---\nname: thing\ndescription: Old words\n---\n\n# Body\n';
-    // Even a one-word value edit in valid YAML.
-    expect(violations(doc, doc.replace('Old words', 'New words'))).toEqual([reason]);
+    // Even a one-word value edit in valid YAML. (Read whole, as the Markdown API
+    // does, the block is a rule and a setext heading, so that is reworded too.)
+    expect(v(doc, doc.replace('Old words', 'New words'))).toContain(reason);
     // Round-3 repro: repairing invalid YAML, which GitHub may render as a "title: [broken" heading.
     const broken = '---\ntitle: [broken\n---\n\nSafety steps follow.\n';
-    expect(violations(broken, broken.replace('[broken', 'fixed'))).toEqual([reason]);
+    expect(v(broken, broken.replace('[broken', 'fixed'))).toContain(reason);
     // Removing the block, adding one, and moving a line out of it.
-    expect(violations(doc, doc.replace(/^---\n[^]*?\n---\n/, ''))).toContain(reason);
-    expect(violations('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toEqual(
-      expect.arrayContaining([reason, 'removes or renames the heading "# A"']),
+    expect(v(doc, doc.replace(/^---\n[^]*?\n---\n/, ''))).toContain(reason);
+    expect(v('# A\n\ntext\n', '---\n# A\n---\n\ntext\n')).toEqual(
+      expect.arrayContaining([reason, 'removes, renames or demotes the heading "# A"']),
     );
-    expect(violations(doc, '---\nname: thing\n---\ndescription: Old words\n\n# Body\n')).toContain(reason);
+    expect(v(doc, '---\nname: thing\n---\ndescription: Old words\n\n# Body\n')).toContain(reason);
     // A reader that only takes a bare "---" as the closer ends the block later
     // than "..." or "--- ": the freeze reaches the furthest closer, so repairing
     // YAML there (which can hide "# Safety" from GitHub's render) is held back.
     const late = '---\na: 1\n...\n--- \ntitle: [broken\n# Safety\n---\n\n# Body\n';
-    expect(headings(late)).toEqual(['# Body']);
-    expect(violations(late, late.replace('[broken', 'fixed'))).toEqual([reason]);
+    expect(v(late, late.replace('[broken', 'fixed'))).toContain(reason);
     // Adding a BOM in front of the block changes it too.
-    expect(violations(doc, `\uFEFF${doc}`)).toContain(reason);
+    expect(v(doc, `\uFEFF${doc}`)).toContain(reason);
     // The body after unchanged front matter stays editable, as does a file without any.
-    expect(violations(doc, `${doc}\nMore words.\n`)).toEqual([]);
-    expect(violations('# Body\n', '# Body\n\nMore words.\n')).toEqual([]);
+    expect(v(doc, `${doc}\nMore words.\n`)).toEqual([]);
+    expect(v('# Body\n', '# Body\n\nMore words.\n')).toEqual([]);
     // A CRLF-to-LF change of the same block is no change.
-    expect(violations(doc.replace(/\n/g, '\r\n'), doc)).toEqual([]);
+    expect(v(doc.replace(/\n/g, '\r\n'), doc)).toEqual([]);
   });
 
   it('sees a BOM-prefixed first heading, so hiding or deleting it is held back', () => {
     // Round-3 repro: GitHub renders "\uFEFF# Safety" as a heading.
     const head = '\uFEFF# Safety\n\nSafety steps follow.\n';
     const bot = '---\n# Safety\ntitle: Guide\n---\n\nSafety steps follow.\n';
-    expect(violations(head, bot)).toContain('removes or renames the heading "# Safety"');
-    expect(violations(head, 'Safety steps follow.\n')).toContain('removes or renames the heading "# Safety"');
+    expect(v(head, bot)).toContain('removes, renames or demotes the heading "# Safety"');
+    expect(v(head, 'Safety steps follow.\n')).toContain('removes, renames or demotes the heading "# Safety"');
     // A BOM on a later line is not stripped: GitHub renders that line as prose.
-    expect(violations('# Safety\n', '\n\uFEFF# Safety\n')).toContain('removes or renames the heading "# Safety"');
+    expect(v('# Safety\n', '\n\uFEFF# Safety\n')).toContain('removes, renames or demotes the heading "# Safety"');
     // Nor is a BOM-prefixed "---" a closer: the bot's later "---" would close the
     // block and hide "# Safety", which the unclosed head renders.
     const unclosed = '---\n# Safety\ntitle: [\n\uFEFF---\n]\n\n';
-    expect(violations(unclosed, `${unclosed}---\n`)).toEqual(expect.arrayContaining([
+    expect(v(unclosed, `${unclosed}---\n`)).toEqual(expect.arrayContaining([
       'adds, removes or changes the front matter (the bot may not touch it)',
-      'removes or renames the heading "# Safety"',
+      'removes, renames or demotes the heading "# Safety"',
     ]));
   });
 
   it('reads CRLF headings: a line-ending change passes, a deleted heading does not', () => {
     const lf = '# A\n\n## B ##\n\ntext\n';
     const crlf = lf.replace(/\n/g, '\r\n');
-    expect(headings(crlf)).toEqual(['# A', '## B']);
-    expect(violations(crlf, lf)).toEqual([]);
-    expect(violations(crlf, crlf.replace('## B ##', 'Bee text'))).toEqual([
-      'removes or renames the heading "## B"',
+    expect(hs(crlf)).toEqual(['# A', '## B']);
+    expect(v(crlf, lf)).toEqual([]);
+    expect(v(crlf, crlf.replace('## B ##', 'Bee text'))).toEqual([
+      'removes, renames or demotes the heading "## B"',
     ]);
   });
+});
+
+describe('docs-bot-guard: GitHub\'s Markdown API', () => {
+  // `gh api --include` output captured from the real API on 2026-11-04
+  // (headers trimmed). gh prints the status line with LF and the rest with CRLF.
+  const ok = {
+    status: 0,
+    stdout: 'HTTP/2.0 200 OK\nContent-Type: text/html;charset=utf-8\r\nX-Ratelimit-Remaining: 4999\r\n\r\n'
+      + '<div class="markdown-heading"><h1 class="heading-element">Safety</h1><a id="user-content-safety" class="anchor" aria-label="Permalink: Safety" href="#safety"><span aria-hidden="true" class="octicon octicon-link"></span></a></div>\n<p>Text</p>\n',
+    stderr: '',
+  };
+  const badRequest = {
+    status: 1,
+    stdout: 'HTTP/2.0 400 Bad Request\nContent-Type: application/json; charset=utf-8\r\nX-Ratelimit-Remaining: 4976\r\n\r\n'
+      + '{"message":"Invalid rendering mode","documentation_url":"https://docs.github.com/v3/markdown/","status":"400"}',
+    stderr: 'gh: Invalid rendering mode (HTTP 400)\n',
+  };
+
+  it('reads the HTML of a 200, and holds on anything else with the reason', () => {
+    expect(renderedHeadings(readGhResponse(ok))).toEqual(['# Safety']);
+    expect(() => readGhResponse(badRequest)).toThrow(/^GitHub's Markdown API answered HTTP 400 \(gh exit 1\): gh: Invalid rendering mode/);
+    // A rate limit, in the shape GitHub documents (403 or 429, remaining 0).
+    const limited = {
+      status: 1,
+      stdout: 'HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 0\r\n\r\n{"message":"API rate limit exceeded"}',
+      stderr: 'gh: API rate limit exceeded (HTTP 403)\n',
+    };
+    expect(() => readGhResponse(limited)).toThrow(/HTTP 403, rate limited/);
+    expect(() => readGhResponse({ ...ok, status: 0, stdout: ok.stdout.replace('200 OK', '202 Accepted') })).toThrow(/HTTP 202/);
+    // gh missing, killed by the timeout, or exiting non-zero with a 200 line.
+    expect(() => readGhResponse({ error: new Error('spawnSync gh ENOENT'), status: null, stdout: '' })).toThrow(/gh api did not run: spawnSync gh ENOENT/);
+    expect(() => readGhResponse({ ...ok, status: 1 })).toThrow(/HTTP 200 \(gh exit 1\)/);
+    expect(() => readGhResponse({ status: 0, stdout: '', stderr: '' })).toThrow(/HTTP with no status line/);
+  });
+
+  it('holds a bot edit back, through the CLI, when no render can be had', () => {
+    const s = scenario({});
+    s.edit('README.md', (t) => t.replace('Intro paragraph.', 'Intro paragraph, adjusted.'));
+    const empty = path.join(s.cwd, '.git', 'no-renders.json');
+    fs.writeFileSync(empty, '{"renders":{}}\n');
+    const r = s.run(undefined, empty, { DOCS_BOT_GUARD_RECORD: '0' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read('README.md')).toBe(BASE_README);
+    expect(r.dirty).toBe('');
+    expect(r.report).toContain('could not be checked with GitHub\'s Markdown API, so it is held back');
+  });
+
+  // Runs in CI (CI=true, with GH_TOKEN from test.yml) and wherever
+  // DOCS_BOT_GUARD_LIVE=1. In CI a missing token or network fails it rather
+  // than skipping: this is the only check that the recordings are still true.
+  const live = process.env.CI === 'true' || process.env.DOCS_BOT_GUARD_LIVE === '1';
+  it.runIf(live)('the live API still renders the recorded texts the same way', () => {
+    const { renders } = JSON.parse(fs.readFileSync(FIXTURES, 'utf8'));
+    const texts = [CANARY, '# Safety\rBody\n', '<!--\n# Safety\n-->\n', '- Item\n\n    # Safety\n', '\n\uFEFF# Safety\n', '---\n```\n---\n# Safety\n\nSteps.\n'];
+    for (const text of texts) {
+      expect(Object.values(renders).some((r) => r.text === text), `recorded: ${JSON.stringify(text)}`).toBe(true);
+      expect(renderedHeadings(githubRender(text)), JSON.stringify(text)).toEqual(hs(text));
+    }
+  }, 60_000);
 });
 
 describe('docs-bot-guard: the PR comment', () => {
   it('names every held file and stays under GitHub\'s comment limit, however big the proposals', () => {
     const held = Array.from({ length: 5 }, (_, i) => ({
       file: `docs/f${i}.md`,
-      reasons: ['removes or renames the heading "## X"'],
+      reasons: ['removes, renames or demotes the heading "## X"'],
       proposal: `@@ -1 +1 @@\n${'-x\n'.repeat(15000)}`,
     }));
     const body = renderReport(held);
@@ -622,7 +745,7 @@ describe('docs-bot-guard: the PR comment', () => {
   it('cuts a file\'s long reason list before it drops a file', () => {
     const held = Array.from({ length: 5 }, (_, i) => ({
       file: `docs/f${i}.md`,
-      reasons: Array.from({ length: 2000 }, (_, j) => `removes or renames the heading "## Heading ${j}"`),
+      reasons: Array.from({ length: 2000 }, (_, j) => `removes, renames or demotes the heading "## Heading ${j}"`),
       proposal: 'x'.repeat(30000),
     }));
     const body = renderReport(held);
@@ -651,6 +774,13 @@ describe('claude-docs workflow wiring for the guard', () => {
     expect(runGuard).toBeGreaterThan(claude);
     expect(runGuard).toBeLessThan(stage);
     expect(code).toMatch(/--head "\$START_SHA" --base "origin\/\$BASE_REF"/);
+  });
+
+  it('runs the guard against the live API with the step\'s token, never against recordings', () => {
+    const step = code.slice(code.indexOf('- name: Guard and validate'));
+    expect(step).toMatch(/\n\s+GH_TOKEN: \$\{\{ github\.token \}\}\n/);
+    expect(code).not.toContain('--render-fixtures');
+    expect(code).not.toContain('DOCS_BOT_GUARD_RECORD');
   });
 
   it('tells the bot the same word limit the guard enforces', () => {

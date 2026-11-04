@@ -27,7 +27,12 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: mobile/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # GH_TOKEN is for docsBotGuard.test.js's live check that the recorded
+      # Markdown API renders are still what GitHub returns. It fails rather
+      # than skips without one in CI, so do not drop it.
       - run: pnpm test
+        env:
+          GH_TOKEN: ${{ github.token }}
       # The tests that put a live process at a recorded PID, in a throwaway
       # container (pnpm test skips them everywhere else; see the script).
       - run: test/pid-sandbox.sh "$GITHUB_WORKSPACE"
