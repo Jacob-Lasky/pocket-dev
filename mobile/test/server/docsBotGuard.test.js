@@ -16,6 +16,7 @@ import {
   renderedHeadings,
   renderReport,
   violations,
+  visibleWords,
 } from '../../../.github/scripts/docs-bot-guard.mjs';
 
 // The Auto-Document PR job (claude-docs.yml) deleted reviewed CLAUDE.md
@@ -36,6 +37,7 @@ const WORKFLOW = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/claude-
 const FIXTURES = path.join(__dirname, 'fixtures/docs-bot-guard-renders.json');
 const render = fixtureRenderer(FIXTURES);
 const hs = (text) => renderedHeadings(render(text));
+const HIDES = 'hides text the page showed while the source keeps it (an HTML comment, a closed <details>, markup): ';
 const v = (oldText, newText, max = DEFAULT_MAX_DROPPED_WORDS) => violations(oldText, newText, max, render);
 
 // Isolated from the caller's git config: a global hooksPath or signing setting
@@ -260,6 +262,25 @@ describe('docs-bot-guard: the CLAUDE.md restore', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(s.read('CLAUDE.md')).toBe(PR_CLAUDE.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`));
     expect(r.diff).not.toContain('mode');
+    expect(r.report).toBeNull();
+  });
+
+  // Round-1 review: every test above used the root CLAUDE.md. The action
+  // restores the whole .claude/ tree, markdown in it included.
+  it('returns a nested .claude markdown file to the PR head, and merges a bot edit onto it', () => {
+    const skill = '.claude/skills/x/SKILL.md';
+    const doc = (endpoint, extra = '') => `# Skill\n\nUse ${endpoint} endpoint.\n\n## Notes\n\nKeep it short.\n${extra}`;
+    const s = scenario({ base: { [skill]: doc('base') }, pr: { [skill]: doc('PR') } });
+    expect(s.read(skill)).toBe(doc('base')); // the restore brought the base back
+    let r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read(skill)).toBe(doc('PR'));
+    expect(r.dirty).toBe('');
+    // Again with the bot adding a line to the restored base copy.
+    s.write({ [skill]: doc('base', 'Run it hourly.\n') });
+    r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read(skill)).toBe(doc('PR', 'Run it hourly.\n'));
     expect(r.report).toBeNull();
   });
 
@@ -546,11 +567,39 @@ describe('docs-bot-guard: violations()', () => {
     // A lone CR ends a line, so "# Safety" is a heading of its own.
     expect(v('# Safety\rBody\n', 'Safety\rBody\n')).toEqual(lost);
     // Wrapped in an HTML comment, it is not rendered at all; only lines were added.
-    expect(v('# Safety\n', '<!--\n# Safety\n-->\n')).toEqual(lost);
+    expect(v('# Safety\n', '<!--\n# Safety\n-->\n')).toEqual([...lost, `${HIDES}"Safety"`]);
     // Indented four spaces after a list item, it is the item's heading, not code.
     expect(v('- Item\n\n    # Safety\n', '- Item\n\n    Safety\n')).toEqual(lost);
     // A BOM on a later line makes it prose.
     expect(v('# Safety\n', '\n\uFEFF# Safety\n')).toEqual(lost);
+  });
+
+  // Round-1 review repros (codex gpt-6-sol): text the page stops showing while
+  // the source keeps every word, so no source word check can see it.
+  it('holds back text hidden in an HTML comment or a closed <details>, which the source still holds', () => {
+    // A section folded into a collapsed block: both headings still render.
+    const guide = '# Guide\n\n## Safety\nKeep keys private.\n';
+    const folded = '# Guide\n\n<details>\n<summary>Archived</summary>\n\n## Safety\nKeep keys private.\n\n</details>\n';
+    expect(hs(folded)).toEqual(['# Guide', '## Safety']);
+    expect(v(guide, folded)).toEqual([`${HIDES}"Safety Keep keys private"`]);
+    // Shown open, nothing is hidden; nor is new text added in a closed block.
+    expect(v(guide, folded.replace('<details>', '<details open>'))).toEqual([]);
+    expect(v(guide, `${guide}\n<details>\n<summary>More</summary>\n\nNew notes.\n\n</details>\n`)).toEqual([]);
+    // A paragraph wrapped in a comment, and an existing comment stretched over one.
+    const safety = '# Guide\n\n## Safety\nNever expose secrets.\n';
+    expect(v(safety, '# Guide\n\n## Safety\n<!--\nNever expose secrets.\n-->\n')).toEqual([`${HIDES}"Never expose secrets"`]);
+    expect(v('<!-- note -->\nNever expose secrets.\n', '<!-- note\nNever expose secrets. -->\n')).toEqual([`${HIDES}"Never expose secrets"`]);
+    // Moved into a link's URL: the words stay in the source, the page loses them.
+    expect(v('Use the staging host.\n', 'Use the [host](staging).\n')).toEqual([`${HIDES}"staging"`]);
+    // Reworded text is the word checks' business, not this one.
+    expect(v('Never expose secrets.\n', 'Do not expose secrets.\n')).toEqual([]);
+  });
+
+  it('reads the words a page shows: no comments, attributes or closed <details> bodies', () => {
+    const html = '<p>A <a href="https://hidden.example">link</a> &amp; <code><span>foo</span><span>bar</span></code></p>\n'
+      + '<!-- gone -->\n<details><summary>Shown</summary><p>folded</p><details open><summary>inner</summary><p>deep</p></details></details>\n'
+      + '<details open><summary>Top</summary><p>visible</p><details><summary>nested</summary><p>closed</p></details></details>\n';
+    expect(visibleWords(html)).toEqual(['A', 'link', 'foobar', 'Shown', 'Top', 'visible', 'nested']);
   });
 
   it('also judges the body after front matter on its own, as GitHub\'s file view shows it', () => {
@@ -664,6 +713,11 @@ describe('docs-bot-guard: GitHub\'s Markdown API', () => {
     expect(() => readGhResponse({ error: new Error('spawnSync gh ENOENT'), status: null, stdout: '' })).toThrow(/gh api did not run: spawnSync gh ENOENT/);
     expect(() => readGhResponse({ ...ok, status: 1 })).toThrow(/HTTP 200 \(gh exit 1\)/);
     expect(() => readGhResponse({ status: 0, stdout: '', stderr: '' })).toThrow(/HTTP with no status line/);
+    // Round-1 review repro: a 200 whose body is not HTML would read as a page
+    // with no headings and no words, and pass anything.
+    const json = { ...ok, stdout: 'HTTP/2.0 200 OK\nContent-Type: application/json\r\n\r\n{"message":"render unavailable"}' };
+    expect(() => readGhResponse(json)).toThrow(/HTTP 200, not as HTML \(gh exit 0\): \{"message":"render unavailable"\}/);
+    expect(() => readGhResponse({ ...ok, stdout: ok.stdout.replace(/Content-Type[^\r]*\r\n/, '') })).toThrow(/not as HTML/);
   });
 
   it('holds a bot edit back, through the CLI, when no render can be had', () => {
@@ -684,10 +738,16 @@ describe('docs-bot-guard: GitHub\'s Markdown API', () => {
   const live = process.env.CI === 'true' || process.env.DOCS_BOT_GUARD_LIVE === '1';
   it.runIf(live)('the live API still renders the recorded texts the same way', () => {
     const { renders } = JSON.parse(fs.readFileSync(FIXTURES, 'utf8'));
-    const texts = [CANARY, '# Safety\rBody\n', '<!--\n# Safety\n-->\n', '- Item\n\n    # Safety\n', '\n\uFEFF# Safety\n', '---\n```\n---\n# Safety\n\nSteps.\n'];
+    const texts = [
+      CANARY, '# Safety\rBody\n', '<!--\n# Safety\n-->\n', '- Item\n\n    # Safety\n', '\n\uFEFF# Safety\n', '---\n```\n---\n# Safety\n\nSteps.\n',
+      '# Guide\n\n<details>\n<summary>Archived</summary>\n\n## Safety\nKeep keys private.\n\n</details>\n',
+      '# Guide\n\n## Safety\n<!--\nNever expose secrets.\n-->\n',
+    ];
     for (const text of texts) {
       expect(Object.values(renders).some((r) => r.text === text), `recorded: ${JSON.stringify(text)}`).toBe(true);
-      expect(renderedHeadings(githubRender(text)), JSON.stringify(text)).toEqual(hs(text));
+      const html = githubRender(text);
+      expect(renderedHeadings(html), JSON.stringify(text)).toEqual(hs(text));
+      expect(visibleWords(html), JSON.stringify(text)).toEqual(visibleWords(render(text)));
     }
   }, 60_000);
 });

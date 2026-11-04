@@ -319,6 +319,46 @@ export function renderedHeadings(html) {
   return out;
 }
 
+// The words a reader of GitHub's page sees without clicking anything: the HTML
+// from the Markdown API less comments, tag attributes and the body of a closed
+// <details> block (its <summary> shows). Block tags become spaces and inline
+// tags nothing, so "foo<span>bar</span>" in highlighted code stays one word.
+const BLOCK_TAG = /^(p|div|h[1-6]|li|ul|ol|t[dhr]|table|thead|tbody|br|hr|pre|blockquote|details|summary|dl|dt|dd|img|input)$/i;
+export function visibleWords(html) {
+  const text = [];
+  const open = []; // per enclosing <details>: [is open, in its <summary>]
+  const shown = () => open.every(([isOpen, inSummary], i) => isOpen || (inSummary && i === open.length - 1));
+  for (const m of html.matchAll(/<!--[\s\S]*?-->|<(\/?)([a-zA-Z][\w-]*)\b([^>]*)>|[^<]+|</g)) {
+    const [whole, close, tag, attrs] = m;
+    if (whole.startsWith('<!--')) continue;
+    if (tag === undefined) {
+      if (shown()) text.push(decodeEntities(whole));
+      continue;
+    }
+    const name = tag.toLowerCase();
+    if (name === 'details') {
+      if (close) open.pop();
+      else open.push([/\bopen\b/i.test(attrs), false]);
+    } else if (name === 'summary' && open.length > 0) {
+      open[open.length - 1][1] = !close;
+    }
+    if (BLOCK_TAG.test(name)) text.push(' ');
+  }
+  return words([text.join('')]);
+}
+
+// Each word in `from` beyond its count in `to`.
+function lostWords(from, to) {
+  const left = countBy(to);
+  const lost = [];
+  for (const w of from) {
+    const n = left.get(w) ?? 0;
+    if (n > 0) left.set(w, n - 1);
+    else lost.push(w);
+  }
+  return lost;
+}
+
 const RENDER_TIMEOUT_MS = 60_000;
 
 // Reads `gh api --include` output: the HTML body of a 200, or throws saying
@@ -329,11 +369,15 @@ export function readGhResponse(r) {
   const out = r.stdout ?? '';
   const status = out.match(/^HTTP\/[\d.]+ (\d{3})/)?.[1] ?? 'with no status line';
   const split = out.search(/\r?\n\r?\n/);
-  if (r.status === 0 && status === '200' && split !== -1) return out.slice(split).replace(/^\r?\n\r?\n/, '');
   const headers = split === -1 ? out : out.slice(0, split);
+  // A 200 that is not HTML (an error object, say) would read as a document
+  // with no headings and no words, and pass whatever it was asked about.
+  const html = /^content-type: *text\/html\b/im.test(headers);
+  if (r.status === 0 && status === '200' && split !== -1 && html) return out.slice(split).replace(/^\r?\n\r?\n/, '');
   const limited = /^x-ratelimit-remaining: *0\s*$/im.test(headers) || status === '429' ? ', rate limited' : '';
+  const notHtml = status === '200' && !html ? ', not as HTML' : '';
   const detail = `${r.stderr ?? ''} ${split === -1 ? '' : out.slice(split)}`.replace(/\s+/g, ' ').trim().slice(0, 300);
-  throw new Error(`GitHub's Markdown API answered HTTP ${status}${limited} (gh exit ${r.status}): ${detail}`);
+  throw new Error(`GitHub's Markdown API answered HTTP ${status}${limited}${notHtml} (gh exit ${r.status}): ${detail}`);
 }
 
 // Renders markdown the way GitHub renders a repository file (POST /markdown,
@@ -411,22 +455,39 @@ const defaultRender = memoize(githubRender);
 // HTML comments, list indentation and BOMs each made it disagree with GitHub,
 // and every disagreement was a way to hide a heading unseen. A render that
 // fails for any reason holds the change back: unchecked is not allowed.
-function headingViolations(oldText, newText, render) {
+//
+// It also holds back text the page stops showing while the source keeps it:
+// wrapped in an HTML comment, folded into a closed <details>, moved into a link
+// URL. The word checks in violations() read the source and cannot see that, so
+// any word the rendered page loses beyond those the source loses is held back.
+// (A bare URL turned into a titled link reads as hidden too; that costs only a
+// PR comment.)
+function renderViolations(oldText, newText, render) {
   const lost = new Set();
+  const hidden = new Set();
   try {
     checkCanary(render);
+    const sourceLost = lostWords(words([oldText]), words([newText]));
     const before = new Map(renderViews(oldText));
     const after = new Map(renderViews(newText));
     for (const view of new Set([...before.keys(), ...after.keys()])) {
-      const left = countBy(renderedHeadings(render(after.get(view) ?? newText)));
-      for (const [h, n] of countBy(renderedHeadings(render(before.get(view) ?? oldText)))) {
+      const oldHtml = render(before.get(view) ?? oldText);
+      const newHtml = render(after.get(view) ?? newText);
+      const left = countBy(renderedHeadings(newHtml));
+      for (const [h, n] of countBy(renderedHeadings(oldHtml))) {
         if ((left.get(h) ?? 0) < n) lost.add(h);
       }
+      const pageLost = lostWords(visibleWords(oldHtml), visibleWords(newHtml));
+      for (const w of lostWords(pageLost, sourceLost)) hidden.add(w);
     }
   } catch (err) {
     return [`could not be checked with GitHub's Markdown API, so it is held back: ${err.message}`];
   }
-  return [...lost].map((h) => `removes, renames or demotes the heading ${preview(h)}`);
+  const found = [...lost].map((h) => `removes, renames or demotes the heading ${preview(h)}`);
+  if (hidden.size > 0) {
+    found.push(`hides text the page showed while the source keeps it (an HTML comment, a closed <details>, markup): ${preview([...hidden].join(' '))}`);
+  }
+  return found;
 }
 
 // Why a change from oldText to newText is not a pure add-or-adjust. Empty
@@ -443,7 +504,7 @@ export function violations(oldText, newText, maxDroppedWords = DEFAULT_MAX_DROPP
   if (frontMatter(oldText) !== frontMatter(newText)) {
     found.push('adds, removes or changes the front matter (the bot may not touch it)');
   }
-  found.push(...headingViolations(oldText, newText, render));
+  found.push(...renderViolations(oldText, newText, render));
   let droppedInFile = 0;
   for (const h of hunks(oldText, newText)) {
     const removed = nonBlank(h.removed);

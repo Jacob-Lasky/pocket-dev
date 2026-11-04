@@ -130,8 +130,9 @@ jobs:
             - Never delete documentation. Add text, or adjust a stale fact in
               place. A check after you compares each file you touch with the
               PR head and drops your whole change to that file if it removes
-              a heading, removes lines, or drops more than 40 words in one
-              place or more than 120 words in the file.
+              a heading, removes lines, hides text from the rendered page (in
+              an HTML comment or a closed <details> block), or drops
+              more than 40 words in one place or more than 120 words in the file.
             - If the documentation is already accurate, change nothing and say so.
           # DO NOT change --model to a moving alias (opus, opus[1m]). The
           # Dockerfile's cdspo/cdsps deliberately use aliases so they follow
