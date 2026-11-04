@@ -6,6 +6,9 @@ import path from 'node:path';
 import {
   RESTORED_PATHS,
   DEFAULT_MAX_DROPPED_WORDS,
+  FILE_DROPPED_WORDS_FACTOR,
+  headings,
+  renderReport,
   violations,
 } from '../../../.github/scripts/docs-bot-guard.mjs';
 
@@ -96,7 +99,7 @@ function writeFiles(cwd, files) {
 // action's restore exactly as restore-config.ts does it: snapshot the PR copy
 // to .claude-pr/, delete every restored path, check it out from the base, and
 // unstage.
-function scenario({ base = {}, pr = {}, restore = true }) {
+function scenario({ base = {}, pr = {}, prExtra = () => {}, restore = true }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-guard-test-'));
   dirs.push(cwd);
   git(cwd, 'init', '-q', '-b', 'main');
@@ -106,12 +109,15 @@ function scenario({ base = {}, pr = {}, restore = true }) {
   git(cwd, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
   git(cwd, 'checkout', '-q', '-b', 'pr');
   writeFiles(cwd, { 'CLAUDE.md': PR_CLAUDE, ...pr });
+  prExtra(cwd);
   git(cwd, 'add', '-A');
   git(cwd, 'commit', '-q', '-m', 'pr');
   const head = git(cwd, 'rev-parse', 'HEAD').trim();
   if (restore) {
     fs.mkdirSync(path.join(cwd, '.claude-pr'));
-    fs.copyFileSync(path.join(cwd, 'CLAUDE.md'), path.join(cwd, '.claude-pr/CLAUDE.md'));
+    if (fs.existsSync(path.join(cwd, 'CLAUDE.md'))) {
+      fs.copyFileSync(path.join(cwd, 'CLAUDE.md'), path.join(cwd, '.claude-pr/CLAUDE.md'));
+    }
     fs.appendFileSync(path.join(cwd, '.git/info/exclude'), '/.claude-pr/\n');
     for (const p of RESTORED_PATHS) {
       fs.rmSync(path.join(cwd, p), { recursive: true, force: true });
@@ -183,6 +189,38 @@ describe('docs-bot-guard: the CLAUDE.md restore', () => {
     expect(r.report).toContain('### `CLAUDE.md`');
     expect(r.report).toContain('conflicts with what this PR changed');
     expect(r.report).toContain('(120)');
+  });
+
+  it.each([
+    ['an empty', ''],
+    ['a non-empty', BASE_CLAUDE],
+  ])('keeps the PR\'s deletion of %s base CLAUDE.md, with or without a bot edit', (_, baseDoc) => {
+    const s = scenario({ base: { 'CLAUDE.md': baseDoc }, pr: { 'CLAUDE.md': null } });
+    expect(s.read('CLAUDE.md')).toBe(baseDoc); // the restore brought it back
+    let r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read('CLAUDE.md')).toBeNull();
+    expect(r.dirty).toBe('');
+
+    s.write({ 'CLAUDE.md': `${baseDoc}# New\n` });
+    r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read('CLAUDE.md')).toBeNull();
+    expect(r.dirty).toBe('');
+    expect(r.report).toContain('this PR deletes the file');
+  });
+
+  it('keeps the PR\'s executable bit on CLAUDE.md when the bot edits the restored base copy', () => {
+    // The restore takes the base mode too; that is not the bot changing it.
+    const s = scenario({ prExtra: (cwd) => fs.chmodSync(path.join(cwd, 'CLAUDE.md'), 0o755) });
+    expect(fs.statSync(path.join(s.cwd, 'CLAUDE.md')).mode & 0o111).toBe(0);
+    const line = '- claude-docs.yml keeps the markdown in sync.\n';
+    s.edit('CLAUDE.md', (t) => t.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`));
+    const r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(s.read('CLAUDE.md')).toBe(PR_CLAUDE.replace('every (60) seconds.\n', `every (60) seconds.\n${line}`));
+    expect(r.diff).not.toContain('mode');
+    expect(r.report).toBeNull();
   });
 
   it('returns restored non-markdown config to the PR head', () => {
@@ -294,6 +332,18 @@ describe('docs-bot-guard: only additions and in-place adjustments', () => {
     expect(r.report).toContain('deletes the file');
   });
 
+  it('holds back a change to a markdown file that is not UTF-8, which a text compare cannot see', () => {
+    // 0x80 and 0x81 both decode to U+FFFD, so a lossy compare calls them equal.
+    const before = Buffer.from([0x23, 0x20, 0x80, 0x0a]);
+    const s = scenario({ pr: { 'docs/bin.md': before } });
+    s.write({ 'docs/bin.md': Buffer.from([0x23, 0x20, 0x81, 0x0a]) });
+    const r = s.run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(s.cwd, 'docs/bin.md')).equals(before)).toBe(true);
+    expect(r.dirty).toBe('');
+    expect(r.report).toContain('is not UTF-8 text');
+  });
+
   it('leaves a non-markdown change outside the restored paths for the workflow to reject', () => {
     const s = scenario({});
     s.write({ 'mobile/server.js': 'oops\n' });
@@ -321,6 +371,57 @@ describe('docs-bot-guard: refuses to judge against the wrong commits', () => {
   });
 });
 
+// Changes the bot's Edit/Write tools cannot make, and a text comparison cannot
+// judge: the guard fails the job (exit 2) so nothing is committed.
+describe('docs-bot-guard: refuses changes that are not plain text edits', () => {
+  const linkScenario = () => scenario({
+    pr: { 'docs/target.md': '# Target\n' },
+    prExtra: (cwd) => fs.symlinkSync('target.md', path.join(cwd, 'docs/ref.md')),
+  });
+
+  it('a symlink replaced by a file holding its target\'s name (same bytes)', () => {
+    const s = linkScenario();
+    fs.rmSync(path.join(s.cwd, 'docs/ref.md'));
+    fs.writeFileSync(path.join(s.cwd, 'docs/ref.md'), 'target.md');
+    const r = s.run();
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('docs/ref.md is a git symlink');
+  });
+
+  it('a new markdown symlink', () => {
+    const s = scenario({});
+    fs.symlinkSync('../README.md', path.join(s.cwd, 'docs-link.md'));
+    const r = s.run();
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('docs-link.md is a symlink in the working tree');
+  });
+
+  it('a changed executable bit', () => {
+    const s = scenario({});
+    fs.chmodSync(path.join(s.cwd, 'README.md'), 0o755);
+    const r = s.run();
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('README.md changed its executable bit');
+  });
+
+  it('a deleted markdown file whose path is not UTF-8', () => {
+    // Decoded lossily, docs/\xff.md becomes docs/�.md, a path that exists
+    // nowhere, so the deletion read as "a new file" and was let through.
+    const raw = (cwd) => Buffer.concat([Buffer.from(`${cwd}/docs/`), Buffer.from([0xff]), Buffer.from('.md')]);
+    const s = scenario({
+      prExtra: (cwd) => {
+        fs.mkdirSync(path.join(cwd, 'docs'), { recursive: true });
+        fs.writeFileSync(raw(cwd), '# Odd name\n');
+      },
+    });
+    fs.rmSync(raw(s.cwd));
+    const r = s.run();
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('is not UTF-8');
+    expect(fs.existsSync(raw(s.cwd))).toBe(false); // untouched; nothing judged
+  });
+});
+
 describe('docs-bot-guard: violations()', () => {
   it('treats a renamed heading as a removal', () => {
     expect(violations('# A\n\n## B\n', '# A\n\n## B2\n')).toEqual([
@@ -334,6 +435,136 @@ describe('docs-bot-guard: violations()', () => {
 
   it('counts a net-removed line inside a replacement', () => {
     expect(violations('one two\nthree four\n', 'one two three four\n')[0]).toMatch(/^removes 1 line\(s\) at line 1/);
+  });
+
+  const ws = (n, p) => Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ');
+
+  it('allows exactly the per-place word limit and rejects one more', () => {
+    const limit = DEFAULT_MAX_DROPPED_WORDS;
+    expect(violations(`${ws(limit, 'a')}\n`, 'b\n')).toEqual([]);
+    const over = violations(`${ws(limit + 1, 'a')}\n`, 'b\n');
+    expect(over).toHaveLength(1);
+    expect(over[0]).toMatch(new RegExp(`^drops ${limit + 1} words at line 1 \\(limit ${limit}\\), starting "a0 a1 `));
+  });
+
+  it('caps the words dropped across the whole file, so small cuts cannot add up to a gutted section', () => {
+    const per = 35; // under the per-place limit
+    const doc = (n) => Array.from({ length: n }, (_, i) => `${ws(per, `p${i}w`)}\nkeep ${i}\n`).join('');
+    const cut = (n) => Array.from({ length: n }, (_, i) => `short ${i}\nkeep ${i}\n`).join('');
+    const fileLimit = DEFAULT_MAX_DROPPED_WORDS * FILE_DROPPED_WORDS_FACTOR;
+    expect(per * 3).toBeLessThanOrEqual(fileLimit);
+    expect(violations(doc(3), cut(3))).toEqual([]);
+    expect(violations(doc(4), cut(4))).toEqual([`drops ${per * 4} words across the file (limit ${fileLimit})`]);
+  });
+
+  it('counts a long token with no spaces (a URL) as the words in it', () => {
+    const url = `https://example.com/${ws(45, 's').replace(/ /g, '/')}`;
+    expect(violations(`See ${url}\n`, 'See the docs.\n')[0]).toMatch(/^drops 4\d words at line 1/);
+  });
+
+  it('treats a heading moved into a code fence as removed', () => {
+    expect(violations('## Safety\n\nNever do X.\n', '```\n## Safety\n```\n\nNever do X.\n')).toEqual([
+      'removes or renames the heading "## Safety"',
+    ]);
+  });
+
+  it('does not treat a "# comment" in a fenced block as a heading', () => {
+    const doc = '# Doc\n\n```bash\n# start it\nnpm start\n```\n';
+    expect(headings(doc)).toEqual(['# Doc']);
+    expect(violations(doc, doc.replace('# start it\n', '# start the server\n'))).toEqual([]);
+  });
+
+  it('recognises setext headings, and converting one to ATX is not a rename', () => {
+    const setext = 'Safety\n------\n\nNever do X.\n\nTitle\n=====\n';
+    expect(headings(setext)).toEqual(['## Safety', '# Title']);
+    // The dropped underline still counts as a removed line (held back, the safe
+    // way); what matters here is that no heading reads as renamed.
+    expect(violations(setext, '## Safety\n\nNever do X.\n\n# Title\n').filter((v) => v.includes('heading'))).toEqual([]);
+    // Swapped for the same number of lines, so only the heading rule can see it.
+    expect(violations(setext, 'Some intro\nmore intro\n\nNever do X.\n\nTitle\n=====\n')).toEqual([
+      'removes or renames the heading "## Safety"',
+    ]);
+  });
+
+  it('does not open a fence on a backtick line whose info string has a backtick', () => {
+    // CommonMark: "```lang`bad" is not a fence, so the heading after it is real.
+    const doc = '```lang`bad\n## Safety\n```\n';
+    expect(headings(doc)).toEqual(['## Safety']);
+    expect(violations(doc, doc.replace('## Safety', 'Safety prose'))).toEqual([
+      'removes or renames the heading "## Safety"',
+    ]);
+    // A tilde fence may carry a backtick in its info string, and still hides.
+    expect(headings('~~~ lang`ok\n## In code\n~~~\n')).toEqual([]);
+  });
+
+  it('reads YAML front matter as metadata, not a setext heading', () => {
+    const doc = '---\nname: thing\ndescription: Old words\n---\n\n# Body\n';
+    expect(headings(doc)).toEqual(['# Body']);
+    expect(violations(doc, doc.replace('Old words', 'New words'))).toEqual([]);
+    // A page that only opens with a rule keeps its headings.
+    expect(headings('---\n# Title\n---\n')).toEqual(['# Title']);
+    // Wrapping headings in a fake front-matter block does not hide removing them.
+    expect(violations('# A\n\nx: 1\n', '---\nx: 1\n---\n\nx: 1\n')).toContain('removes or renames the heading "# A"');
+  });
+
+  it('reads CRLF headings: a line-ending change passes, a deleted heading does not', () => {
+    const lf = '# A\n\n## B ##\n\ntext\n';
+    const crlf = lf.replace(/\n/g, '\r\n');
+    expect(headings(crlf)).toEqual(['# A', '## B']);
+    expect(violations(crlf, lf)).toEqual([]);
+    expect(violations(crlf, crlf.replace('## B ##', 'Bee text'))).toEqual([
+      'removes or renames the heading "## B"',
+    ]);
+  });
+});
+
+describe('docs-bot-guard: the PR comment', () => {
+  it('names every held file and stays under GitHub\'s comment limit, however big the proposals', () => {
+    const held = Array.from({ length: 5 }, (_, i) => ({
+      file: `docs/f${i}.md`,
+      reasons: ['removes or renames the heading "## X"'],
+      proposal: `@@ -1 +1 @@\n${'-x\n'.repeat(15000)}`,
+    }));
+    const body = renderReport(held);
+    expect(body.length).toBeLessThanOrEqual(65536);
+    for (const h of held) expect(body).toContain(`### \`${h.file}\``);
+    expect(body).not.toContain('report truncated');
+  });
+
+  it('keeps every file when a proposal\'s backtick runs make its fence huge', () => {
+    // A fixed per-file allowance missed the fence, which grows with the longest
+    // backtick run, and the fifth file fell off the end of the comment.
+    const bt = '`';
+    const held = Array.from({ length: 5 }, (_, i) => ({
+      file: `docs/f${i}.md`,
+      reasons: [`reason for ${i}`],
+      proposal: i === 0 ? `@@ -1 +1 @@\n-${bt.repeat(10000)}` : 'x'.repeat(30000),
+    }));
+    const body = renderReport(held);
+    expect(body.length).toBeLessThanOrEqual(65536);
+    for (const h of held) {
+      expect(body).toContain(`### \`${h.file}\``);
+      expect(body).toContain(`- ${h.reasons[0]}`);
+    }
+    expect(body).not.toContain('report truncated');
+  });
+
+  it('cuts a file\'s long reason list before it drops a file', () => {
+    const held = Array.from({ length: 5 }, (_, i) => ({
+      file: `docs/f${i}.md`,
+      reasons: Array.from({ length: 2000 }, (_, j) => `removes or renames the heading "## Heading ${j}"`),
+      proposal: 'x'.repeat(30000),
+    }));
+    const body = renderReport(held);
+    expect(body.length).toBeLessThanOrEqual(65536);
+    for (const h of held) expect(body).toContain(`### \`${h.file}\``);
+    expect(body).toMatch(/- \.\.\. and \d+ more \(see the workflow log\)/);
+    expect(body).not.toContain('report truncated');
+  });
+
+  it('names a file whose path holds a backtick in a code span that survives it', () => {
+    const body = renderReport([{ file: 'docs/a`b.md', reasons: ['deletes the file'], proposal: '' }]);
+    expect(body).toContain('### `` docs/a`b.md ``');
   });
 });
 
@@ -355,6 +586,7 @@ describe('claude-docs workflow wiring for the guard', () => {
   it('tells the bot the same word limit the guard enforces', () => {
     const prompt = WORKFLOW.slice(WORKFLOW.indexOf('prompt: |'));
     expect(prompt).toContain(`more than ${DEFAULT_MAX_DROPPED_WORDS} words`);
+    expect(prompt).toContain(`more than ${DEFAULT_MAX_DROPPED_WORDS * FILE_DROPPED_WORDS_FACTOR} words in the file`);
   });
 
   // The guard must know every path the action resets. Read the list from

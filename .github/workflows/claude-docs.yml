@@ -82,6 +82,11 @@ jobs:
           wc -c "$RUNNER_TEMP/pr.diff"
           # Copied out before Claude runs, so the guard that judges its edits
           # is the one this commit carries, whatever happens to the tree.
+          # The guard is PR-authored code, exactly as trusted as this workflow
+          # file, which a pull_request event also takes from the PR: fork PRs
+          # are skipped above, so whoever can change the guard can already
+          # change the job. What it defends against is the action and the
+          # model, not the PR author.
           cp .github/scripts/docs-bot-guard.mjs "$RUNNER_TEMP/docs-bot-guard.mjs"
 
       - name: Update documentation with Claude
@@ -126,7 +131,7 @@ jobs:
               place. A check after you compares each file you touch with the
               PR head and drops your whole change to that file if it removes
               a heading, removes lines, or drops more than 40 words in one
-              place.
+              place or more than 120 words in the file.
             - If the documentation is already accurate, change nothing and say so.
           # DO NOT change --model to a moving alias (opus, opus[1m]). The
           # Dockerfile's cdspo/cdsps deliberately use aliases so they follow
