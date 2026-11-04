@@ -298,6 +298,12 @@ Guard tests: `mobile/test/server/entrypointSeed.test.js` executes the seeding bl
 - The runtime container does NOT include devDependencies: `pnpm install --prod --frozen-lockfile` in the Dockerfile excludes vitest/playwright/etc.
 - The base stays on **Node 24**, the newest LTS, and that is also the last major that bundles corepack. Going further means reintroducing an `npm i -g pnpm` bootstrap, so newest-LTS and one-source-of-truth point the same way here.
 
+## W150 live probe section (throwaway)
+
+This section exists only in the throwaway PR that live-tests the docs-bot guard. The Auto-Document job must leave it in place: before the guard, claude-code-action reset CLAUDE.md to main and the job committed that reset, deleting sections like this one.
+
+- Marker line: W150-KEEP-ME-7f3c.
+
 ## Deepgram tailnet access (dgvpn)
 
 `dgvpn` gives commands selective, opt-in access to Deepgram-internal services (`.consul`, request-raid, anything on the `controlplane.deepgram.com` tailnet) without putting the whole container on the VPN. It exists so the in-container Claude can reach those services on its own:
