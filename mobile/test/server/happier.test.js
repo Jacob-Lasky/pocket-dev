@@ -524,14 +524,20 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     // Pass 1 learns the active profile (tower). Later passes cannot read the
     // default status, and only after that does the extra look stopped: had
     // pass 1's answer been kept, the extra would be started on a pass that
-    // could not check it is not the default daemon.
+    // could not check it is not the default daemon. Then the default status is
+    // readable again and the extra must be started, so the passes in between
+    // left it alone for that reason, not because extras stopped being visited.
     const def = path.join(tmproot, 'status-default');
     const hv = path.join(tmproot, 'status-hv');
     fs.writeFileSync(def, PSTATUS('tower', true, true));
     fs.writeFileSync(hv, PSTATUS(HV, true, true));
     const res = spawnSync(
       'bash',
-      ['-c', `(sleep 0.4; printf 'not json' > "${def}"; sleep 0.6; printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "${stubLog}") & exec bash "${SUPERVISOR}"`],
+      [
+        '-c',
+        `(sleep 0.4; printf 'not json' > "${def}"; sleep 0.6; printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "${stubLog}"; ` +
+          `sleep 0.6; echo def-back >> "${stubLog}"; printf '%s' '${PSTATUS('tower', true, true)}' > "${def}") & exec bash "${SUPERVISOR}"`,
+      ],
       {
         env: spawnEnv({
           HOME: home,
@@ -544,17 +550,22 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
           PD_HAPPIER_INTERVAL: '0.1',
         }),
         encoding: 'utf8',
-        timeout: 2500,
+        timeout: 3200,
       },
     );
-    expect(calls(`${HV}:status`)).toBeGreaterThanOrEqual(1);
     expect(res.stderr).toContain('could not tell which profile is active');
-    // Several passes ran after the extra looked stopped, so "no start" is
-    // about those passes, not only the healthy first one.
-    const after = log().slice(log().indexOf('hv-stopped') + 1);
-    expect(log()).toContain('hv-stopped');
-    expect(after.filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
-    expect(calls(`${HV}:start`)).toBe(0);
+    const all = log();
+    const stopped = all.indexOf('hv-stopped');
+    const back = all.indexOf('def-back');
+    expect(stopped).toBeGreaterThan(-1);
+    expect(back).toBeGreaterThan(stopped);
+    // Several passes ran while the extra looked stopped and the active
+    // profile was unknown, and none of them started it ...
+    const blind = all.slice(stopped + 1, back);
+    expect(blind.filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
+    expect(all.slice(0, back)).not.toContain(`${HV}:start`);
+    // ... and once the active profile is known again, it is started.
+    expect(all.slice(back)).toContain(`${HV}:start`);
   });
 
   it('still supervises an extra when the default profile is signed out', () => {

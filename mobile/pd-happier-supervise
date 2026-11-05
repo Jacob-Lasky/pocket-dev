@@ -113,16 +113,22 @@
 # profile's files), and every extra when the environment carries a variable
 # that lets Happier pick the server or the daemon's state path itself.
 #
-# Two stated limits. (1) The active profile is read once per pass, from the
-# default daemon's status, so switching the active profile in the moment
-# between that read and an extra's turn makes that pass treat the new default
-# daemon as the extra. It then applies the same rules the default pass would
-# (start a stopped daemon, the newer-CLI restart) to the same daemon, without
-# the supervisor resume, and the next pass skips it as the active profile.
-# (2) The default daemon's pre-start clearing still covers every profile
-# directory, as it always has, so it can clear an extra's record first. It
-# only removes what no process in this container wrote (see
-# clear_stale_daemon_records), which an extra's own pass would remove too.
+# Three stated limits, none with a live instance (2026-11-05). (1) The active
+# profile is read once per pass, from the default daemon's status, so
+# switching the active profile in the moment between that read and an
+# extra's turn lets that pass act on the newly active daemon as if it were the
+# extra: start it if stopped, or stop and start it onto the CLI on PATH if it
+# reports an older one. The default pass has had the same window between its
+# own status read and its stop or start. A stop keeps sessions alive; the next
+# pass skips that profile as the active one. (2) The default daemon's
+# pre-start clearing still covers every profile directory, as it always has,
+# so it can clear an extra's record first. It removes only records it judges
+# written before this container started and never a live daemon's (see
+# clear_stale_daemon_records and its clock-step margin), the same records an
+# extra's own pass would remove. (3) The default daemon follows whatever its
+# environment tells the CLI, as it always has: the scope variables that stop
+# extras below also steer the plain `happier daemon ...` calls, and nothing
+# sets them in this container.
 #
 # Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
 # is not a number from 0.1 to 86400 falls back to 60, so a bad value cannot
