@@ -160,18 +160,32 @@ const starts = () => calls('start');
 // Test drivers: a background subshell that changes the stub's answers as the
 // loop works and then ends the loop. The DRIVER never signals anything. It
 // creates $STUB_STOP, and the loop's next `sleep` between passes, a stub first
-// on the loop's PATH, then signals its own parent: the loop, which is alive at
-// that moment because it is blocked waiting for that very sleep. That is the
-// pattern intervalsSlept uses too. A driver that tracked the loop's PID would
-// have to guess whether the PID still names the loop after a spawn timeout,
-// and on this host a reused PID can be a live session (CLAUDE.md, Common
-// gotchas). The driver's own sleeps use the real binary ($S).
+// on the loop's PATH, then signals its own parent: the loop, blocked waiting
+// for that very sleep. That is the pattern intervalsSlept uses too. A driver
+// that tracked the loop's PID would have to guess whether the PID still names
+// the loop after a spawn timeout, and on this host a reused PID can be a live
+// session (CLAUDE.md, Common gotchas). The driver's own sleeps use the real
+// binary ($S).
+//
+// STATED LIMIT, shared with intervalsSlept: the stub reads $PPID, then
+// signals it. Only if the spawn's timeout killed the loop in the microseconds
+// between those two steps AND the kernel handed that PID to another process
+// in the same window could the signal miss. Closing it would need a stop seam
+// in pd-happier-supervise itself; the timeout sits 10 s past the driver's
+// deadline so that, in a passing or failing run, the driver ends the loop
+// long before the timeout can fire.
 //
 // `live` is false once the driver's one shared deadline (DRIVER_SECONDS,
 // counted from the start) has passed, so every wait ends inside the spawn's
 // own timeout, whatever the number of phases.
 const DRIVER_SECONDS = 20;
-const REAL_SLEEP = spawnSync('bash', ['-c', 'command -v sleep'], { encoding: 'utf8' }).stdout.trim();
+// Resolved with the same scrubbed environment the scripts get (no inherited
+// BASH_ENV defining a `sleep` function), and required to be a real file, so
+// neither the driver nor the stub can resolve `sleep` back to the stub.
+const REAL_SLEEP = spawnSync('bash', ['-c', 'type -P sleep'], { env: spawnEnv(), encoding: 'utf8' }).stdout.trim();
+if (!path.isAbsolute(REAL_SLEEP) || !fs.existsSync(REAL_SLEEP)) {
+  throw new Error(`happier.test.js: no sleep binary on PATH (got ${JSON.stringify(REAL_SLEEP)})`);
+}
 const DRIVER_PROLOGUE = [
   `S="${REAL_SLEEP}"`,
   `live() { [ "$SECONDS" -lt ${DRIVER_SECONDS} ]; }`,
