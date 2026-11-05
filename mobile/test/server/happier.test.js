@@ -355,23 +355,40 @@ describe('pd-happier-supervise', () => {
   });
 
   it('picks up a sign-in that happens while it runs', () => {
-    // The first-login case: no restart and no hand-typed daemon start.
+    // The first-login case: no restart and no hand-typed daemon start. The
+    // sign-in lands after the loop has made passes without one, and the
+    // driver ends the loop once the daemon is started, so a slow runner
+    // cannot run out of time (it failed about 1 in 12 runs on a 1.5 s budget).
     fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
-    const child = spawnSync('bash', ['-c', `(sleep 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}") & exec bash "${SUPERVISOR}"`], {
+    const driver = [
+      'sup=$$',
+      `(sleep 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}"`,
+      // A status call AFTER the start means the pass that started the daemon
+      // has finished, log line included; stopping at "start" itself raced it.
+      // Bounded (10 s), so a loop that never gets there fails the test
+      // instead of holding the pipe open forever.
+      ` for _ in $(seq 500); do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; sleep 0.02; done || :`,
+      ` awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null || echo driver-timeout >> "${stubLog}"`,
+      ' kill -TERM "$sup") &',
+      `exec bash "${SUPERVISOR}"`,
+    ].join('\n');
+    const child = spawnSync('bash', ['-c', driver], {
       env: spawnEnv({
         HOME: home,
+        HAPPIER_HOME_DIR: path.join(home, '.happier'),
         PATH: `${stubBin}:${process.env.PATH}`,
         STUB_LOG: stubLog,
         STUB_STATUS: STATUS(true, false),
         PD_HAPPIER_INTERVAL: '0.1',
       }),
       encoding: 'utf8',
-      timeout: 1500,
+      timeout: 15000, // a safety bound only; the driver ends the loop
     });
+    expect(calls('driver-timeout')).toBe(0);
     expect(child.stderr).toContain('no Happier sign-in yet');
     expect(child.stderr).toContain('daemon started');
     expect(starts()).toBeGreaterThanOrEqual(1);
-  });
+  }, 20000);
 });
 
 // A status answer that names the profile it is about, as 0.2.20 does
@@ -536,8 +553,10 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     fs.writeFileSync(hv, PSTATUS(HV, true, true));
     const driver = [
       `L="${stubLog}"`,
-      // until the log holds at least $2 lines that are exactly $1
-      'w() { until [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null; do sleep 0.02; done; }',
+      // until the log holds at least $2 lines that are exactly $1; bounded
+      // (10 s each), so a loop that never gets there fails the test with
+      // "driver-timeout" in the log instead of holding the pipe open forever
+      'w() { local i; for i in $(seq 500); do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.02; done; echo driver-timeout >> "$L"; }',
       'n() { grep -cx -- status "$L" 2>/dev/null; true; }',
       'sup=$$',
       '(',
@@ -564,8 +583,9 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
         PD_HAPPIER_INTERVAL: '0.1',
       }),
       encoding: 'utf8',
-      timeout: 12000, // a safety bound only; the driver ends the loop
+      timeout: 45000, // a safety bound only; the driver ends the loop
     });
+    expect(calls('driver-timeout')).toBe(0);
     expect(res.stderr).toContain('could not tell which profile is active');
     const all = log();
     const stopped = all.indexOf('hv-stopped');
@@ -576,7 +596,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     expect(all.slice(stopped + 1, back).filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
     expect(all.slice(0, back)).not.toContain(`${HV}:start`);
     expect(all.slice(back)).toContain(`${HV}:start`);
-  }, 20000);
+  }, 60000);
 
   it('still supervises an extra when the default profile is signed out', () => {
     extra({ STUB_STATUS: PSTATUS('tower', false, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
