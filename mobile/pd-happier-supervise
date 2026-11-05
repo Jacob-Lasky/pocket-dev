@@ -109,6 +109,20 @@
 # profile (the default daemon already covers it, and touching it from here
 # would be touching the default daemon), and on any pass where the active
 # profile could not be read, because then that last check cannot be made.
+# Also skipped: a profile directory that is a symlink (it may be another
+# profile's files), and every extra when the environment carries a variable
+# that lets Happier pick the server or the daemon's state path itself.
+#
+# Two stated limits. (1) The active profile is read once per pass, from the
+# default daemon's status, so switching the active profile in the moment
+# between that read and an extra's turn makes that pass treat the new default
+# daemon as the extra. It then applies the same rules the default pass would
+# (start a stopped daemon, the newer-CLI restart) to the same daemon, without
+# the supervisor resume, and the next pass skips it as the active profile.
+# (2) The default daemon's pre-start clearing still covers every profile
+# directory, as it always has, so it can clear an extra's record first. It
+# only removes what no process in this container wrote (see
+# clear_stale_daemon_records), which an extra's own pass would remove too.
 #
 # Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
 # is not a number from 0.1 to 86400 falls back to 60, so a bad value cannot
@@ -156,7 +170,8 @@ say() {
 
 # A Happier server profile id this loop will pass to --server and use as a
 # directory name under servers/: a letter or digit first (so never an option,
-# ".", ".." or empty), then letters, digits, ".", "_" or "-".
+# ".", ".." or empty), then letters, digits, ".", "_" or "-". read_state hands
+# this same pattern to node, whose RegExp reads it identically.
 PROFILE_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 
 # The happier CLI for the profile of the current pass, as an argv array (an
@@ -452,7 +467,7 @@ read_state() {
   fi
   # SC2016: the single quotes are deliberate; ${a} below is a JS template, not bash.
   # shellcheck disable=SC2016
-  printf '%s' "$out" | PD_EXPECT_PROFILE="$SCOPE" node -e '
+  printf '%s' "$out" | PD_EXPECT_PROFILE="$SCOPE" PD_PROFILE_RE="$PROFILE_RE" node -e '
     let s = "";
     process.stdin.on("data", (d) => { s += d; }).on("end", () => {
       try {
@@ -463,7 +478,7 @@ read_state() {
         const id = j.server && j.server.activeServerId;
         const want = process.env.PD_EXPECT_PROFILE;
         if (want && id !== want) throw new Error("profile");
-        const p = typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) ? id : "-";
+        const p = typeof id === "string" && new RegExp(process.env.PD_PROFILE_RE).test(id) ? id : "-";
         const m = j.runtimeConvergence && j.runtimeConvergence.cliVersionMatches;
         const service = j.daemon && j.daemon.serviceManaged === true;
         const c = typeof m === "boolean" && !service ? String(m) : "unknown";
@@ -482,8 +497,10 @@ supervise_profile() {
   # id. Everything that differs between the two is named here: which
   # credential counts, which records may be cleared, and that only the default
   # daemon resumes the supervisor.
-  local state pair
+  local state pair signed_out
   if [ -n "$SCOPE" ]; then HP=(happier --server "$SCOPE"); else HP=(happier); fi
+  signed_out="not signed in to server profile $SCOPE (run 'happier --server $SCOPE auth login'); its daemon is not started"
+  [ -z "$SCOPE" ] && signed_out="not signed in to a Happier server (run 'happier auth login'); daemon not started"
   if [ -z "$SCOPE" ]; then
     ACTIVE="-"
     if ! compgen -G "$HAPPIER_HOME/servers/*/access.key" >/dev/null; then
@@ -492,8 +509,14 @@ supervise_profile() {
       return
     fi
   else
+    if [ -L "$HAPPIER_HOME/servers/$SCOPE" ]; then
+      # A symlinked profile can be another profile's files under a second name,
+      # the active one's included; the id check below cannot see that.
+      say symlink "server profile $SCOPE is a symlink, so it may be another profile's daemon; leaving it alone"
+      return
+    fi
     if [ ! -f "$HAPPIER_HOME/servers/$SCOPE/access.key" ]; then
-      say signed-out "not signed in to server profile $SCOPE (run 'happier --server $SCOPE auth login'); its daemon is not started"
+      say signed-out "$signed_out"
       return
     fi
     if [ "$ACTIVE" = "-" ]; then
@@ -557,11 +580,7 @@ supervise_profile() {
       fi
       ;;
     "false "*)
-      if [ -z "$SCOPE" ]; then
-        say signed-out "not signed in to a Happier server (run 'happier auth login'); daemon not started"
-      else
-        say signed-out "not signed in to server profile $SCOPE (run 'happier --server $SCOPE auth login'); its daemon is not started"
-      fi
+      say signed-out "$signed_out"
       ;;
     *)
       say unknown "could not read daemon status; retrying every ${INTERVAL}s"
@@ -574,14 +593,28 @@ supervise_profile() {
 EXTRAS=()
 # read -a splits on whitespace without globbing, which an unquoted expansion
 # would do; -d '' reads past newlines (a plain read stops at the first one), and
-# it then exits 1 at the end of input, which is expected.
-read -r -d '' -a extra_ids <<<"${PD_HAPPIER_EXTRA_SERVERS:-}" || :
+# it then exits 1 at the end of input, which is expected. CR counts as
+# whitespace, so a value pasted with Windows line endings is not silently lost.
+IFS=$' \t\r\n' read -r -d '' -a extra_ids <<<"${PD_HAPPIER_EXTRA_SERVERS:-}" || :
 for id in "${extra_ids[@]}"; do
   if ! [[ $id =~ $PROFILE_RE ]]; then
     echo "pocket-dev: happier: ignoring PD_HAPPIER_EXTRA_SERVERS entry '$id': not a plain profile id" >&2
     continue
   fi
   [[ " ${EXTRAS[*]} " == *" $id "* ]] || EXTRAS+=("$id")
+done
+# Happier lets these variables choose the server and the daemon's state path,
+# and HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID outranks --server for the state path
+# (0.2.20, persistence: daemonStateFile). With one inherited, `--server <id>`
+# could read one profile's status and start or stop another's daemon, so
+# extras are not supervised at all. Nothing in the container sets them
+# (checked 2026-11-05: this loop's environment carries no HAPPIER_ variable);
+# the CLI puts them into the environment of a daemon it starts, not into ours.
+for v in HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID HAPPIER_ACTIVE_SERVER_ID HAPPIER_SERVER_URL; do
+  if [ "${#EXTRAS[@]}" -gt 0 ] && [ -n "${!v-}" ]; then
+    echo "pocket-dev: happier: $v is set in this environment, so --server cannot be trusted to pick the daemon; not supervising PD_HAPPIER_EXTRA_SERVERS (${EXTRAS[*]})" >&2
+    EXTRAS=()
+  fi
 done
 
 while :; do

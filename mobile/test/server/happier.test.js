@@ -511,6 +511,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
   it.each([
     ['unreadable', 'not json'],
     ['naming no profile', STATUS(true, true)],
+    ['naming a profile that is not a plain id', PSTATUS('-x y', true, true)],
   ])('leaves every extra alone on a pass where the default status is %s', (_, status) => {
     // Without the active profile, "is this extra the default daemon" cannot be
     // answered, so nothing is done to it.
@@ -530,7 +531,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     fs.writeFileSync(hv, PSTATUS(HV, true, true));
     const res = spawnSync(
       'bash',
-      ['-c', `(sleep 0.4; printf 'not json' > "${def}"; sleep 0.6; printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}") & exec bash "${SUPERVISOR}"`],
+      ['-c', `(sleep 0.4; printf 'not json' > "${def}"; sleep 0.6; printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "${stubLog}") & exec bash "${SUPERVISOR}"`],
       {
         env: spawnEnv({
           HOME: home,
@@ -548,6 +549,11 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     );
     expect(calls(`${HV}:status`)).toBeGreaterThanOrEqual(1);
     expect(res.stderr).toContain('could not tell which profile is active');
+    // Several passes ran after the extra looked stopped, so "no start" is
+    // about those passes, not only the healthy first one.
+    const after = log().slice(log().indexOf('hv-stopped') + 1);
+    expect(log()).toContain('hv-stopped');
+    expect(after.filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
     expect(calls(`${HV}:start`)).toBe(0);
   });
 
@@ -572,6 +578,38 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
       expect(res.stderr.split('\n').filter((l) => l.includes(`entry '${bad}'`))).toHaveLength(1);
     }
   });
+
+  it('reads ids separated by Windows line endings', () => {
+    signInExtra('second');
+    const res = extra({
+      PD_HAPPIER_EXTRA_SERVERS: `${HV}\r\nsecond\r\n`,
+      STUB_STATUS_hypervisor: PSTATUS(HV, true, true),
+      STUB_STATUS_second: PSTATUS('second', true, true),
+    });
+    expect(log()).toEqual(['status', `${HV}:status`, 'second:status']);
+    expect(res.stderr).not.toContain('ignoring');
+  });
+
+  it('leaves alone an extra whose profile directory is a symlink, which may be another profile', () => {
+    // servers/hypervisor -> servers/tower: the id differs from the active one,
+    // but every file is the default daemon's.
+    fs.rmSync(path.join(home, `.happier/servers/${HV}`), { recursive: true });
+    fs.symlinkSync(path.join(home, '.happier/servers/tower'), path.join(home, `.happier/servers/${HV}`));
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(log()).toEqual(['status']);
+    expect(res.stderr).toContain('server profile hypervisor is a symlink');
+  });
+
+  it.each(['HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL'])(
+    'supervises no extra when %s could override --server, and still the default daemon',
+    (name) => {
+      // HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID outranks --server for the daemon's
+      // state path, so --server could read one profile and start another.
+      const res = extra({ [name]: 'tower', STUB_STATUS: PSTATUS('tower', true, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+      expect(log()).toEqual(['status', 'start']);
+      expect(res.stderr.match(new RegExp(`${name} is set`, 'g'))).toHaveLength(1);
+    },
+  );
 
   it('supervises a repeated id once, and several ids each', () => {
     signInExtra('second');
