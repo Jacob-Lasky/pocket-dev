@@ -233,7 +233,7 @@ test('a page reload does not turn read sessions unread', async ({ pdServerClaude
   expect(await stateOf(page, 0)).toBe('read');
 });
 
-test('a reconnect does not turn a read BACKGROUND session unread', async ({ pdServer, page }) => {
+test('a reconnect does not turn a read BACKGROUND session unread', async ({ pdServerClaudeStub, page }) => {
   // The sharp version of the test above, and a real reported bug the loose one
   // missed. After a reload the active session is row 0, and the active session
   // is never unread by definition, so asserting on it proves nothing. The
@@ -246,19 +246,49 @@ test('a reconnect does not turn a read BACKGROUND session unread', async ({ pdSe
   // Made deterministic by stalling the metadata poll after bootstrap, so the
   // client cannot quietly correct itself before the assertion. Without that
   // this is a race, and racy assertions have cost this repo a day before.
-  await gotoTest(page, pdServer);
+  await gotoTest(page, pdServerClaudeStub);
   await waitForConnection(page);
-  const base = 'pdtest-' + pdServer.port;
+  const base = 'pdstub-' + pdServerClaudeStub.port;
   await newSession(page);
   await waitForConnection(page);
 
   // Give session 2 something in its replay buffer, then leave it read. It has
   // to be session 2: after a reload the first session becomes the active one.
   await sendAndWaitForEcho(page, 'bytes in the replay buffer');
+  // A shell's byte-based unread counter correctly counts even tmux repaints.
+  // Use a known finished Claude turn so a delayed echo/resize/refresh cannot
+  // invalidate 'already read' between the acknowledgement and bootstrap.
+  const uuid2 = await pdServerClaudeStub.uuidFor(`${base}-2`);
+  await pdServerClaudeStub.writeTranscript(uuid2, [finishedTurn]);
+  await expect.poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-2`)?.status)
+    .toBe('idle');
   await switchToRow(page, 0);
   await expect
     .poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-2`)?.unread, { timeout: 20000 })
     .toBe(false);
+
+  // Exercise that precondition with real PTY output after the read ack,
+  // without adding input or a conversation turn. This made the old cat fixture
+  // deterministically report 'waiting' on reload (#117).
+  const lastOutputAt = (await sessionRows(page)).find(r => r.id === `${base}-2`).lastOutputAt;
+  const refresh = await page.request.post(`${pdServerClaudeStub.baseURL}/refresh`, {
+    data: { session: `${base}-2` },
+  });
+  expect(await refresh.json()).toEqual({ ok: true });
+  await expect.poll(async () => (await sessionRows(page)).find(r => r.id === `${base}-2`).lastOutputAt)
+    .toBeGreaterThan(lastOutputAt);
+  expect((await sessionRows(page)).find(r => r.id === `${base}-2`).unread).toBe(false);
+
+  // Wait for the background replay itself: checking before its bytes arrive
+  // would let the original client-side unread-on-output bug pass.
+  let backgroundReplayed = false;
+  page.on('websocket', ws => {
+    if (new URL(ws.url()).searchParams.get('session') !== `${base}-2`) return;
+    ws.on('framereceived', ({ payload }) => {
+      const frame = JSON.parse(String(payload));
+      if (frame.type === 'replay' && frame.data.includes('bytes in the replay buffer')) backgroundReplayed = true;
+    });
+  });
 
   let getsAllowed = 1;
   await page.route('**/sessions', async (route) => {
@@ -271,6 +301,7 @@ test('a reconnect does not turn a read BACKGROUND session unread', async ({ pdSe
   await waitForConnection(page);
   await openList(page);
   await expect.poll(() => rowCount(page)).toBe(2);
+  await expect.poll(() => backgroundReplayed).toBe(true);
 
   // Row 1 is session 2: off screen, replayed, and already read.
   expect(await stateOf(page, 1)).toBe('read');

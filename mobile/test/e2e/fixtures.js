@@ -502,15 +502,10 @@ export async function sessionRows(page) {
   return page.evaluate(async () => (await (await fetch('/sessions')).json()));
 }
 
-// Type a marker into the input bar, click Send, and wait for the marker to
-// actually arrive back in xterm.js's terminal DOM (proves the full PTY
-// roundtrip: POST /send → tmux → bash → cat → echo → ws → term.write).
-//
-// Replaces the older `fill + click + waitForTimeout(500)` pattern, which
-// was racing cat-startup on CI runners. There is no "fixture is ready"
-// signal we can wait for at fixture-construction time (the only synchronous
-// proof tmux + bash + cat are all live is seeing input echo back), so we
-// do the proof at test time, per send.
+// Type a marker into the input bar, click Send, and wait for it to arrive
+// through the PTY/WebSocket path in the terminal DOM. The TTY can echo before
+// the inner app does, so this does not prove the app is ready or all output has
+// drained. Tests that need a stable unread state must establish it separately.
 //
 // Whitespace is collapsed before comparison: long lines wrap in xterm.js,
 // so the visible text contains line breaks splitting the marker, but those
