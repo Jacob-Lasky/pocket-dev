@@ -34,3 +34,6 @@ node_modules
 mobile/test-artifacts/
 mobile/test-results/
 mobile/playwright-report/
+
+# Claude Code native worktrees (isolated agent checkouts inside this repo)
+.claude/worktrees/

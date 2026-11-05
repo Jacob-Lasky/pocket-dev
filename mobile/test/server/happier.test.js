@@ -99,17 +99,26 @@ let tmproot, home, skel, cache, stubBin, stubLog;
 // and `daemon stop` record themselves and exit $STUB_START_EXIT / $STUB_STOP_EXIT.
 // `daemon start` also logs "start-saw-record" when $STUB_RECORD or its .lock
 // still exists at that moment, so a test can tell cleared-before-start from after.
+// A leading `--server <id>` (an extra profile) is logged as "<id>:<call>" and
+// reads $STUB_STATUS_<id>, $STUB_STATUS_EXIT_<id>, $STUB_START_EXIT_<id> and
+// $STUB_STOP_EXIT_<id> instead, so the default daemon's counts never include
+// an extra's. Any other argument shape exits 9 and is logged as "bad-args".
+// $STUB_STATUS_FILE (or $STUB_STATUS_FILE_<id>), when set, names a file whose
+// CURRENT contents are the status, so a test can change it while the loop runs.
 function writeStubHappier() {
   fs.mkdirSync(stubBin, { recursive: true });
   fs.writeFileSync(
     path.join(stubBin, 'happier'),
     [
       '#!/bin/bash',
+      'p="" s=""',
+      'if [ "${1:-}" = "--server" ] && [ $# -ge 2 ]; then p="$2:"; s="_$2"; shift 2; fi',
+      'v() { local n="$1$s" f="$1_FILE$s"; if [ -n "${!f-}" ]; then cat -- "${!f}"; else printf "%s" "${!n-}"; fi; }',
       'case "$*" in',
-      '  "daemon status --json") echo status >> "$STUB_LOG"; printf "%s" "$STUB_STATUS"; exit "${STUB_STATUS_EXIT:-0}" ;;',
-      '  "daemon start") echo start >> "$STUB_LOG"; [ -n "${STUB_RECORD:-}" ] && { [ -e "$STUB_RECORD" ] || [ -e "$STUB_RECORD.lock" ]; } && echo start-saw-record >> "$STUB_LOG"; exit "${STUB_START_EXIT:-0}" ;;',
-      '  "daemon stop") echo stop >> "$STUB_LOG"; exit "${STUB_STOP_EXIT:-0}" ;;',
-      '  *) exit 9 ;;',
+      '  "daemon status --json") echo "${p}status" >> "$STUB_LOG"; v STUB_STATUS; e=$(v STUB_STATUS_EXIT); exit "${e:-0}" ;;',
+      '  "daemon start") echo "${p}start" >> "$STUB_LOG"; [ -z "$p" ] && [ -n "${STUB_RECORD:-}" ] && { [ -e "$STUB_RECORD" ] || [ -e "$STUB_RECORD.lock" ]; } && echo start-saw-record >> "$STUB_LOG"; e=$(v STUB_START_EXIT); exit "${e:-0}" ;;',
+      '  "daemon stop") echo "${p}stop" >> "$STUB_LOG"; e=$(v STUB_STOP_EXIT); exit "${e:-0}" ;;',
+      '  *) echo bad-args >> "$STUB_LOG"; exit 9 ;;',
       'esac',
       '',
     ].join('\n'),
@@ -147,6 +156,56 @@ function supervise(env, opts = {}) {
 const calls = (kind) =>
   fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l === kind).length : 0;
 const starts = () => calls('start');
+
+// Test drivers: a background subshell that changes the stub's answers as the
+// loop works and then ends the loop. The DRIVER never signals anything. It
+// creates $STUB_STOP, and the loop's next `sleep` between passes, a stub first
+// on the loop's PATH, then signals its own parent: the loop, blocked waiting
+// for that very sleep. That is the pattern intervalsSlept uses too. A driver
+// that tracked the loop's PID would have to guess whether the PID still names
+// the loop after a spawn timeout, and on this host a reused PID can be a live
+// session (CLAUDE.md, Common gotchas). The driver's own sleeps use the real
+// binary ($S).
+//
+// STATED LIMIT, shared with intervalsSlept: the stub reads $PPID, then
+// signals it. Only if the spawn's timeout killed the loop in the microseconds
+// between those two steps AND the kernel handed that PID to another process
+// in the same window could the signal miss. Closing it would need a stop seam
+// in pd-happier-supervise itself; the timeout sits 10 s past the driver's
+// deadline so that, in a passing or failing run, the driver ends the loop
+// long before the timeout can fire.
+//
+// `live` is false once the driver's one shared deadline (DRIVER_SECONDS,
+// counted from the start) has passed, so every wait ends inside the spawn's
+// own timeout, whatever the number of phases.
+const DRIVER_SECONDS = 20;
+// Resolved with the same scrubbed environment the scripts get (no inherited
+// BASH_ENV defining a `sleep` function), and required to be a real file, so
+// neither the driver nor the stub can resolve `sleep` back to the stub.
+const REAL_SLEEP = spawnSync('bash', ['-c', 'type -P sleep'], { env: spawnEnv(), encoding: 'utf8' }).stdout.trim();
+if (!path.isAbsolute(REAL_SLEEP) || !fs.existsSync(REAL_SLEEP)) {
+  throw new Error(`happier.test.js: no sleep binary on PATH (got ${JSON.stringify(REAL_SLEEP)})`);
+}
+const DRIVER_PROLOGUE = [
+  `S="${REAL_SLEEP}"`,
+  `live() { [ "$SECONDS" -lt ${DRIVER_SECONDS} ]; }`,
+  'stop_loop() { : > "$STUB_STOP"; }',
+].join('\n');
+// The spawn's timeout: past the driver's deadline, so a driver that gives up
+// still ends the loop itself and the test sees why.
+const DRIVER_SPAWN_TIMEOUT = (DRIVER_SECONDS + 10) * 1000;
+
+// The stub `sleep` for a driven loop, and the environment that wires it up.
+function driverEnv() {
+  const bin = path.join(tmproot, 'stopbin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(
+    path.join(bin, 'sleep'),
+    `#!/bin/bash\nif [ -e "$STUB_STOP" ]; then kill -TERM "$PPID"; exit 0; fi\nexec "${REAL_SLEEP}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  return { PATH: `${bin}:${stubBin}:${process.env.PATH}`, STUB_STOP: path.join(tmproot, 'stop') };
+}
 
 const signIn = () => {
   fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
@@ -346,22 +405,345 @@ describe('pd-happier-supervise', () => {
   });
 
   it('picks up a sign-in that happens while it runs', () => {
-    // The first-login case: no restart and no hand-typed daemon start.
+    // The first-login case: no restart and no hand-typed daemon start. The
+    // sign-in lands after the loop has made passes without one, and the
+    // driver ends the loop once the daemon is started, so a slow runner
+    // cannot run out of time (it failed about 1 in 12 runs on a 1.5 s budget).
     fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
-    const child = spawnSync('bash', ['-c', `(sleep 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}") & exec bash "${SUPERVISOR}"`], {
+    const driver = [
+      DRIVER_PROLOGUE,
+      `("$S" 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}"`,
+      // A status call AFTER the start means the pass that started the daemon
+      // has finished, log line included; stopping at "start" itself raced it.
+      // Bounded by the driver's deadline, so a loop that never gets there
+      // fails the test instead of holding the pipe open forever.
+      ` while live; do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; "$S" 0.02; done`,
+      ` awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null || echo driver-timeout >> "${stubLog}"`,
+      ' stop_loop) &',
+      `exec bash "${SUPERVISOR}"`,
+    ].join('\n');
+    const child = spawnSync('bash', ['-c', driver], {
       env: spawnEnv({
         HOME: home,
-        PATH: `${stubBin}:${process.env.PATH}`,
+        HAPPIER_HOME_DIR: path.join(home, '.happier'),
         STUB_LOG: stubLog,
         STUB_STATUS: STATUS(true, false),
         PD_HAPPIER_INTERVAL: '0.1',
+        ...driverEnv(),
       }),
       encoding: 'utf8',
-      timeout: 1500,
+      timeout: DRIVER_SPAWN_TIMEOUT, // a safety bound only; the driver ends the loop
     });
+    expect(child.error).toBeUndefined(); // not ended by the spawn's timeout
+    expect(calls('driver-timeout')).toBe(0);
     expect(child.stderr).toContain('no Happier sign-in yet');
     expect(child.stderr).toContain('daemon started');
     expect(starts()).toBeGreaterThanOrEqual(1);
+  }, DRIVER_SPAWN_TIMEOUT + 10000);
+});
+
+// A status answer that names the profile it is about, as 0.2.20 does
+// (server.activeServerId; with `--server <id>` it is that id).
+const PSTATUS = (id, authenticated, running, extra = {}) =>
+  JSON.stringify({ server: { activeServerId: id }, auth: { authenticated }, daemon: { running }, ...extra });
+
+describe('pd-happier-supervise keeps extra server profiles alive', () => {
+  // A daemon serves one server profile, and plain `happier daemon ...` acts on
+  // the active one. PD_HAPPIER_EXTRA_SERVERS names further profiles (Tower's
+  // `hypervisor` relay, #114) whose daemons the loop runs through
+  // `happier --server <id> daemon ...`, with the default daemon's rules and
+  // without ever touching the default daemon. The stub logs an extra's calls
+  // as "<id>:<call>", so calls('start') below counts the DEFAULT daemon only.
+  const HV = 'hypervisor';
+  const signInExtra = (id = HV) => {
+    fs.mkdirSync(path.join(home, `.happier/servers/${id}`), { recursive: true });
+    fs.writeFileSync(path.join(home, `.happier/servers/${id}/access.key`), 'x');
+  };
+  const extra = (env = {}, opts = {}) =>
+    supervise({ PD_HAPPIER_EXTRA_SERVERS: HV, STUB_STATUS: PSTATUS('tower', true, true), ...env }, opts);
+  const log = () => (fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter(Boolean) : []);
+  const looping = { PD_HAPPIER_ONCE: '0', PD_HAPPIER_INTERVAL: '0.1' };
+
+  beforeEach(() => {
+    signIn();
+    signInExtra();
+  });
+
+  it('starts a stopped extra daemon through --server, and leaves the default daemon alone', () => {
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(calls(`${HV}:start`)).toBe(1);
+    expect(starts()).toBe(0);
+    expect(calls('stop')).toBe(0);
+    expect(calls('bad-args')).toBe(0);
+    expect(res.stderr).toContain(`happier: daemon running`);
+    expect(res.stderr).toContain(`happier [${HV}]: daemon started`);
+  });
+
+  it('checks the default daemon first and does not start it on the extra\'s account', () => {
+    // A stopped default daemon is still started, once, by the plain CLI.
+    const res = extra({ STUB_STATUS: PSTATUS('tower', true, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, true) });
+    expect(log()).toEqual(['status', 'start', `${HV}:status`]);
+    expect(res.stderr).toContain(`happier [${HV}]: daemon running`);
+  });
+
+  it('leaves a running extra daemon alone', () => {
+    extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, true) });
+    expect(calls(`${HV}:start`)).toBe(0);
+    expect(calls(`${HV}:stop`)).toBe(0);
+  });
+
+  it('logs each profile\'s steady state once, even when both are in the same state', () => {
+    // One "last state" shared by every profile would print the default's line
+    // and swallow the extra's (same key), or alternate them on every pass.
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, true), ...looping }, { timeout: 1500 });
+    expect(calls(`${HV}:status`)).toBeGreaterThanOrEqual(3);
+    expect(res.stderr.match(/happier: daemon running/g)).toHaveLength(1);
+    expect(res.stderr.match(/happier \[hypervisor\]: daemon running/g)).toHaveLength(1);
+  });
+
+  it.each([
+    ['unreadable status', { STUB_STATUS_hypervisor: 'not json' }],
+    ['a failed status call', { STUB_STATUS_hypervisor: PSTATUS(HV, true, false), STUB_STATUS_EXIT_hypervisor: '1' }],
+    ['JSON without the booleans', { STUB_STATUS_hypervisor: JSON.stringify({ server: { activeServerId: HV } }) }],
+    // --server not taking (an answer about the active profile, or none named)
+    // would make the "stopped" daemon the default one.
+    ['an answer about another profile', { STUB_STATUS_hypervisor: PSTATUS('tower', true, false) }],
+    ['an answer naming no profile', { STUB_STATUS_hypervisor: STATUS(true, false) }],
+  ])('never starts an extra on %s', (_, env) => {
+    const res = extra(env);
+    expect(calls(`${HV}:start`)).toBe(0);
+    expect(calls(`${HV}:stop`)).toBe(0);
+    expect(res.stderr).toContain(`happier [${HV}]: could not read daemon status`);
+  });
+
+  it('says once that an extra with no sign-in is not signed in, and never calls the CLI for it', () => {
+    fs.rmSync(path.join(home, `.happier/servers/${HV}`), { recursive: true });
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, false), ...looping }, { timeout: 1500 });
+    expect(calls('status')).toBeGreaterThanOrEqual(3);
+    expect(log().filter((l) => l.startsWith(`${HV}:`))).toEqual([]);
+    expect(res.stderr.match(/not signed in to server profile hypervisor/g)).toHaveLength(1);
+  });
+
+  it('says once that an extra its status calls signed out is not signed in, and never starts it', () => {
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, false, false), ...looping }, { timeout: 1500 });
+    expect(calls(`${HV}:status`)).toBeGreaterThanOrEqual(3);
+    expect(calls(`${HV}:start`)).toBe(0);
+    expect(res.stderr.match(/not signed in to server profile hypervisor/g)).toHaveLength(1);
+  });
+
+  it('reports an extra whose start fails, and retries it next pass', () => {
+    const res = extra(
+      { STUB_STATUS_hypervisor: PSTATUS(HV, true, false), STUB_START_EXIT_hypervisor: '1', ...looping },
+      { timeout: 1500 },
+    );
+    expect(calls(`${HV}:start`)).toBeGreaterThanOrEqual(2);
+    expect(res.stderr.match(/happier \[hypervisor\]: daemon is not running and did not start/g)).toHaveLength(1);
+  });
+
+  describe('moving an extra daemon onto a new CLI', () => {
+    const CONV = (id, o) => JSON.stringify({ ...JSON.parse(CONVERGENCE(o)), server: { activeServerId: id } });
+
+    it('stops and starts only that profile\'s daemon', () => {
+      const res = extra({ STUB_STATUS_hypervisor: CONV(HV) });
+      expect(calls(`${HV}:stop`)).toBe(1);
+      expect(calls(`${HV}:start`)).toBe(1);
+      expect(calls('stop')).toBe(0);
+      expect(starts()).toBe(0);
+      expect(res.stderr).toContain(`happier [${HV}]: daemon restarted onto CLI 0.2.17 (was 0.2.16)`);
+    });
+
+    it('keeps the once-per-pair rule per profile', () => {
+      // Both daemons on the same old CLI: each is restarted once, and one
+      // profile's completed restart does not stop the other's.
+      const res = extra(
+        { STUB_STATUS: CONV('tower'), STUB_STATUS_hypervisor: CONV(HV), ...looping },
+        { timeout: 1500 },
+      );
+      expect(calls('stop')).toBe(1);
+      expect(calls(`${HV}:stop`)).toBe(1);
+      expect(res.stderr.match(/not restarting again/g)).toHaveLength(2);
+    });
+
+    it('never moves an extra onto an older CLI', () => {
+      extra({ STUB_STATUS_hypervisor: CONV(HV, { daemon: '0.2.17', cli: '0.2.16' }) });
+      expect(calls(`${HV}:stop`)).toBe(0);
+    });
+  });
+
+  it('skips an extra that is the active profile: that daemon is the default one', () => {
+    const res = extra({ STUB_STATUS: PSTATUS(HV, true, true), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(log()).toEqual(['status']);
+    expect(res.stderr).toContain('profile hypervisor is the active profile');
+  });
+
+  it.each([
+    ['unreadable', 'not json'],
+    ['naming no profile', STATUS(true, true)],
+    ['naming a profile that is not a plain id', PSTATUS('-x y', true, true)],
+  ])('leaves every extra alone on a pass where the default status is %s', (_, status) => {
+    // Without the active profile, "is this extra the default daemon" cannot be
+    // answered, so nothing is done to it.
+    const res = extra({ STUB_STATUS: status, STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(log()).toEqual(['status']);
+    expect(res.stderr).toContain('could not tell which profile is active');
+  });
+
+  it('forgets the active profile between passes, so a stale one never vouches for an extra', () => {
+    // Phases are driven by what the loop has DONE (lines in the stub log), not
+    // by wall-clock sleeps, so a slow runner cannot skip a phase or run out of
+    // passes. 1: a pass learns the active profile (tower) and visits the
+    // extra. 2: the default status becomes unreadable, and a full pass sees
+    // it. 3: the extra looks stopped, and a full blind pass sees both. Had the
+    // active profile from phase 1 been kept, phase 3 would start the extra on a
+    // pass that could not check it is not the default daemon. 4: the default
+    // status is readable again and the extra must now be started, so phase 3
+    // skipped it for that reason, not because extras stopped being visited.
+    const def = path.join(tmproot, 'status-default');
+    const hv = path.join(tmproot, 'status-hv');
+    fs.writeFileSync(def, PSTATUS('tower', true, true));
+    fs.writeFileSync(hv, PSTATUS(HV, true, true));
+    const driver = [
+      `L="${stubLog}"`,
+      // until the log holds at least $2 lines that are exactly $1; bounded by
+      // the driver's deadline, so a loop that never gets there fails the test
+      // with "driver-timeout" in the log instead of holding the pipe open
+      DRIVER_PROLOGUE,
+      'w() { while live; do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; "$S" 0.02; done; echo driver-timeout >> "$L"; return 1; }',
+      'n() { grep -cx -- status "$L" 2>/dev/null; true; }',
+      '(',
+      `  w "${HV}:status" 1`,
+      `  printf 'not json' > "${def}"`,
+      '  k=$(n); w status $((k + 2))',
+      `  printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "$L"`,
+      '  k=$(n); w status $((k + 2))',
+      `  echo def-back >> "$L"; printf '%s' '${PSTATUS('tower', true, true)}' > "${def}"`,
+      // A default status call after the start means the pass that started the
+      // extra has finished; stopping at the start line itself would race it.
+      `  w "${HV}:start" 1 && { k=$(n); w status $((k + 1)); }`,
+      '  stop_loop',
+      ') &',
+      `exec bash "${SUPERVISOR}"`,
+    ].join('\n');
+    const res = spawnSync('bash', ['-c', driver], {
+      env: spawnEnv({
+        HOME: home,
+        HAPPIER_HOME_DIR: path.join(home, '.happier'),
+        ...driverEnv(),
+        STUB_LOG: stubLog,
+        STUB_STATUS_FILE: def,
+        STUB_STATUS_FILE_hypervisor: hv,
+        PD_HAPPIER_EXTRA_SERVERS: HV,
+        PD_HAPPIER_INTERVAL: '0.1',
+      }),
+      encoding: 'utf8',
+      timeout: DRIVER_SPAWN_TIMEOUT, // a safety bound only; the driver ends the loop
+    });
+    expect(res.error).toBeUndefined(); // not ended by the spawn's timeout
+    expect(calls('driver-timeout')).toBe(0);
+    expect(res.stderr).toContain('could not tell which profile is active');
+    const all = log();
+    const stopped = all.indexOf('hv-stopped');
+    const back = all.indexOf('def-back');
+    expect(all.indexOf(`${HV}:status`)).toBeGreaterThan(-1);
+    expect(all.indexOf(`${HV}:status`)).toBeLessThan(stopped); // phase 1 really learned tower
+    expect(back).toBeGreaterThan(stopped);
+    expect(all.slice(stopped + 1, back).filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
+    expect(all.slice(0, back)).not.toContain(`${HV}:start`);
+    expect(all.slice(back)).toContain(`${HV}:start`);
+  }, DRIVER_SPAWN_TIMEOUT + 10000);
+
+  it('still supervises an extra when the default profile is signed out', () => {
+    extra({ STUB_STATUS: PSTATUS('tower', false, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(starts()).toBe(0);
+    expect(calls(`${HV}:start`)).toBe(1);
+  });
+
+  it('ignores an entry that is not a plain profile id, once, and never passes it on', () => {
+    // A glob, an option, a path and a dot each must reach neither the CLI nor
+    // a path under servers/. The glob would expand against the cwd if the list
+    // were split by an unquoted expansion.
+    fs.writeFileSync(path.join(tmproot, 'hypervisor'), '');
+    const res = extra(
+      { PD_HAPPIER_EXTRA_SERVERS: '* -x ../tower .. hyper/visor', STUB_STATUS_hypervisor: PSTATUS(HV, true, false), ...looping },
+      { timeout: 1500, cwd: tmproot },
+    );
+    expect(log().filter((l) => l.includes(':'))).toEqual([]);
+    expect(calls('bad-args')).toBe(0);
+    for (const bad of ['*', '-x', '../tower', '..', 'hyper/visor']) {
+      expect(res.stderr.split('\n').filter((l) => l.includes(`entry '${bad}'`))).toHaveLength(1);
+    }
+  });
+
+  it('reads ids separated by Windows line endings', () => {
+    signInExtra('second');
+    const res = extra({
+      PD_HAPPIER_EXTRA_SERVERS: `${HV}\r\nsecond\r\n`,
+      STUB_STATUS_hypervisor: PSTATUS(HV, true, true),
+      STUB_STATUS_second: PSTATUS('second', true, true),
+    });
+    expect(log()).toEqual(['status', `${HV}:status`, 'second:status']);
+    expect(res.stderr).not.toContain('ignoring');
+  });
+
+  it('leaves alone an extra whose profile directory is a symlink, which may be another profile', () => {
+    // servers/hypervisor -> servers/tower: the id differs from the active one,
+    // but every file is the default daemon's.
+    fs.rmSync(path.join(home, `.happier/servers/${HV}`), { recursive: true });
+    fs.symlinkSync(path.join(home, '.happier/servers/tower'), path.join(home, `.happier/servers/${HV}`));
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+    expect(log()).toEqual(['status']);
+    expect(res.stderr).toContain('server profile hypervisor is a symlink');
+  });
+
+  it.each(['HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL'])(
+    'supervises no extra when %s could override --server, and still the default daemon',
+    (name) => {
+      // HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID outranks --server for the daemon's
+      // state path, so --server could read one profile and start another.
+      const res = extra({ [name]: 'tower', STUB_STATUS: PSTATUS('tower', true, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
+      expect(log()).toEqual(['status', 'start']);
+      expect(res.stderr.match(new RegExp(`${name} is set`, 'g'))).toHaveLength(1);
+    },
+  );
+
+  it('supervises a repeated id once, and several ids each', () => {
+    signInExtra('second');
+    extra({
+      PD_HAPPIER_EXTRA_SERVERS: ` ${HV}\t${HV}\n second `,
+      STUB_STATUS_hypervisor: PSTATUS(HV, true, true),
+      STUB_STATUS_second: PSTATUS('second', true, false),
+    });
+    expect(log()).toEqual(['status', `${HV}:status`, 'second:status', 'second:start']);
+  });
+
+  it('clears a previous container\'s record in that profile only, and none in the default one', () => {
+    const BOOT = 1_800_000_000;
+    const plantIn = (id) => {
+      const rec = path.join(home, `.happier/servers/${id}/daemon.state.json`);
+      fs.writeFileSync(rec, JSON.stringify({ pid: NO_SUCH_PID }));
+      fs.writeFileSync(`${rec}.lock`, String(NO_SUCH_PID));
+      for (const f of [rec, `${rec}.lock`]) fs.utimesSync(f, BOOT - 60, BOOT - 60);
+      return rec;
+    };
+    const towerRec = plantIn('tower');
+    const hvRec = plantIn(HV);
+    const res = extra({ STUB_STATUS_hypervisor: PSTATUS(HV, true, false), PD_HAPPIER_BOOT_EPOCH: String(BOOT) });
+    expect(fs.existsSync(hvRec)).toBe(false);
+    expect(fs.existsSync(`${hvRec}.lock`)).toBe(false);
+    expect(fs.existsSync(towerRec)).toBe(true);
+    expect(fs.existsSync(`${towerRec}.lock`)).toBe(true);
+    expect(calls(`${HV}:start`)).toBe(1);
+    expect(res.stderr).toContain(`cleared a daemon record from a previous container (${hvRec}`);
+  });
+
+  it('changes nothing when the variable is unset or blank', () => {
+    for (const v of [undefined, '', '  \t ']) {
+      fs.rmSync(stubLog, { force: true });
+      const env = { STUB_STATUS: PSTATUS('tower', true, true), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) };
+      if (v !== undefined) env.PD_HAPPIER_EXTRA_SERVERS = v;
+      supervise(env);
+      expect(log()).toEqual(['status']);
+    }
   });
 });
 
@@ -792,6 +1174,25 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
     supervise(resumeEnv({ STUB_STATUS: STATUS(true, false) }));
     expect(starts()).toBe(1);
     expect(resumes()).toHaveLength(1);
+  });
+
+  it.each([
+    ['running', PSTATUS('hypervisor', true, true)],
+    ['just started', PSTATUS('hypervisor', true, false)],
+  ])('does not run it for an extra profile\'s daemon (%s) while the default one is down', (_name, extraStatus) => {
+    // The supervisor is a session on the active profile's relay; an extra
+    // daemon coming up says nothing about that one.
+    fs.mkdirSync(path.join(home, '.happier/servers/hypervisor'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.happier/servers/hypervisor/access.key'), 'x');
+    supervise(
+      resumeEnv({
+        PD_HAPPIER_EXTRA_SERVERS: 'hypervisor',
+        STUB_STATUS: PSTATUS('tower', false, false),
+        STUB_STATUS_hypervisor: extraStatus,
+      }),
+    );
+    expect(calls('hypervisor:status')).toBe(1);
+    expect(resumes()).toHaveLength(0);
   });
 
   it.each([

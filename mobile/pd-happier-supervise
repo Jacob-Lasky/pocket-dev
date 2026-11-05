@@ -90,9 +90,51 @@
 # Logging is on STATE CHANGES only, to stderr (the container log); stdout
 # belongs to whoever started us and entrypoint.sh points it at /dev/null.
 #
+# IT ALSO KEEPS EXTRA SERVER PROFILES' DAEMONS ALIVE, when asked to. A Happier
+# daemon serves ONE server profile (~/.happier/servers/<id>/), and the plain
+# `happier daemon ...` calls above all act on the ACTIVE profile. A machine
+# paired with a second relay (Tower's `hypervisor` profile, 2026-11-05) needs a
+# second daemon, and the CLI's way to keep that one up is
+# `happier --server <id> service install`, which needs systemd too. So
+# PD_HAPPIER_EXTRA_SERVERS (whitespace-separated profile ids, empty by default)
+# names profiles this loop supervises ALONGSIDE the default daemon, each through
+# `happier --server <id> daemon ...`. `--server` is a per-invocation prefix that
+# the CLI documents as "no persistence", so the active profile never changes.
+# Each extra gets the default daemon's rules: status from the JSON (and it must
+# name that profile, or it is unknown), never a start on an unknown answer,
+# stale-record clearing limited to servers/<id>/, the newer-CLI restart, and the
+# environment this loop inherited. It does NOT get the supervisor resume, which
+# belongs to the default daemon. An extra is skipped, with one log line, when it
+# is not signed in, when its id is not a plain profile id, when it IS the active
+# profile (the default daemon already covers it, and touching it from here
+# would be touching the default daemon), and on any pass where the active
+# profile could not be read, because then that last check cannot be made.
+# Also skipped: a profile directory that is a symlink (it may be another
+# profile's files), and every extra when the environment carries a variable
+# that lets Happier pick the server or the daemon's state path itself.
+#
+# Three stated limits, none with a live instance (2026-11-05). (1) The active
+# profile is read once per pass, from the default daemon's status, so
+# switching the active profile in the moment between that read and an
+# extra's turn lets that pass act on the newly active daemon as if it were the
+# extra: start it if stopped, or stop and start it onto the CLI on PATH if it
+# reports an older one. The default pass has had the same window between its
+# own status read and its stop or start. A stop keeps sessions alive; the next
+# pass skips that profile as the active one. (2) The default daemon's
+# pre-start clearing still covers every profile directory, as it always has,
+# so it can clear an extra's record first. It removes only records it judges
+# written before this container started, never a daemon live in this
+# container, and it assumes this container is the only user of ~/.happier
+# (see clear_stale_daemon_records: its clock-step margin and that
+# assumption), the same records an extra's own pass would remove. (3) The default daemon follows whatever its
+# environment tells the CLI, as it always has: the scope variables that stop
+# extras below also steer the plain `happier daemon ...` calls, and nothing
+# sets them in this container.
+#
 # Knobs: PD_HAPPIER_INTERVAL (seconds between checks, default 60; anything that
 # is not a number from 0.1 to 86400 falls back to 60, so a bad value cannot
-# become a tight loop or an endless sleep) and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
+# become a tight loop or an endless sleep), PD_HAPPIER_EXTRA_SERVERS (above)
+# and PD_HAPPIER_ONCE=1 (one pass, then exit; the test seam).
 set -u
 
 INTERVAL="${PD_HAPPIER_INTERVAL:-60}"
@@ -106,8 +148,11 @@ if ! [[ $INTERVAL =~ ^[0-9]+(\.[0-9]+)?$ ]] \
 fi
 ONCE="${PD_HAPPIER_ONCE:-0}"
 HAPPIER_HOME="${HAPPIER_HOME_DIR:-$HOME/.happier}"
-last_key=""
-restarted_for=""
+# Per profile ("" is the default daemon): the last state logged, and the
+# (daemon version, CLI version) pair a restart was last completed for.
+declare -A last_key=() restarted_for=()
+SCOPE=""      # the profile the current pass is about; "" for the default daemon
+ACTIVE="-"    # the active profile id the default status reported this pass, or "-"
 RESUME_SCRIPT="${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}"
 RESUME_DIR="${PD_SUPERVISOR_RESUME_DIR:-/tmp/pocket-dev-supervisor-resume}"
 RESUME_RETRY="${PD_SUPERVISOR_RESUME_RETRY:-120}"
@@ -122,11 +167,25 @@ RESUME_LOCK_WAIT="${PD_SUPERVISOR_RESUME_LOCK_WAIT:-720}"
 resume_checked=""
 
 say() {
-  # $1 is the state key, $2 the message. Same key twice in a row stays quiet.
-  [ "$1" = "$last_key" ] && return 0
-  last_key="$1"
-  echo "pocket-dev: happier: $2" >&2
+  # $1 is the state key, $2 the message. Same key twice in a row for the same
+  # profile stays quiet, so profiles in different states cannot make each
+  # other log on every pass. Extras are named in the prefix.
+  [ "$1" = "${last_key[${SCOPE:-.}]:-}" ] && return 0
+  last_key[${SCOPE:-.}]="$1"
+  echo "pocket-dev: happier${SCOPE:+ [$SCOPE]}: $2" >&2
 }
+
+# A Happier server profile id this loop will pass to --server and use as a
+# directory name under servers/: a letter or digit first (so never an option,
+# ".", ".." or empty), then letters, digits, ".", "_" or "-". read_state hands
+# this same pattern to node, whose RegExp reads it identically.
+PROFILE_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+
+# The happier CLI for the profile of the current pass, as an argv array (an
+# array, not a function, because `timeout` runs a command): the default
+# daemon's calls stay exactly `happier ...`; an extra's are
+# `happier --server <id> ...`. Set by supervise_profile.
+HP=(happier)
 
 newer() {
   # True when release version $1 is strictly newer than $2. Both must be plain
@@ -272,9 +331,14 @@ clear_stale_daemon_records() {
   # DO NOT replace this with `happier doctor clean` (kills every Happier
   # process, sessions included) or with deleting the record unconditionally (a
   # record written in this boot can belong to a daemon that is starting).
+  #
+  # Arguments are the profile directories to check. The default daemon passes
+  # every one under servers/ (a previous container's records are stale in all
+  # of them); an extra passes only its own, so supervising it never touches
+  # another profile's files.
   local boot dir name rec x m pid pids keep ids i
   boot=$(boot_epoch) || return 0
-  for dir in "$HAPPIER_HOME"/servers/*/; do
+  for dir in "$@"; do
     dir=${dir%/}
     [ -d "$dir" ] && [ ! -L "$dir" ] || continue
     for name in daemon.state.json daemon.preview.state.json daemon.dev.state.json; do
@@ -357,6 +421,10 @@ run_resume() {
 resume_supervisor() {
   # Called on every pass that finds the daemon up; does anything at most once
   # per process, and launches resume-self at most once per container boot.
+  # Only the default daemon's pass resumes it: the supervisor is a session on
+  # the active profile's relay, and an extra profile's daemon coming up says
+  # nothing about that one.
+  [ -n "$SCOPE" ] && return 0
   [ -n "$resume_checked" ] && return 0
   resume_checked=1
   [ "${PD_SUPERVISOR_RESUME:-1}" = "0" ] && return 0
@@ -390,19 +458,23 @@ resume_supervisor() {
 }
 
 read_state() {
-  # Prints "<authenticated> <running> <converged> <daemon-version> <cli-version>"
-  # with true/false words, or "unknown". <converged> is true, false or unknown:
-  # unknown (an older CLI without runtimeConvergence, or a service-owned daemon,
-  # which its service restarts) never triggers a restart. The versions are only
-  # for the log and the once-per-pair rule; anything not a plain version is "-".
+  # Prints "<authenticated> <running> <converged> <daemon-version> <cli-version>
+  # <active-profile>" with true/false words, or "unknown". <converged> is true,
+  # false or unknown: unknown (an older CLI without runtimeConvergence, or a
+  # service-owned daemon, which its service restarts) never triggers a restart.
+  # The versions are only for the log and the once-per-pair rule; anything not
+  # a plain version is "-". <active-profile> is the profile the answer is about
+  # (server.activeServerId), "-" when absent or not a plain id. For an extra,
+  # an answer about any other profile is "unknown": then --server did not take,
+  # and acting on it would act on the wrong daemon.
   local out
-  if ! out=$(set -o pipefail; timeout 30 happier daemon status --json 2>/dev/null); then
+  if ! out=$(set -o pipefail; timeout 30 "${HP[@]}" daemon status --json 2>/dev/null); then
     echo unknown
     return
   fi
   # SC2016: the single quotes are deliberate; ${a} below is a JS template, not bash.
   # shellcheck disable=SC2016
-  printf '%s' "$out" | node -e '
+  printf '%s' "$out" | PD_EXPECT_PROFILE="$SCOPE" PD_PROFILE_RE="$PROFILE_RE" node -e '
     let s = "";
     process.stdin.on("data", (d) => { s += d; }).on("end", () => {
       try {
@@ -410,74 +482,155 @@ read_state() {
         const a = j && j.auth && j.auth.authenticated;
         const r = j && j.daemon && j.daemon.running;
         if (typeof a !== "boolean" || typeof r !== "boolean") throw new Error("shape");
+        const id = j.server && j.server.activeServerId;
+        const want = process.env.PD_EXPECT_PROFILE;
+        if (want && id !== want) throw new Error("profile");
+        const p = typeof id === "string" && new RegExp(process.env.PD_PROFILE_RE).test(id) ? id : "-";
         const m = j.runtimeConvergence && j.runtimeConvergence.cliVersionMatches;
         const service = j.daemon && j.daemon.serviceManaged === true;
         const c = typeof m === "boolean" && !service ? String(m) : "unknown";
         const v = (x) => (typeof x === "string" && /^[0-9A-Za-z._+-]+$/.test(x) ? x : "-");
         const dv = v(j.daemon && j.daemon.startedWithCliVersion);
         const cv = v(j.cliUpdate && j.cliUpdate.currentVersion);
-        process.stdout.write(`${a} ${r} ${c} ${dv} ${cv}`);
+        process.stdout.write(`${a} ${r} ${c} ${dv} ${cv} ${p}`);
       } catch {
         process.stdout.write("unknown");
       }
     });'
 }
 
-while :; do
-  if ! compgen -G "$HAPPIER_HOME/servers/*/access.key" >/dev/null; then
-    # Never signed in: nothing to start, and no CLI call is worth making.
-    say no-credential "no Happier sign-in yet; the daemon starts on the first check after 'happier auth login'"
+supervise_profile() {
+  # One pass for one profile: SCOPE is "" for the default daemon or an extra's
+  # id. Everything that differs between the two is named here: which
+  # credential counts, which records may be cleared, and that only the default
+  # daemon resumes the supervisor.
+  local state pair signed_out
+  if [ -n "$SCOPE" ]; then HP=(happier --server "$SCOPE"); else HP=(happier); fi
+  signed_out="not signed in to server profile $SCOPE (run 'happier --server $SCOPE auth login'); its daemon is not started"
+  [ -z "$SCOPE" ] && signed_out="not signed in to a Happier server (run 'happier auth login'); daemon not started"
+  if [ -z "$SCOPE" ]; then
+    ACTIVE="-"
+    if ! compgen -G "$HAPPIER_HOME/servers/*/access.key" >/dev/null; then
+      # Never signed in: nothing to start, and no CLI call is worth making.
+      say no-credential "no Happier sign-in yet; the daemon starts on the first check after 'happier auth login'"
+      return
+    fi
   else
-    state=$(read_state)
-    case "$state" in
-      "true true false "*)
-        # shellcheck disable=SC2086
-        set -- $state
-        pair="$4>$5"
-        if ! newer "$5" "$4"; then
-          # Never a downgrade: when the managed launcher is missing or dangling,
-          # PATH finds the image's older npm fallback, and moving a newer daemon
-          # onto it would undo the update. An unparseable version proves nothing.
-          say "not-newer:$pair" "daemon runs CLI $4 and PATH has $5, which is not newer; leaving the daemon"
-          resume_supervisor  # the daemon still runs, on its current CLI
-        elif [ "$pair" = "$restarted_for" ]; then
-          say "stuck:$pair" "daemon still runs CLI $4 after a restart onto $5; not restarting again"
-          resume_supervisor  # the daemon still runs, on its current CLI
-        elif ! timeout 90 happier daemon stop >/dev/null 2>&1; then
-          # Not recorded as done: a transient failure is retried next pass.
-          say "stop-failed:$pair" "could not stop the daemon (CLI $4) to move it onto CLI $5; retrying every ${INTERVAL}s"
-          resume_supervisor  # the daemon still runs, on its current CLI
-        else
-          restarted_for="$pair"
-          if timeout 90 happier daemon start >/dev/null 2>&1; then
-            say "restarted:$pair" "daemon restarted onto CLI $5 (was $4)"
-            resume_supervisor
-          else
-            say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
-          fi
-        fi
-        ;;
-      "true true "*)
-        say running "daemon running"
-        resume_supervisor
-        ;;
-      "true false "*)
-        clear_stale_daemon_records
-        if timeout 90 happier daemon start >/dev/null 2>&1; then
-          say running "daemon started"
+    if [ -L "$HAPPIER_HOME/servers/$SCOPE" ]; then
+      # A symlinked profile can be another profile's files under a second name,
+      # the active one's included; the id check below cannot see that.
+      say symlink "server profile $SCOPE is a symlink, so it may be another profile's daemon; leaving it alone"
+      return
+    fi
+    if [ ! -f "$HAPPIER_HOME/servers/$SCOPE/access.key" ]; then
+      say signed-out "$signed_out"
+      return
+    fi
+    if [ "$ACTIVE" = "-" ]; then
+      say no-active "could not tell which profile is active this pass; leaving profile $SCOPE alone until it can"
+      return
+    fi
+    if [ "$ACTIVE" = "$SCOPE" ]; then
+      say is-active "profile $SCOPE is the active profile, so the default daemon is its daemon; nothing extra to do"
+      return
+    fi
+  fi
+  state=$(read_state)
+  # The active profile, learned from the default daemon's own status. Extras
+  # are checked against it before anything is done to them.
+  if [ -z "$SCOPE" ] && [ "$state" != unknown ]; then
+    ACTIVE=${state##* }
+  fi
+  case "$state" in
+    "true true false "*)
+      # shellcheck disable=SC2086
+      set -- $state
+      pair="$4>$5"
+      if ! newer "$5" "$4"; then
+        # Never a downgrade: when the managed launcher is missing or dangling,
+        # PATH finds the image's older npm fallback, and moving a newer daemon
+        # onto it would undo the update. An unparseable version proves nothing.
+        say "not-newer:$pair" "daemon runs CLI $4 and PATH has $5, which is not newer; leaving the daemon"
+        resume_supervisor  # the daemon still runs, on its current CLI
+      elif [ "$pair" = "${restarted_for[${SCOPE:-.}]:-}" ]; then
+        say "stuck:$pair" "daemon still runs CLI $4 after a restart onto $5; not restarting again"
+        resume_supervisor  # the daemon still runs, on its current CLI
+      elif ! timeout 90 "${HP[@]}" daemon stop >/dev/null 2>&1; then
+        # Not recorded as done: a transient failure is retried next pass.
+        say "stop-failed:$pair" "could not stop the daemon (CLI $4) to move it onto CLI $5; retrying every ${INTERVAL}s"
+        resume_supervisor  # the daemon still runs, on its current CLI
+      else
+        restarted_for[${SCOPE:-.}]="$pair"
+        if timeout 90 "${HP[@]}" daemon start >/dev/null 2>&1; then
+          say "restarted:$pair" "daemon restarted onto CLI $5 (was $4)"
           resume_supervisor
         else
           say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
         fi
-        ;;
-      "false "*)
-        say signed-out "not signed in to a Happier server (run 'happier auth login'); daemon not started"
-        ;;
-      *)
-        say unknown "could not read daemon status; retrying every ${INTERVAL}s"
-        ;;
-    esac
+      fi
+      ;;
+    "true true "*)
+      say running "daemon running"
+      resume_supervisor
+      ;;
+    "true false "*)
+      if [ -z "$SCOPE" ]; then
+        clear_stale_daemon_records "$HAPPIER_HOME"/servers/*/
+      else
+        clear_stale_daemon_records "$HAPPIER_HOME/servers/$SCOPE/"
+      fi
+      if timeout 90 "${HP[@]}" daemon start >/dev/null 2>&1; then
+        say running "daemon started"
+        resume_supervisor
+      else
+        say start-failed "daemon is not running and did not start; retrying every ${INTERVAL}s"
+      fi
+      ;;
+    "false "*)
+      say signed-out "$signed_out"
+      ;;
+    *)
+      say unknown "could not read daemon status; retrying every ${INTERVAL}s"
+      ;;
+  esac
+}
+
+# The extra profiles, validated once: a malformed id is reported once and never
+# reaches the CLI or a path, and a repeated one is supervised once.
+EXTRAS=()
+# read -a splits on whitespace without globbing, which an unquoted expansion
+# would do; -d '' reads past newlines (a plain read stops at the first one), and
+# it then exits 1 at the end of input, which is expected. CR counts as
+# whitespace, so a value pasted with Windows line endings is not silently lost.
+IFS=$' \t\r\n' read -r -d '' -a extra_ids <<<"${PD_HAPPIER_EXTRA_SERVERS:-}" || :
+for id in "${extra_ids[@]}"; do
+  if ! [[ $id =~ $PROFILE_RE ]]; then
+    echo "pocket-dev: happier: ignoring PD_HAPPIER_EXTRA_SERVERS entry '$id': not a plain profile id" >&2
+    continue
   fi
+  [[ " ${EXTRAS[*]} " == *" $id "* ]] || EXTRAS+=("$id")
+done
+# Happier lets these variables choose the server and the daemon's state path,
+# and HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID outranks --server for the state path
+# (0.2.20, persistence: daemonStateFile). With one inherited, `--server <id>`
+# could read one profile's status and start or stop another's daemon, so
+# extras are not supervised at all. Nothing in the container sets them
+# (checked 2026-11-05: this loop's environment carries no HAPPIER_ variable);
+# the CLI puts them into the environment of a daemon it starts, not into ours.
+for v in HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID HAPPIER_ACTIVE_SERVER_ID HAPPIER_SERVER_URL; do
+  if [ "${#EXTRAS[@]}" -gt 0 ] && [ -n "${!v-}" ]; then
+    echo "pocket-dev: happier: $v is set in this environment, so --server cannot be trusted to pick the daemon; not supervising PD_HAPPIER_EXTRA_SERVERS (${EXTRAS[*]})" >&2
+    EXTRAS=()
+  fi
+done
+
+while :; do
+  SCOPE=""
+  supervise_profile
+  for SCOPE in "${EXTRAS[@]}"; do
+    supervise_profile
+  done
+  SCOPE=""
   [ "$ONCE" = "1" ] && exit 0
   sleep "$INTERVAL"
 done

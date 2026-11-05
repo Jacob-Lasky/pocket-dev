@@ -51,6 +51,36 @@ describe('USB access for adb', () => {
     expect(extraParams).toMatch(/(?:^|\s)--init(?:\s|$)/);
   });
 
+  it('template restarts the container unless it was stopped on purpose', () => {
+    // Set live with docker update on 2026-11-03 after a self-exit stayed down
+    // 12 minutes; like the pids limit it reached Tower's template first, and a
+    // recreate from this file would have dropped it.
+    expect(extraParams).toMatch(/(?:^|\s)--restart=unless-stopped(?:\s|$)/);
+    expect(compose).toMatch(/^\s+restart:\s*unless-stopped\s*$/m);
+  });
+
+  it('template points at this repository, not the retired claude-code-docker one', () => {
+    // Tower's copy still named Jacob-Lasky/claude-code-docker for Registry and
+    // Support on 2026-11-05; that repository is gone (404). Exact values, so a
+    // prefix match cannot accept pocket-dev-old or another page.
+    const expected = {
+      Registry: 'https://github.com/Jacob-Lasky/pocket-dev/pkgs/container/pocket-dev',
+      Support: 'https://github.com/Jacob-Lasky/pocket-dev/issues',
+      Project: 'https://github.com/Jacob-Lasky/pocket-dev',
+    };
+    for (const [tag, url] of Object.entries(expected)) {
+      expect((template.match(new RegExp(`<${tag}>([^<]*)</${tag}>`)) || [])[1], tag).toBe(url);
+    }
+  });
+
+  it('template has no TemplateURL, so nothing remote replaces the deployed copy', () => {
+    // dockerMan and Community Applications can refresh a template from its
+    // TemplateURL, which would overwrite the edited copy on Tower (its
+    // ExtraParams and secret included) with this file. Empty on purpose
+    // (Tower supervisor, 2026-11-05).
+    expect(template).toMatch(/<TemplateURL\s*\/>|<TemplateURL>\s*<\/TemplateURL>/);
+  });
+
   it('docker-compose mirrors the template', () => {
     expect(compose).toMatch(/- \/dev\/bus\/usb:\/dev\/bus\/usb\r?$/m);
     expect(compose).toMatch(/device_cgroup_rules:\r?\n\s+- 'c 189:\* rmw'/);
