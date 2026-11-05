@@ -157,25 +157,41 @@ const calls = (kind) =>
   fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l === kind).length : 0;
 const starts = () => calls('start');
 
-// The prologue of a test driver that ends the loop it exec's into. `sup` is
-// the loop's PID (the driver's bash execs the supervisor, keeping its PID).
-// `ours` is true only while that PID is still this test's supervisor, so once
-// the loop has died (spawnSync's timeout killed it) the driver stops waiting
-// and never signals a PID another process may have been given since: on this
-// host that could be a live session (CLAUDE.md, Common gotchas).
-// `live` is also false once the driver's one shared deadline (DRIVER_SECONDS,
+// Test drivers: a background subshell that changes the stub's answers as the
+// loop works and then ends the loop. The DRIVER never signals anything. It
+// creates $STUB_STOP, and the loop's next `sleep` between passes, a stub first
+// on the loop's PATH, then signals its own parent: the loop, which is alive at
+// that moment because it is blocked waiting for that very sleep. That is the
+// pattern intervalsSlept uses too. A driver that tracked the loop's PID would
+// have to guess whether the PID still names the loop after a spawn timeout,
+// and on this host a reused PID can be a live session (CLAUDE.md, Common
+// gotchas). The driver's own sleeps use the real binary ($S).
+//
+// `live` is false once the driver's one shared deadline (DRIVER_SECONDS,
 // counted from the start) has passed, so every wait ends inside the spawn's
 // own timeout, whatever the number of phases.
 const DRIVER_SECONDS = 20;
-const DRIVER_SUP = [
-  'sup=$$',
-  `ours() { tr '\\0' ' ' < "/proc/$sup/cmdline" 2>/dev/null | grep -q -- '${path.basename(SUPERVISOR)}'; }`,
-  `live() { [ "$SECONDS" -lt ${DRIVER_SECONDS} ] && ours; }`,
-  'stop_ours() { ours && kill -TERM "$sup"; }',
+const REAL_SLEEP = spawnSync('bash', ['-c', 'command -v sleep'], { encoding: 'utf8' }).stdout.trim();
+const DRIVER_PROLOGUE = [
+  `S="${REAL_SLEEP}"`,
+  `live() { [ "$SECONDS" -lt ${DRIVER_SECONDS} ]; }`,
+  'stop_loop() { : > "$STUB_STOP"; }',
 ].join('\n');
 // The spawn's timeout: past the driver's deadline, so a driver that gives up
 // still ends the loop itself and the test sees why.
 const DRIVER_SPAWN_TIMEOUT = (DRIVER_SECONDS + 10) * 1000;
+
+// The stub `sleep` for a driven loop, and the environment that wires it up.
+function driverEnv() {
+  const bin = path.join(tmproot, 'stopbin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(
+    path.join(bin, 'sleep'),
+    `#!/bin/bash\nif [ -e "$STUB_STOP" ]; then kill -TERM "$PPID"; exit 0; fi\nexec "${REAL_SLEEP}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  return { PATH: `${bin}:${stubBin}:${process.env.PATH}`, STUB_STOP: path.join(tmproot, 'stop') };
+}
 
 const signIn = () => {
   fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
@@ -381,25 +397,25 @@ describe('pd-happier-supervise', () => {
     // cannot run out of time (it failed about 1 in 12 runs on a 1.5 s budget).
     fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
     const driver = [
-      DRIVER_SUP,
-      `(sleep 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}"`,
+      DRIVER_PROLOGUE,
+      `("$S" 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}"`,
       // A status call AFTER the start means the pass that started the daemon
       // has finished, log line included; stopping at "start" itself raced it.
       // Bounded by the driver's deadline, so a loop that never gets there
       // fails the test instead of holding the pipe open forever.
-      ` while live; do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; sleep 0.02; done`,
+      ` while live; do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; "$S" 0.02; done`,
       ` awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null || echo driver-timeout >> "${stubLog}"`,
-      ' stop_ours) &',
+      ' stop_loop) &',
       `exec bash "${SUPERVISOR}"`,
     ].join('\n');
     const child = spawnSync('bash', ['-c', driver], {
       env: spawnEnv({
         HOME: home,
         HAPPIER_HOME_DIR: path.join(home, '.happier'),
-        PATH: `${stubBin}:${process.env.PATH}`,
         STUB_LOG: stubLog,
         STUB_STATUS: STATUS(true, false),
         PD_HAPPIER_INTERVAL: '0.1',
+        ...driverEnv(),
       }),
       encoding: 'utf8',
       timeout: DRIVER_SPAWN_TIMEOUT, // a safety bound only; the driver ends the loop
@@ -577,9 +593,9 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
       // until the log holds at least $2 lines that are exactly $1; bounded by
       // the driver's deadline, so a loop that never gets there fails the test
       // with "driver-timeout" in the log instead of holding the pipe open
-      'w() { while live; do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.02; done; echo driver-timeout >> "$L"; return 1; }',
+      DRIVER_PROLOGUE,
+      'w() { while live; do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; "$S" 0.02; done; echo driver-timeout >> "$L"; return 1; }',
       'n() { grep -cx -- status "$L" 2>/dev/null; true; }',
-      DRIVER_SUP,
       '(',
       `  w "${HV}:status" 1`,
       `  printf 'not json' > "${def}"`,
@@ -590,7 +606,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
       // A default status call after the start means the pass that started the
       // extra has finished; stopping at the start line itself would race it.
       `  w "${HV}:start" 1 && { k=$(n); w status $((k + 1)); }`,
-      '  stop_ours',
+      '  stop_loop',
       ') &',
       `exec bash "${SUPERVISOR}"`,
     ].join('\n');
@@ -598,7 +614,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
       env: spawnEnv({
         HOME: home,
         HAPPIER_HOME_DIR: path.join(home, '.happier'),
-        PATH: `${stubBin}:${process.env.PATH}`,
+        ...driverEnv(),
         STUB_LOG: stubLog,
         STUB_STATUS_FILE: def,
         STUB_STATUS_FILE_hypervisor: hv,
