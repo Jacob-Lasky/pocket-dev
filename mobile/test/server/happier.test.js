@@ -157,6 +157,26 @@ const calls = (kind) =>
   fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8').split('\n').filter((l) => l === kind).length : 0;
 const starts = () => calls('start');
 
+// The prologue of a test driver that ends the loop it exec's into. `sup` is
+// the loop's PID (the driver's bash execs the supervisor, keeping its PID).
+// `ours` is true only while that PID is still this test's supervisor, so once
+// the loop has died (spawnSync's timeout killed it) the driver stops waiting
+// and never signals a PID another process may have been given since: on this
+// host that could be a live session (CLAUDE.md, Common gotchas).
+// `live` is also false once the driver's one shared deadline (DRIVER_SECONDS,
+// counted from the start) has passed, so every wait ends inside the spawn's
+// own timeout, whatever the number of phases.
+const DRIVER_SECONDS = 20;
+const DRIVER_SUP = [
+  'sup=$$',
+  `ours() { tr '\\0' ' ' < "/proc/$sup/cmdline" 2>/dev/null | grep -q -- '${path.basename(SUPERVISOR)}'; }`,
+  `live() { [ "$SECONDS" -lt ${DRIVER_SECONDS} ] && ours; }`,
+  'stop_ours() { ours && kill -TERM "$sup"; }',
+].join('\n');
+// The spawn's timeout: past the driver's deadline, so a driver that gives up
+// still ends the loop itself and the test sees why.
+const DRIVER_SPAWN_TIMEOUT = (DRIVER_SECONDS + 10) * 1000;
+
 const signIn = () => {
   fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
   fs.writeFileSync(path.join(home, '.happier/servers/tower/access.key'), 'x');
@@ -361,15 +381,15 @@ describe('pd-happier-supervise', () => {
     // cannot run out of time (it failed about 1 in 12 runs on a 1.5 s budget).
     fs.mkdirSync(path.join(home, '.happier/servers/tower'), { recursive: true });
     const driver = [
-      'sup=$$',
+      DRIVER_SUP,
       `(sleep 0.3; touch "${path.join(home, '.happier/servers/tower/access.key')}"`,
       // A status call AFTER the start means the pass that started the daemon
       // has finished, log line included; stopping at "start" itself raced it.
-      // Bounded (10 s), so a loop that never gets there fails the test
-      // instead of holding the pipe open forever.
-      ` for _ in $(seq 500); do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; sleep 0.02; done || :`,
+      // Bounded by the driver's deadline, so a loop that never gets there
+      // fails the test instead of holding the pipe open forever.
+      ` while live; do awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null && break; sleep 0.02; done`,
       ` awk '$0 == "start" { s = 1; next } s && $0 == "status" { f = 1 } END { exit !f }' "${stubLog}" 2>/dev/null || echo driver-timeout >> "${stubLog}"`,
-      ' kill -TERM "$sup") &',
+      ' stop_ours) &',
       `exec bash "${SUPERVISOR}"`,
     ].join('\n');
     const child = spawnSync('bash', ['-c', driver], {
@@ -382,13 +402,14 @@ describe('pd-happier-supervise', () => {
         PD_HAPPIER_INTERVAL: '0.1',
       }),
       encoding: 'utf8',
-      timeout: 15000, // a safety bound only; the driver ends the loop
+      timeout: DRIVER_SPAWN_TIMEOUT, // a safety bound only; the driver ends the loop
     });
+    expect(child.error).toBeUndefined(); // not ended by the spawn's timeout
     expect(calls('driver-timeout')).toBe(0);
     expect(child.stderr).toContain('no Happier sign-in yet');
     expect(child.stderr).toContain('daemon started');
     expect(starts()).toBeGreaterThanOrEqual(1);
-  }, 20000);
+  }, DRIVER_SPAWN_TIMEOUT + 10000);
 });
 
 // A status answer that names the profile it is about, as 0.2.20 does
@@ -553,12 +574,12 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     fs.writeFileSync(hv, PSTATUS(HV, true, true));
     const driver = [
       `L="${stubLog}"`,
-      // until the log holds at least $2 lines that are exactly $1; bounded
-      // (10 s each), so a loop that never gets there fails the test with
-      // "driver-timeout" in the log instead of holding the pipe open forever
-      'w() { local i; for i in $(seq 500); do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.02; done; echo driver-timeout >> "$L"; }',
+      // until the log holds at least $2 lines that are exactly $1; bounded by
+      // the driver's deadline, so a loop that never gets there fails the test
+      // with "driver-timeout" in the log instead of holding the pipe open
+      'w() { while live; do [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.02; done; echo driver-timeout >> "$L"; return 1; }',
       'n() { grep -cx -- status "$L" 2>/dev/null; true; }',
-      'sup=$$',
+      DRIVER_SUP,
       '(',
       `  w "${HV}:status" 1`,
       `  printf 'not json' > "${def}"`,
@@ -566,8 +587,10 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
       `  printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "$L"`,
       '  k=$(n); w status $((k + 2))',
       `  echo def-back >> "$L"; printf '%s' '${PSTATUS('tower', true, true)}' > "${def}"`,
-      `  w "${HV}:start" 1`,
-      '  kill -TERM "$sup"',
+      // A default status call after the start means the pass that started the
+      // extra has finished; stopping at the start line itself would race it.
+      `  w "${HV}:start" 1 && { k=$(n); w status $((k + 1)); }`,
+      '  stop_ours',
       ') &',
       `exec bash "${SUPERVISOR}"`,
     ].join('\n');
@@ -583,8 +606,9 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
         PD_HAPPIER_INTERVAL: '0.1',
       }),
       encoding: 'utf8',
-      timeout: 45000, // a safety bound only; the driver ends the loop
+      timeout: DRIVER_SPAWN_TIMEOUT, // a safety bound only; the driver ends the loop
     });
+    expect(res.error).toBeUndefined(); // not ended by the spawn's timeout
     expect(calls('driver-timeout')).toBe(0);
     expect(res.stderr).toContain('could not tell which profile is active');
     const all = log();
@@ -596,7 +620,7 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
     expect(all.slice(stopped + 1, back).filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
     expect(all.slice(0, back)).not.toContain(`${HV}:start`);
     expect(all.slice(back)).toContain(`${HV}:start`);
-  }, 60000);
+  }, DRIVER_SPAWN_TIMEOUT + 10000);
 
   it('still supervises an extra when the default profile is signed out', () => {
     extra({ STUB_STATUS: PSTATUS('tower', false, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });
