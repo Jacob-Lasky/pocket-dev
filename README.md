@@ -13,7 +13,7 @@ For repo orientation — particularly the two-layers-of-alt-screen gotcha around
 ## Install on UnRAID
 
 1. Docker tab → Add Container.
-2. Either point Template URL at the raw `pocket-dev.xml` in this repo, or drop a copy in `/boot/config/plugins/dockerMan/templates-user/`.
+2. Drop a copy of `pocket-dev.xml` from this repo in `/boot/config/plugins/dockerMan/templates-user/` (Jake's is `my-pocket-dev.xml`). Its Template URL is deliberately empty, so dockerMan and Community Applications never replace your edited copy with a remote one.
 3. Optional: set `ANTHROPIC_API_KEY`. If you skip it, run `claude login` once the container is up.
 4. Apply.
 
