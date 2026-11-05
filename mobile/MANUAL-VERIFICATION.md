@@ -69,11 +69,12 @@ Composer:
 - [ ] `docker restart pocket-dev` with an archived-then-continued conversation open (archive it, then send it another message so work follows the notice). It comes back and STAYS open: the notice is seeded at adopt, so a restart is not a second archive. If restarting closes tabs, the seed regressed and every restart will keep eating them.
 
 ## Lavish Editor reachability (nothing in CI starts the real CLI, binds its socket, or crosses the published port — see "Lavish Editor" in CLAUDE.md)
-- [ ] In a session (NOT `docker exec` — that gets the image's env, not the server's, and binds loopback), run `lavish-axi` on a small HTML file. It prints JSON with `status: opened` and a URL whose host is `LAVISH_AXI_LINK_HOST`, not a `172.x` bridge address.
+- [ ] In a session (NOT `docker exec` — that gets the image's env, not the server's; the `lavish-axi` launcher now resolves the bind address there too, but a session is the path being verified), run `lavish-axi` on a small HTML file. It prints JSON with `status: opened` and a URL whose host is `LAVISH_AXI_LINK_HOST`, not a `172.x` bridge address.
 - [ ] Open that URL on the phone: the artifact renders, elements can be annotated, and a Mermaid diagram opens as a whiteboard.
 - [ ] `lavish-axi poll <file>` in the session returns the feedback that was sent from the phone.
 - [ ] Typing a host name that is NOT the link host gives Lavish's `403` page naming the URL that does work — that's the DNS-rebinding guard, not a broken mapping. Add the name to `LAVISH_AXI_ALLOWED_HOSTS` if you want it to work.
 - [ ] Check the bind address is the container's own: `LAVISH_AXI_HOST` in the session's environment matches `eth0`, and it is neither `127.0.0.1` nor a wildcard. On a container attached to several networks, `entrypoint.sh` warns on stderr which one it picked — read `docker logs` before assuming the port mapping is wrong.
+- [ ] Stale-address repair: in a session, run `LAVISH_AXI_HOST=172.17.0.250 lavish-axi <file>` with an address the container does NOT hold. The launcher replaces it with the current `eth0` address (check `/proc/net/tcp` for the listener) and the printed URL still opens from the phone.
 
 ## Codex defaults (CI only reads `entrypoint.sh`'s source; what lands in the home is a live fact — see "Codex" in CLAUDE.md)
 - [ ] Start a container against a home with NO `~/.codex/config.toml` (the fresh-home case the removed seed would have fired on) and confirm the file is still absent afterwards, while `~/.codex` itself exists and is writable by the session's uid.
