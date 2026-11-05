@@ -521,52 +521,62 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
   });
 
   it('forgets the active profile between passes, so a stale one never vouches for an extra', () => {
-    // Pass 1 learns the active profile (tower). Later passes cannot read the
-    // default status, and only after that does the extra look stopped: had
-    // pass 1's answer been kept, the extra would be started on a pass that
-    // could not check it is not the default daemon. Then the default status is
-    // readable again and the extra must be started, so the passes in between
-    // left it alone for that reason, not because extras stopped being visited.
+    // Phases are driven by what the loop has DONE (lines in the stub log), not
+    // by wall-clock sleeps, so a slow runner cannot skip a phase or run out of
+    // passes. 1: a pass learns the active profile (tower) and visits the
+    // extra. 2: the default status becomes unreadable, and a full pass sees
+    // it. 3: the extra looks stopped, and a full blind pass sees both. Had the
+    // active profile from phase 1 been kept, phase 3 would start the extra on a
+    // pass that could not check it is not the default daemon. 4: the default
+    // status is readable again and the extra must now be started, so phase 3
+    // skipped it for that reason, not because extras stopped being visited.
     const def = path.join(tmproot, 'status-default');
     const hv = path.join(tmproot, 'status-hv');
     fs.writeFileSync(def, PSTATUS('tower', true, true));
     fs.writeFileSync(hv, PSTATUS(HV, true, true));
-    const res = spawnSync(
-      'bash',
-      [
-        '-c',
-        `(sleep 0.4; printf 'not json' > "${def}"; sleep 0.6; printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "${stubLog}"; ` +
-          `sleep 0.6; echo def-back >> "${stubLog}"; printf '%s' '${PSTATUS('tower', true, true)}' > "${def}") & exec bash "${SUPERVISOR}"`,
-      ],
-      {
-        env: spawnEnv({
-          HOME: home,
-          HAPPIER_HOME_DIR: path.join(home, '.happier'),
-          PATH: `${stubBin}:${process.env.PATH}`,
-          STUB_LOG: stubLog,
-          STUB_STATUS_FILE: def,
-          STUB_STATUS_FILE_hypervisor: hv,
-          PD_HAPPIER_EXTRA_SERVERS: HV,
-          PD_HAPPIER_INTERVAL: '0.1',
-        }),
-        encoding: 'utf8',
-        timeout: 3200,
-      },
-    );
+    const driver = [
+      `L="${stubLog}"`,
+      // until the log holds at least $2 lines that are exactly $1
+      'w() { until [ "$(grep -cx -- "$1" "$L" 2>/dev/null)" -ge "$2" ] 2>/dev/null; do sleep 0.02; done; }',
+      'n() { grep -cx -- status "$L" 2>/dev/null; true; }',
+      'sup=$$',
+      '(',
+      `  w "${HV}:status" 1`,
+      `  printf 'not json' > "${def}"`,
+      '  k=$(n); w status $((k + 2))',
+      `  printf '%s' '${PSTATUS(HV, true, false)}' > "${hv}"; echo hv-stopped >> "$L"`,
+      '  k=$(n); w status $((k + 2))',
+      `  echo def-back >> "$L"; printf '%s' '${PSTATUS('tower', true, true)}' > "${def}"`,
+      `  w "${HV}:start" 1`,
+      '  kill -TERM "$sup"',
+      ') &',
+      `exec bash "${SUPERVISOR}"`,
+    ].join('\n');
+    const res = spawnSync('bash', ['-c', driver], {
+      env: spawnEnv({
+        HOME: home,
+        HAPPIER_HOME_DIR: path.join(home, '.happier'),
+        PATH: `${stubBin}:${process.env.PATH}`,
+        STUB_LOG: stubLog,
+        STUB_STATUS_FILE: def,
+        STUB_STATUS_FILE_hypervisor: hv,
+        PD_HAPPIER_EXTRA_SERVERS: HV,
+        PD_HAPPIER_INTERVAL: '0.1',
+      }),
+      encoding: 'utf8',
+      timeout: 12000, // a safety bound only; the driver ends the loop
+    });
     expect(res.stderr).toContain('could not tell which profile is active');
     const all = log();
     const stopped = all.indexOf('hv-stopped');
     const back = all.indexOf('def-back');
-    expect(stopped).toBeGreaterThan(-1);
+    expect(all.indexOf(`${HV}:status`)).toBeGreaterThan(-1);
+    expect(all.indexOf(`${HV}:status`)).toBeLessThan(stopped); // phase 1 really learned tower
     expect(back).toBeGreaterThan(stopped);
-    // Several passes ran while the extra looked stopped and the active
-    // profile was unknown, and none of them started it ...
-    const blind = all.slice(stopped + 1, back);
-    expect(blind.filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
+    expect(all.slice(stopped + 1, back).filter((l) => l === 'status').length).toBeGreaterThanOrEqual(2);
     expect(all.slice(0, back)).not.toContain(`${HV}:start`);
-    // ... and once the active profile is known again, it is started.
     expect(all.slice(back)).toContain(`${HV}:start`);
-  });
+  }, 20000);
 
   it('still supervises an extra when the default profile is signed out', () => {
     extra({ STUB_STATUS: PSTATUS('tower', false, false), STUB_STATUS_hypervisor: PSTATUS(HV, true, false) });

@@ -123,9 +123,10 @@
 # pass skips that profile as the active one. (2) The default daemon's
 # pre-start clearing still covers every profile directory, as it always has,
 # so it can clear an extra's record first. It removes only records it judges
-# written before this container started and never a live daemon's (see
-# clear_stale_daemon_records and its clock-step margin), the same records an
-# extra's own pass would remove. (3) The default daemon follows whatever its
+# written before this container started, never a daemon live in this
+# container, and it assumes this container is the only user of ~/.happier
+# (see clear_stale_daemon_records: its clock-step margin and that
+# assumption), the same records an extra's own pass would remove. (3) The default daemon follows whatever its
 # environment tells the CLI, as it always has: the scope variables that stop
 # extras below also steer the plain `happier daemon ...` calls, and nothing
 # sets them in this container.
