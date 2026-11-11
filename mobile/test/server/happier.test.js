@@ -1129,7 +1129,8 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
   // "resume-start <argv>" and "resume-end" around an optional sleep
   // ($STUB_RESUME_SLEEP, or $STUB_RESUME_SLEEP_FIRST for the first run), prints
   // the next of the |-separated $STUB_RESUME_OUTS outcome lines (the last one
-  // repeats) and exits $STUB_RESUME_EXIT ($STUB_RESUME_EXIT_FIRST for the first run).
+  // repeats) and exits the next $STUB_RESUME_EXITS code, or $STUB_RESUME_EXIT
+  // ($STUB_RESUME_EXIT_FIRST for the first run).
   let script, resumeDir;
   beforeEach(() => {
     signIn();
@@ -1147,6 +1148,8 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
         'outs = os.environ.get("STUB_RESUME_OUTS", \'{"result":"already running","session":"s1"}\').split("|")',
         'print(outs[min(n, len(outs) - 1)], flush=True)',
         'log.write("resume-end\\n"); log.flush()',
+        'exits = os.environ.get("STUB_RESUME_EXITS", "").split("|")',
+        'if exits[0]: sys.exit(int(exits[min(n, len(exits) - 1)]))',
         'first = os.environ.get("STUB_RESUME_EXIT_FIRST")',
         'sys.exit(int(first) if first and n == 0 else int(os.environ.get("STUB_RESUME_EXIT", "0")))',
         '',
@@ -1260,44 +1263,69 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
     expect(fs.readFileSync(stubLog, 'utf8')).toContain('resume-end');
   });
 
-  it('waits out another resume-self holding the lock without using up its retries', () => {
-    // The hand-started run can hold the lock for its whole 600 s; five skips
-    // in a row, more than the three runs a failure gets, then the lock frees.
-    const skip = '{"result":"skipped","why":"another resume-self is running"}';
-    const t0 = Date.now();
-    const res = supervise(
-      resumeEnv({
-        STUB_STATUS: STATUS(true, true),
-        STUB_RESUME_OUTS: [skip, skip, skip, skip, skip, '{"result":"already running","session":"s1"}'].join('|'),
-        PD_SUPERVISOR_RESUME_RETRY: '0.1',
-      }),
-    );
-    expect(resumes()).toHaveLength(6);
+  // Record real requested delays without sleeping through the 1800 s cap.
+  function recordRetrySleeps() {
+    fs.writeFileSync(path.join(stubBin, 'sleep'), '#!/bin/bash\necho "retry-sleep $1" >> "$STUB_LOG"\n', { mode: 0o755 });
+  }
+  const retrySleeps = () => fs.readFileSync(stubLog, 'utf8').split('\n')
+    .filter((l) => l.startsWith('retry-sleep ')).map((l) => Number(l.split(' ')[1]));
+
+  it.each(['0.1', '120'])('retries exit 1 without a run limit, backing off in four steps from %s to 1800 s', (interval) => {
+    recordRetrySleeps();
+    const res = supervise(resumeEnv({
+      STUB_STATUS: STATUS(true, true),
+      STUB_RESUME_EXITS: '1|1|1|1|1|1|1|1|0',
+      PD_SUPERVISOR_RESUME_RETRY: interval,
+    }));
+    expect(resumes()).toHaveLength(9);
+    const sleeps = retrySleeps();
+    expect(sleeps).toHaveLength(8);
+    // Independent schedules: systemd's geometric interpolation reaches the
+    // cap after four increases, then stays there regardless of run count.
+    const expected = interval === '120'
+      ? [120, 236.158761, 464.758002, 914.638947, 1800, 1800, 1800, 1800]
+      : [0.1, 1.158292, 13.416408, 155.401204, 1800, 1800, 1800, 1800];
+    sleeps.forEach((delay, i) => expect(delay).toBeCloseTo(expected[i], 3));
+    expect(res.stderr).toContain('run 8 exited 1; retrying in 1800s');
     expect(res.stderr).not.toContain('gave up');
-    expect(res.stderr).not.toContain('retrying in');
-    // Spaced, not a tight loop: five 0.1 s waits (spawnSync returns only when
-    // the worker, which holds stderr, has finished).
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(450);
   });
 
-  it('gives a lock held after a failure its whole window, counted from the first skip', () => {
-    // A failed run, then a hand-started run takes the lock; the window must
-    // start at that skip, not at the worker's first run. The first run takes
-    // 2.2 s against a 2 s window, so a window counted from the worker's start
-    // has already closed by the first skip and the skips would use up runs.
+  it.each([2, 42, 124, 137])('retries other transient exit %s', (rc) => {
+    recordRetrySleeps();
+    supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), STUB_RESUME_EXITS: `${rc}|0`, PD_SUPERVISOR_RESUME_RETRY: '0.1' }));
+    expect(resumes()).toHaveLength(2);
+    expect(retrySleeps()).toEqual([0.1]);
+  });
+
+  it.each([0, 1, 42, 78])('treats a lock skip at exit %s as an ordinary retry without resetting backoff', (rc) => {
+    recordRetrySleeps();
     const skip = '{"result":"skipped","why":"another resume-self is running"}';
-    const res = supervise(
-      resumeEnv({
-        STUB_STATUS: STATUS(true, true),
-        STUB_RESUME_OUTS: ['{"result":"failed","why":"relay"}', skip, skip, skip, skip, '{"result":"resumed","session":"s1"}'].join('|'),
-        STUB_RESUME_EXIT_FIRST: '1',
-        STUB_RESUME_SLEEP_FIRST: '2.2',
-        PD_SUPERVISOR_RESUME_LOCK_WAIT: '2',
-        PD_SUPERVISOR_RESUME_RETRY: '0.1',
-      }),
-    );
-    expect(resumes()).toHaveLength(6);
-    expect(res.stderr).toContain('run 1 exited 1; retrying');
+    const res = supervise(resumeEnv({
+      STUB_STATUS: STATUS(true, true),
+      STUB_RESUME_OUTS: ['{"result":"failed","why":"relay"}', skip, '{"result":"resumed"}'].join('|'),
+      STUB_RESUME_EXITS: `1|${rc}|0`,
+      PD_SUPERVISOR_RESUME_RETRY: '0.1',
+    }));
+    expect(resumes()).toHaveLength(3);
+    expect(retrySleeps()).toHaveLength(2);
+    expect(retrySleeps()[0]).toBe(0.1);
+    expect(retrySleeps()[1]).toBeCloseTo(1.158292, 3);
+    expect(res.stderr).not.toContain('gave up');
+  });
+
+  it('stops on exit 78 and logs that it gave up', () => {
+    recordRetrySleeps();
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), STUB_RESUME_EXITS: '78|0' }));
+    expect(resumes()).toHaveLength(1);
+    expect(retrySleeps()).toEqual([]);
+    expect(res.stderr).toContain('gave up after run 1 (exit 78)');
+  });
+
+  it('stops on exit 0', () => {
+    recordRetrySleeps();
+    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), STUB_RESUME_EXITS: '0|1' }));
+    expect(resumes()).toHaveLength(1);
+    expect(retrySleeps()).toEqual([]);
     expect(res.stderr).not.toContain('gave up');
   });
 
@@ -1318,13 +1346,6 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
     expect(resumes()).toHaveLength(1);
     expect(res.stderr).toContain('cannot write the marker');
     expect(res.stderr).not.toContain('already launched');
-  });
-
-  it('retries a failed run, at most three runs in all', () => {
-    const res = supervise(resumeEnv({ STUB_STATUS: STATUS(true, true), STUB_RESUME_EXIT: '1', PD_SUPERVISOR_RESUME_RETRY: '0.1' }));
-    expect(resumes()).toHaveLength(3);
-    expect(res.stderr).toContain('run 1 exited 1; retrying in 0.1s');
-    expect(res.stderr).toContain('gave up after 3 runs');
   });
 
   it('skips with one log line when the supervisor skill is absent', () => {

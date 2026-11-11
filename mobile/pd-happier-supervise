@@ -78,13 +78,13 @@
 # claimed with an atomic mkdir: /tmp lives in the container layer, so it
 # survives a `docker restart` (and a host reboot) that kills the supervisor,
 # and the key is what changes then; a second copy of this loop started by hand
-# in the same boot finds the marker and does nothing. A failed run is retried
-# at most twice, PD_SUPERVISOR_RESUME_RETRY seconds apart (120, the unit's
-# RestartSec); a run that found another resume-self holding the lock waits for
-# it at the same spacing (up to 720 s from the first skip) without using up a
-# retry; and
-# resume-self reuses one pending localId, so a retry never queues a second
-# startup message. No skill installed (a fresh home) is one log line.
+# in the same boot finds the marker and does nothing. Every exit except 0 and
+# 78 is retried without a run limit. Delays start at PD_SUPERVISOR_RESUME_RETRY
+# (120 s) and rise geometrically in four steps to 1800 s, matching the unit.
+# A lock skip is an ordinary retry at any exit status, without resetting the
+# backoff. Exit 78 gives up. resume-self reuses a pending localId, replacing
+# it after two accepted-but-never-active runs. No skill installed (a fresh
+# home) is one log line.
 # PD_SUPERVISOR_RESUME=0 turns it off.
 #
 # Logging is on STATE CHANGES only, to stderr (the container log); stdout
@@ -160,10 +160,6 @@ if ! [[ $RESUME_RETRY =~ ^[0-9]+(\.[0-9]+)?$ ]] \
   || ! awk -v i="$RESUME_RETRY" 'BEGIN { exit !(i >= 0.1 && i <= 3600) }'; then
   RESUME_RETRY=120
 fi
-# How long a held lock is waited out, from the first skip of a streak: the
-# holder's own 600 s timeout plus slack. Whole seconds (bash's SECONDS).
-RESUME_LOCK_WAIT="${PD_SUPERVISOR_RESUME_LOCK_WAIT:-720}"
-[[ $RESUME_LOCK_WAIT =~ ^[1-9][0-9]{0,4}$ ]] || RESUME_LOCK_WAIT=720
 resume_checked=""
 
 say() {
@@ -386,36 +382,31 @@ clear_stale_daemon_records() {
 }
 
 run_resume() {
-  # The background half: resume-self, retried after a failure, at most 3 runs.
-  # Exit 0 is resumed, already running or skipped; the outcome line says which.
-  # One skip is NOT final: "another resume-self is running" means a hand-started
-  # run holds the lock, and that run can wait up to its own 600 s timeout and
-  # then fail. So a lock skip is retried without using up a run, for up to
-  # RESUME_LOCK_WAIT (720) s from the FIRST skip of a streak (a holder that took the lock late in
-  # this worker's life gets its whole window), and only then counts as a
-  # failure. Returns 1 after giving up.
-  local attempt=1 rc line out lock_until=""
+  # Like Restart=on-failure with RestartSteps=4 / RestartMaxDelaySec=1800:
+  # retry forever, except exit 0 (done) and 78 (a failure no retry can fix).
+  # A lock skip, at ANY status, is an ordinary retry; it never resets backoff.
+  local attempt=1 rc line out delay
   while :; do
     out=$(timeout 700 python3 -I "$RESUME_SCRIPT" resume-self --timeout 600 </dev/null 2>&1)
     rc=$?
     while IFS= read -r line; do echo "pocket-dev: supervisor-resume: $line" >&2; done <<<"$out"
-    if [ "$rc" = 0 ] && [[ $out == *"another resume-self is running"* ]]; then
-      [ -z "$lock_until" ] && lock_until=$((SECONDS + RESUME_LOCK_WAIT))
-      if [ "$SECONDS" -lt "$lock_until" ]; then
-        sleep "$RESUME_RETRY"
-        continue
+    if ! [[ $out == *"another resume-self is running"* ]]; then
+      [ "$rc" = 0 ] && return 0
+      if [ "$rc" = 78 ]; then
+        echo "pocket-dev: supervisor-resume: gave up after run $attempt (exit 78); by hand: python3 -I $RESUME_SCRIPT resume-self" >&2
+        return 78
       fi
-    elif [ "$rc" = 0 ]; then
-      return 0
     fi
-    lock_until=""
-    [ "$attempt" -ge 3 ] && break
-    echo "pocket-dev: supervisor-resume: run $attempt exited $rc; retrying in ${RESUME_RETRY}s" >&2
+    # systemd uses a geometric progression: four increases from RestartSec
+    # to the cap. Clamp the step before exponentiation, even on a long outage.
+    delay=$(awk -v base="$RESUME_RETRY" -v step="$((attempt - 1))" 'BEGIN {
+      if (base >= 1800 || step >= 4) print 1800
+      else printf "%.6f", base * (1800 / base) ^ (step / 4)
+    }')
+    echo "pocket-dev: supervisor-resume: run $attempt exited $rc; retrying in ${delay}s" >&2
     attempt=$((attempt + 1))
-    sleep "$RESUME_RETRY"
+    sleep "$delay"
   done
-  echo "pocket-dev: supervisor-resume: gave up after 3 runs (last exit $rc); by hand: python3 -I $RESUME_SCRIPT resume-self" >&2
-  return 1
 }
 
 resume_supervisor() {
