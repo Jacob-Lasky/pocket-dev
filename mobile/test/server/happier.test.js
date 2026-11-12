@@ -138,7 +138,26 @@ const CONVERGENCE = ({ daemon = '0.2.16', cli = '0.2.17', matches = daemon === c
   });
 
 function supervise(env, opts = {}) {
-  return spawnSync('bash', [SUPERVISOR], {
+  const { timeout, ...spawnOpts } = opts;
+  // A spawn timeout kills only the loop, leaving its current CLI call alive.
+  // Every descendant inherits fd 3 even when stdout/stderr are redirected.
+  // Close our copy, then wait for EOF before returning: no stub can recreate
+  // starts.log during afterEach, and resume workers have finished writing too.
+  const command = [
+    'exec 3> >(cat >/dev/null 2>&1)',
+    'drain=$!',
+    'timeout --foreground "$1" bash "$2" >"$3/stdout" 2>"$3/stderr"',
+    'result=$?',
+    'exec 3>&-',
+    'wait "$drain"',
+    'cat "$3/stdout"',
+    'cat "$3/stderr" >&2',
+    'exit "$result"',
+  ].join('\n');
+  const args = timeout
+    ? ['-c', command, 'test-supervise', String(timeout / 1000), SUPERVISOR, fs.mkdtempSync(path.join(tmproot, 'capture-'))]
+    : [SUPERVISOR];
+  return spawnSync('bash', args, {
     env: spawnEnv({
       HOME: home,
       // Pinned, not just defaulted from HOME: the script reads it first, and the
@@ -150,7 +169,7 @@ function supervise(env, opts = {}) {
       ...env,
     }),
     encoding: 'utf8',
-    ...opts,
+    ...spawnOpts,
   });
 }
 
@@ -1237,31 +1256,23 @@ describe('pd-happier-supervise resumes the standing supervisor once per boot', (
 
   it('never holds up the loop while it runs', () => {
     // resume-self can wait 600 s for the relay; passes must keep coming.
-    try {
-      supervise(
-        resumeEnv({
-          STUB_STATUS: STATUS(true, true),
-          STUB_RESUME_SLEEP: '2',
-          PD_HAPPIER_ONCE: '0',
-          PD_HAPPIER_INTERVAL: '0.1',
-        }),
-        { timeout: 1000 },
-      );
-      const log = fs.readFileSync(stubLog, 'utf8').split('\n');
-      const start = log.findIndex((l) => l.startsWith('resume-start'));
-      const end = log.indexOf('resume-end');
-      expect(start).toBeGreaterThanOrEqual(0);
-      const during = log.slice(start, end === -1 ? undefined : end).filter((l) => l === 'status');
-      expect(during.length).toBeGreaterThanOrEqual(3);
-    } finally {
-      // The worker outlives the killed loop and finishes on its own; wait for
-      // it, pass or fail, so nothing writes into the fixture after cleanup.
-      const deadline = Date.now() + 5000;
-      while (!(fs.existsSync(stubLog) && fs.readFileSync(stubLog, 'utf8').includes('resume-end')) && Date.now() < deadline) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-      }
-    }
-    expect(fs.readFileSync(stubLog, 'utf8')).toContain('resume-end');
+    supervise(
+      resumeEnv({
+        STUB_STATUS: STATUS(true, true),
+        STUB_RESUME_SLEEP: '2',
+        PD_HAPPIER_ONCE: '0',
+        PD_HAPPIER_INTERVAL: '0.1',
+      }),
+      { timeout: 1000 },
+    );
+    const log = fs.readFileSync(stubLog, 'utf8').split('\n');
+    const start = log.findIndex((l) => l.startsWith('resume-start'));
+    const end = log.indexOf('resume-end');
+    expect(start).toBeGreaterThanOrEqual(0);
+    // The loop stops after 1 s, before the 2 s worker finishes. supervise()
+    // must join that writer before returning, without polling its log.
+    expect(end).toBeGreaterThan(start);
+    expect(log.slice(start, end).filter((l) => l === 'status').length).toBeGreaterThanOrEqual(3);
   });
 
   // Record real requested delays without sleeping through the 1800 s cap.
