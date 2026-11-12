@@ -19,7 +19,8 @@
 # Usage: test/pid-sandbox.sh <repo root AS THE DOCKER HOST SEES IT> [vitest args]
 #   in pocket-dev: the /coding path translates to /mnt/user/misc/coding/...
 #   in CI:         "$GITHUB_WORKSPACE"
-# Default vitest args: the PID-sandbox tests of test/server/happier.test.js.
+# Default vitest args: the PID-sandbox tests of test/server/happier.test.js and
+# test/server/memguard.test.js.
 # PD_PID_SANDBOX_PREP, when set, is a shell command run in the copy's mobile/
 # directory before vitest (how a mutation is applied, to the copy only).
 set -euo pipefail
@@ -28,7 +29,7 @@ shift
 here=$(cd "$(dirname "$0")/../.." && pwd)
 image=$(awk '$1 == "FROM" && $2 ~ /^node:/ { img = $2 } END { print img }' "$here/Dockerfile")
 [ -n "$image" ] || { echo "pid-sandbox: no node base image in $here/Dockerfile" >&2; exit 2; }
-[ "$#" -gt 0 ] || set -- test/server/happier.test.js -t 'PID sandbox'
+[ "$#" -gt 0 ] || set -- test/server/happier.test.js test/server/memguard.test.js -t 'PID sandbox'
 # Inside: a PREP must change the copy, and every "(PID sandbox)" test the
 # filter selected must actually RUN (pass or fail), with at least one doing so,
 # so a renamed describe, a filter that matches nothing, or a gate that no longer

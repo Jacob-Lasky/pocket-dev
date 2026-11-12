@@ -58,5 +58,12 @@ export function spawnEnv(overrides = {}) {
   // in a temp HOME, entrypoint.sh runs the skeleton's `claude install`, which in
   // the image downloads Claude Code. A fixture skeleton's claude is a stub, but
   // a test that means to exercise the bootstrap sets it explicitly.
-  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0' }, overrides);
+  //
+  // PD_MEMGUARD=0 by DEFAULT, the PD_HAPPIER reason without the "belt and
+  // braces": entrypoint.sh starts pd-memguard in the background on EVERY boot,
+  // and it loops forever. Left on, each suite that spawns entrypoint.sh would
+  // leave one running (inside pocket-dev, against the live cgroup) and hold the
+  // test's stderr pipe open. memguard.test.js sets it where it means to
+  // exercise the launch.
+  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0', PD_MEMGUARD: '0' }, overrides);
 }
