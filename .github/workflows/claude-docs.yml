@@ -30,17 +30,11 @@ name: Auto-Document PR
 # checkout is by branch name, so a re-run diffs the CURRENT branch tip.
 #
 # Actions are pinned to reviewed commit SHAs (claude-code-action v1.0.235,
-# checkout v6) because a moving tag is incompatible with a hard boundary.
-#
-# DO NOT stage the bot's working tree except through docs-bot-guard.mjs.
-# claude-code-action resets the root CLAUDE.md (and .claude/, CLAUDE.local.md,
-# .husky, .gitmodules, ...) to the BASE branch before Claude runs, because the
-# PR head's copy is untrusted, and leaves that revert unstaged. A bare
-# `git add -A` commits it: on #104, #107 and #108 that replaced the PR's
-# CLAUDE.md with main's and deleted the sections the PR had just added. The
-# guard returns restored paths to the PR head, merges the bot's CLAUDE.md edit
-# onto the PR's version, and holds back (as a PR comment) any bot change that
-# removes documentation the PR head has. See .github/scripts/docs-bot-guard.mjs.
+# checkout v7.0.1) because a moving tag is incompatible with a hard boundary.
+# DO NOT swap either SHA for a tag (`@v1`, `@v7`, `@main`): the boundary below
+# is only as strong as the exact code that was reviewed, and an upstream owner
+# can repoint a tag at any time. Bump SHA to SHA, and update the version numbers
+# in this comment in the same edit so it cannot go stale.
 
 on:
   pull_request:
@@ -65,8 +59,15 @@ jobs:
       issues: write
       id-token: write
     steps:
+      # checkout v7 REFUSES to check out fork PR code without
+      # `allow-unsafe-pr-checkout: true`, but that gate is only evaluated for
+      # `pull_request_target` and `workflow_run` events. This workflow is
+      # `pull_request` and the job `if` above already rejects fork PRs, so the
+      # gate is never reached. DO NOT retrigger this workflow on
+      # `pull_request_target`: it would run fork-authored code against this
+      # job's `contents: write` token and `CLAUDE_CODE_OAUTH_TOKEN`.
       - name: Checkout PR branch
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
@@ -80,25 +81,11 @@ jobs:
           echo "start_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git diff "origin/$BASE_REF...HEAD" > "$RUNNER_TEMP/pr.diff"
           wc -c "$RUNNER_TEMP/pr.diff"
-          # Copied out before Claude runs, so the guard that judges its edits
-          # is the one this commit carries, whatever happens to the tree.
-          # The guard is PR-authored code, exactly as trusted as this workflow
-          # file, which a pull_request event also takes from the PR: fork PRs
-          # are skipped above, so whoever can change the guard can already
-          # change the job. What it defends against is the action and the
-          # model, not the PR author.
-          cp .github/scripts/docs-bot-guard.mjs "$RUNNER_TEMP/docs-bot-guard.mjs"
 
       - name: Update documentation with Claude
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The "deliberate edit" and "never delete" rules below are requests;
-          # docs-bot-guard.mjs in the last step is what enforces them. The
-          # reverts on #104, #107 and #108 that the first rule was written
-          # for were NOT the model: the action had reset CLAUDE.md to main
-          # and this job committed that (see the header). The rules stay so
-          # the bot proposes fewer edits the guard has to hold back.
           prompt: |
             You are updating documentation for a pull request. The full diff of
             this PR (branch vs base) is in the file ${{ runner.temp }}/pr.diff —
@@ -106,7 +93,9 @@ jobs:
 
             Determine whether any documentation in this repository is now stale
             or missing given those changes: README.md, CLAUDE.md, anything under
-            docs/, and skill files (skills/**, SKILL.md).
+            docs/, and skill files (skills/**, .claude/skills/**/SKILL.md,
+            or a root SKILL.md). Preserve and review documentation newly added
+            by the PR; do not delete it merely because it is new.
 
             - Edit ONLY markdown (.md) files. You have no shell and no git in
               this session: do not attempt to run commands, stage, commit, or
@@ -115,69 +104,53 @@ jobs:
             - Keep edits surgical: update what the diff made stale, add what it
               made necessary. Do not rewrite unrelated sections or restructure
               documents.
-            - Markdown that this PR's diff itself adds or changes is the
-              author's deliberate edit. Do NOT revert, delete or reword it,
-              even where you cannot confirm it from this repository: it may
-              describe something outside the repo (a hook in the user's
-              ~/.claude, a live measurement) that you cannot see. Your job is
-              the documentation the diff left stale ELSEWHERE.
-            - The root CLAUDE.md in your working tree is the BASE branch's
-              version, not this PR's: the action resets it for security. The
-              PR's version is .claude-pr/CLAUDE.md; read it, and do not edit
-              anything under .claude-pr/. Edit CLAUDE.md itself as usual: your
-              edit is merged onto the PR's version afterwards. Do not re-add
-              what pr.diff shows the PR already adding.
-            - Never delete documentation. Add text, or adjust a stale fact in
-              place. A check after you compares each file you touch with the
-              PR head and drops your whole change to that file if it removes
-              a heading, removes lines, hides text from the rendered page (in
-              an HTML comment or a closed <details> block), or drops
-              more than 40 words in one place or more than 120 words in the file.
+            - Do not copy text the code already prints for its user (help
+              text, error or refusal messages) into a doc; point to the
+              behavior instead. Still document what a reader needs BEFORE
+              meeting that text: preconditions, required flags, recovery.
+            - Some files carry a size budget a test enforces: Grep the tests
+              for "budget" and for the file's name before growing a file.
+              Never leave such a file over its budget. If a needed addition
+              does not fit, leave it out rather than cut unrelated guidance
+              to make room.
             - If the documentation is already accurate, change nothing and say so.
-          # DO NOT change --model to a moving alias (opus, opus[1m]). The
-          # Dockerfile's cdspo/cdsps deliberately use aliases so they follow
-          # each new model; CI is the opposite case and wants a hard pin, so a
-          # docs run is reproducible and cannot change model under a rerun.
-          # The cost of the pin is that it must be bumped BY HAND each release.
+          # DO NOT change --model to a moving alias (opus, opus[1m]). CI wants
+          # a hard pin so a docs run is reproducible and cannot change model
+          # under a rerun. The cost is that it must be bumped BY HAND each
+          # release; that is the accepted trade, not an oversight.
           #
-          # THE PIN IS COUPLED TO THE ACTION SHA ABOVE, so bump BOTH together.
-          # claude-code-action hard-pins the Claude Code CLI it installs
-          # (CLAUDE_CODE_VERSION in its base-action/action.yml), and the CLI
-          # REJECTS a model id it predates rather than falling back: measured
-          # 2026-09-28, build 2.1.266 answered `--model claude-opus-5-5` with
-          # HTTP 400 "version 2.1.280 or newer is required", and the action
-          # pinned here at the time shipped an older CLI still. A model-only
-          # bump therefore fails this job on every PR.
+          # THE PIN IS COUPLED TO THE ACTION SHA ABOVE. claude-code-action
+          # hard-pins the Claude Code CLI it installs (CLAUDE_CODE_VERSION in
+          # its base-action/action.yml), and a model id the CLI predates is
+          # rejected at runtime with HTTP 400. Measured 2026-09-28:
+          #   v1.0.199 -> CLI 2.1.239   v1.0.216 -> CLI 2.1.261
+          #   v1.0.232 -> CLI 2.1.280   v1.0.235 -> CLI 2.1.283
+          # claude-opus-5-5 needs CLI 2.1.280 or newer, so v1.0.216 would have
+          # failed every run. Bump BOTH together, and check the action tag's
+          # bundled CLI is new enough for the model before changing either.
+          # Read a tag's CLI with:
+          #   git show <tag>:base-action/action.yml | grep CLAUDE_CODE_VERSION
+          # in a clone of anthropics/claude-code-action.
           #
-          # The tag -> bundled-CLI map and each model's CLI floor live in ONE
-          # place, mobile/test/server/docsWorkflowModel.test.js, which fails
-          # the build if this pin and that SHA are incompatible. Do not copy
-          # those version numbers back into this comment: the test is the
-          # authority and it also tells you how to measure a new entry.
+          # A repo can ENFORCE this instead of trusting the comment; pocket-dev
+          # does, in mobile/test/server/docsWorkflowModel.test.js. Copy that
+          # test into any repo with a JS test runner and the coupling stops
+          # being something a future editor has to remember.
           claude_args: >-
             --model claude-opus-5-5
             --allowedTools "Read,Glob,Grep,Edit(**/*.md),Write(**/*.md)"
             --disallowedTools "Bash"
 
-      - name: Guard and validate markdown-only changes, then commit and push
+      - name: Validate markdown-only changes, then commit and push
         env:
           BRANCH: ${{ github.event.pull_request.head.ref }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
           START_SHA: ${{ steps.prep.outputs.start_sha }}
           PR_NUM: ${{ github.event.pull_request.number }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$(git rev-parse HEAD)" != "$START_SHA" ]; then
             echo "::error::HEAD moved during the Claude step; refusing to continue."
             exit 1
-          fi
-          # Must run before anything is staged: see the header.
-          report="$RUNNER_TEMP/docs-held-back.md"
-          node "$RUNNER_TEMP/docs-bot-guard.mjs" \
-            --head "$START_SHA" --base "origin/$BASE_REF" --report "$report"
-          if [ -s "$report" ]; then
-            gh pr comment "$PR_NUM" --repo "$GITHUB_REPOSITORY" --body-file "$report"
           fi
           validate() {
             local f bad=0
@@ -194,7 +167,7 @@ jobs:
             git ls-files --others --exclude-standard -z
           } | validate
           if [ -z "$(git status --porcelain)" ]; then
-            echo "Nothing to commit: documentation already accurate, or every change was held back."
+            echo "Documentation already accurate; nothing to commit."
             exit 0
           fi
           git add -A
