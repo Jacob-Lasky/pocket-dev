@@ -1,0 +1,223 @@
+#!/bin/bash
+# Kill a runaway process before it livelocks this container.
+#
+# WHY this exists. pocket-dev runs under a 16 GiB memory cgroup with no swap.
+# When one process (on 2026-11-11, a `grep -o` with wide bounded repeats over a
+# large transcript) grows toward that limit, the kernel does NOT OOM-kill it:
+# reclaim keeps evicting page cache, executables included, and every
+# allocation still succeeds after a long stall. memory.events counted 446345
+# `max` events and 0 `oom_kill`. The container stays "up" while every session,
+# the Happier daemon and the terminal server crawl, which is worse than any one
+# process dying.
+#
+# WHY THIS AND NOT A STOCK TOOL (measured inside pocket-dev, 2026-11-11):
+# - earlyoom reads /proc/meminfo, which shows the HOST's 64 GB, not this
+#   cgroup's 16 GiB, so it would never fire.
+# - A PSI-based killer (systemd-oomd, nohang's PSI mode) needs /proc/pressure,
+#   which the Unraid kernel does not provide.
+# - Per-session child cgroups need a writable cgroup2 mount; it is read-only
+#   here, with an empty subtree_control.
+# So this reads the cgroup's own memory.max and memory.stat and acts in user
+# space. It is a backstop for runaways, not a memory manager.
+#
+# WHAT IT DOES. Every PD_MEMGUARD_INTERVAL seconds (default 1) it compares the
+# memory reclaim cannot give back without swap (anon + shmem + kernel, less
+# reclaimable slab, from memory.stat) with memory.max. When that is within
+# PD_MEMGUARD_RESERVE_MB (default 2048) of the limit, it picks the same-uid
+# process with the largest anonymous RSS, sends SIGTERM, waits
+# PD_MEMGUARD_GRACE seconds (default 2), then SIGKILLs it if the same process
+# (same start time) is still there, and waits PD_MEMGUARD_COOLDOWN seconds
+# (default 5) for the memory to come back before judging again.
+#
+# PID REUSE. A process is identified by its PID plus its start time, read
+# before anything else about it and checked again immediately before each
+# signal, after any logging (a log write can block), so a PID that was freed
+# and handed to another process between the choice and the kill is never
+# signalled. bash has no pidfd, and a helper that
+# holds one would be a second process to keep alive in a starved container, so
+# one window remains: the microseconds between that last check and kill(2).
+# Hitting it needs the victim to exit and the kernel to hand its PID to a new
+# process of ours in that gap, which means cycling through pid_max (4194304
+# here) under a container limit of 8192 tasks.
+#
+# WHAT IT NEVER KILLS:
+# - PID 1 (tini), itself, and anything whose command line matches
+#   PD_MEMGUARD_PROTECT (default: the Happier daemon, pd-happier-supervise,
+#   this script, the terminal server and tmux). Killing those takes every
+#   session down with it, which is the outcome this exists to prevent.
+# - Anything smaller than PD_MEMGUARD_MIN_VICTIM_MB (default 1024). Agent
+#   sessions sit at 300-400 MB each; a runaway is gigabytes. When the cgroup is
+#   full of many ordinary processes and none is that big, there is no runaway
+#   to kill, so it logs (at most once a minute) and leaves the decision to the
+#   kernel. DO NOT lower this to "make it fire": it would start killing
+#   sessions, the supervisor's included, to save the rest.
+#
+# It forks nothing while it polls or waits: every read is a bash builtin and
+# every pause is a `read -t` on a pipe opened once at start, so it keeps
+# working when the container is too starved to start a process. The loop has
+# no exit path except the PD_MEMGUARD_ONCE test seam; with no limit set
+# (memory.max is "max") or no cgroup v2 files it re-checks every minute, since
+# `docker update --memory` can add a limit live.
+#
+# entrypoint.sh starts it in the background; PD_MEMGUARD=0 turns that off.
+# Kills are logged to stderr (the container log) and PD_MEMGUARD_LOG
+# (default $PD_STATE_DIR/memguard.log).
+#
+# Test seams: PD_MEMGUARD_CGROUP (directory holding memory.max and
+# memory.stat), PD_MEMGUARD_PROC (a /proc-shaped tree), PD_MEMGUARD_ONCE=1 (one
+# evaluation, then exit; the exit status is 0 after a kill and 1 otherwise).
+# Nothing sets them in production.
+
+cgroup=${PD_MEMGUARD_CGROUP:-/sys/fs/cgroup}
+proc=${PD_MEMGUARD_PROC:-/proc}
+interval=${PD_MEMGUARD_INTERVAL:-1}
+reserve_kb=$(( ${PD_MEMGUARD_RESERVE_MB:-2048} * 1024 ))
+min_victim_kb=$(( ${PD_MEMGUARD_MIN_VICTIM_MB:-1024} * 1024 ))
+grace=${PD_MEMGUARD_GRACE:-2}
+cooldown=${PD_MEMGUARD_COOLDOWN:-5}
+# The Happier daemon has two shapes: the managed install runs
+# "<cli>/versions/<v>/happier daemon start-sync", and the image's npm fallback
+# runs "node ... <cli>/package-dist/index.mjs daemon start-sync" (the same two
+# pd-happier-supervise's is_live_daemon accepts).
+# tmux( |:|$): the server keeps the argv of the client that started it, but
+# tmux may also retitle it "tmux: server", and either form must stay protected.
+protect=${PD_MEMGUARD_PROTECT:-'(^|/)happier[^ /]* daemon( |$)|/package-dist/index\.mjs daemon( |$)|(^|/)pd-happier-supervise( |$)|(^|/)pd-memguard( |$)|/mobile/server\.js|(^|/)tmux( |:|$)'}
+log=${PD_MEMGUARD_LOG:-${PD_STATE_DIR:-$HOME/.pocket-dev}/memguard.log}
+once=${PD_MEMGUARD_ONCE:-0}
+
+say() {
+  local line
+  printf -v line '%(%Y-%m-%dT%H:%M:%SZ)T pd-memguard: %s' -1 "$*"
+  printf '%s\n' "$line" >&2
+  printf '%s\n' "$line" >> "$log" 2>/dev/null
+}
+export TZ=UTC
+
+# Sets limit_kb (empty when there is no limit to guard) and used_kb.
+read_cgroup() {
+  limit_kb='' used_kb=0
+  local max key value anon=0 shmem=0 kernel=0 slab_reclaimable=0
+  { read -r max < "$cgroup/memory.max"; } 2>/dev/null || return
+  case $max in ''|max|*[!0-9]*) return ;; esac
+  { while read -r key value; do
+      case $key in
+        anon) anon=$value ;; shmem) shmem=$value ;; kernel) kernel=$value ;;
+        slab_reclaimable) slab_reclaimable=$value ;;
+      esac
+    done < "$cgroup/memory.stat"; } 2>/dev/null || return
+  limit_kb=$(( max / 1024 ))
+  used_kb=$(( (anon + shmem + kernel - slab_reclaimable) / 1024 ))
+}
+
+# Sets st to a process's start time (field 22 of stat), which tells a PID
+# that was reused apart from the process that was chosen, and state to its
+# state letter (field 3). It sets variables rather than printing, because
+# $(...) would fork. The command name (field 2) may contain spaces,
+# parentheses and newlines, so the whole file is read (-d '': up to a NUL
+# that never comes, so read returns non-zero at end of file with the text
+# read) and fields are counted from the last ") ".
+starttime() {
+  st='' state=''
+  local line='' rest
+  { IFS= read -r -d '' line < "$proc/$1/stat"; } 2>/dev/null
+  [[ $line == *') '* ]] || return 1
+  rest=${line##*) }
+  set -f
+  set -- $rest
+  set +f
+  state=$1 st=${20}
+  case $st in ''|*[!0-9]*) st=''; return 1 ;; esac
+}
+
+# Sets victim, victim_kb, victim_cmd and victim_start to the biggest killable
+# process, or victim='' when none reaches the minimum.
+pick_victim() {
+  victim='' victim_kb=0 victim_cmd='' victim_start=''
+  local dir pid key value rest uid rss cmd arg start
+  for dir in "$proc"/[0-9]*; do
+    pid=${dir##*/}
+    [ "$pid" = 1 ] || [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] && continue
+    # Identity first (see PID REUSE in the header): no start time, no kill. A
+    # process whose start time cannot be read has most likely just exited.
+    starttime "$pid" || continue
+    start=$st
+    uid='' rss=0
+    { while read -r key value rest; do
+        case $key in Uid:) uid=$value ;; RssAnon:) rss=$value ;; esac
+      done < "$dir/status"; } 2>/dev/null || continue
+    [ "$uid" = "$UID" ] && [ "$rss" -gt "$victim_kb" ] && [ "$rss" -ge "$min_victim_kb" ] || continue
+    cmd=''
+    arg=''
+    { while IFS= read -r -d '' arg; do cmd+="${cmd:+ }$arg"; arg=''; done < "$dir/cmdline"; } 2>/dev/null
+    [ -n "$arg" ] && cmd+="${cmd:+ }$arg" # a rewritten argv may lack the final NUL
+    [ -n "$cmd" ] || continue # kernel threads and processes already exiting
+    [[ $cmd =~ $protect ]] && continue
+    victim=$pid victim_kb=$rss victim_cmd=$cmd victim_start=$start
+  done
+}
+
+# True while the chosen process still exists. A zombie (state Z) has already
+# exited and freed its memory; only its parent's wait() is outstanding, so it
+# counts as gone: no SIGKILL, and no "ignored SIGTERM" line that would blame
+# a process that obeyed.
+alive() { [ -d "$proc/$1" ] && starttime "$1" && [ "$st" = "$2" ] && [ "$state" != Z ]; }
+
+# True while the chosen process is still the one chosen; otherwise says so.
+still_there() {
+  alive "$victim" "$victim_start" && return 0
+  say "pid $victim exited before it could be signalled; judging again"
+  return 1
+}
+
+# Returns non-zero, having signalled nothing, when the chosen process is gone
+# (or is a zombie, or its PID now names another process) by the time it would
+# be signalled.
+kill_victim() {
+  still_there || return 1
+  say "unreclaimable ${used_kb} kB is within ${reserve_kb} kB of the ${limit_kb} kB limit; killing pid $victim (${victim_kb} kB anon): ${victim_cmd:0:300}"
+  # Again, because say writes to a log that can stall: the check that counts is
+  # the one immediately before the signal (PID REUSE in the header).
+  still_there || return 1
+  kill -TERM "$victim" 2>/dev/null
+  local waited=0
+  while [ "$waited" -lt "$grace" ] && alive "$victim" "$victim_start"; do
+    nap 1
+    waited=$(( waited + 1 ))
+  done
+  if alive "$victim" "$victim_start"; then
+    kill -KILL "$victim" 2>/dev/null
+    say "pid $victim ignored SIGTERM for ${grace}s; sent SIGKILL"
+  fi
+}
+
+# A sleep that does not fork: read with a timeout on a pipe nobody writes. The
+# pipe is opened once, here; that process substitution is the only fork.
+exec {nap_fd}<> <(:)
+nap() { read -rt "$1" -u "$nap_fd"; }
+
+say "started (reserve ${reserve_kb} kB, minimum victim ${min_victim_kb} kB)"
+last_none=0
+while :; do
+  read_cgroup
+  if [ -z "$limit_kb" ]; then
+    [ "$once" = 1 ] && exit 1
+    nap 60
+    continue
+  fi
+  if [ "$used_kb" -ge $(( limit_kb - reserve_kb )) ]; then
+    pick_victim
+    if [ -z "$victim" ]; then
+      now=$EPOCHSECONDS
+      if [ $(( now - last_none )) -ge 60 ]; then
+        say "unreclaimable ${used_kb} kB is within ${reserve_kb} kB of the ${limit_kb} kB limit, but no process reaches ${min_victim_kb} kB; leaving it to the kernel"
+        last_none=$now
+      fi
+    elif kill_victim; then
+      [ "$once" = 1 ] && exit 0
+      nap "$cooldown"
+      continue
+    fi
+  fi
+  [ "$once" = 1 ] && exit 1
+  nap "$interval"
+done

@@ -618,5 +618,18 @@ if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
   "${PD_HAPPIER_SUPERVISOR:-/mobile/pd-happier-supervise}" </dev/null >/dev/null &
 fi
 
+# The memory guard (see mobile/pd-memguard for why it exists and why not
+# earlyoom or PSI). It kills the largest runaway process before this
+# container's memory cgroup livelocks in reclaim, which the kernel does not
+# OOM-kill its way out of here. Started unconditionally, not behind
+# HOME_WRITABLE like the Happier block: it needs no home, and a read-only home
+# is no reason to let one process stall every session. Backgrounded and
+# stdout to /dev/null for the same reasons as the Happier supervisor above.
+# PD_MEMGUARD=0 turns it off; PD_MEMGUARD_BIN is the test seam that swaps in
+# a stub, and nothing sets it in production.
+if [ "${PD_MEMGUARD:-1}" != "0" ]; then
+  "${PD_MEMGUARD_BIN:-/mobile/pd-memguard}" </dev/null >/dev/null &
+fi
+
 # Execute the main command
 exec "$@"

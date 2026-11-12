@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnEnv } from './pdEnv.js';
+import { NO_SUCH_PID, PID_SANDBOX } from './pidSandbox.js';
 
 // The Happier daemon's permanent home: the pinned image install and the
 // boot-time supervisor. OpenCode's data surviving a recreate is no longer its own
@@ -747,26 +748,8 @@ describe('pd-happier-supervise keeps extra server profiles alive', () => {
   });
 });
 
-// A record's PID, for every test that needs no real process behind it: above
-// the kernel's PID_MAX_LIMIT (4194304), so no process can ever hold it, and a
-// defect that signals a recorded PID cannot reach anything. DO NOT plant a real
-// PID (1, a spawned child's, any live one) outside the PID sandbox below: on
-// 2026-11-03 a `kill $pids` mutant plus a {"pid":1} stub record SIGTERMed
-// tini and killed the live pocket-dev twice.
-const NO_SUCH_PID = 4194305;
-
-// The tests that need a LIVE process at the recorded PID run only inside a
-// throwaway container started by test/pid-sandbox.sh: its PID 1 carries the
-// argument "pd-pid-sandbox", which neither pocket-dev's docker-init nor a CI
-// VM's systemd has, so a stray PD_PID_SANDBOX=1 is not enough on its own.
-const PID_SANDBOX = (() => {
-  if (process.env.PD_PID_SANDBOX !== '1') return false;
-  try {
-    return fs.readFileSync('/proc/1/cmdline', 'utf8').split('\0').includes('pd-pid-sandbox');
-  } catch {
-    return false;
-  }
-})();
+// Every record below names NO_SUCH_PID unless it runs in the PID sandbox; see
+// pidSandbox.js for why a real PID must never appear outside it.
 
 describe('pd-happier-supervise clears a daemon record a previous container left', () => {
   // ~/.happier outlives a recreate but the PID namespace does not, so the
@@ -1084,6 +1067,24 @@ describe('pd-happier-supervise clears a daemon record a previous container left'
         const res = guarded();
         expect(exists(rec)).toBe(true);
         expect(exists(`${rec}.lock`)).toBe(true);
+        expect(res.stderr).not.toContain('cleared a daemon record');
+        expect(killsAttempted()).toEqual([]);
+        expect(alive(daemon.pid)).toBe(true);
+      } finally {
+        daemon.kill();
+      }
+    });
+
+    it('keeps an old record whose PID is the npm fallback daemon', () => {
+      // The image's npm copy (@happier-dev/cli 0.2.16) spawns its daemon as
+      // node --no-warnings --no-deprecation <cli>/package-dist/index.mjs daemon start-sync.
+      const entry = '/opt/x/@happier-dev/cli/package-dist/index.mjs';
+      const daemon = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', entry, 'daemon', 'start-sync'], { stdio: 'ignore' });
+      try {
+        expect(cmdlineOf(daemon.pid, (c) => c.endsWith(`\0${entry}\0daemon\0start-sync\0`))).toContain(`\0${entry}\0daemon\0start-sync\0`);
+        const rec = plant({ pid: daemon.pid });
+        const res = guarded();
+        expect(exists(rec)).toBe(true);
         expect(res.stderr).not.toContain('cleared a daemon record');
         expect(killsAttempted()).toEqual([]);
         expect(alive(daemon.pid)).toBe(true);

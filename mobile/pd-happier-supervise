@@ -243,17 +243,21 @@ boot_epoch() {
 }
 
 is_live_daemon() {
-  # True when $1 is the PID of a running `happier daemon start-sync` here: a
-  # `happier` executable (any directory; happier.mjs and the like too, for the
-  # npm copy run by node) followed by "daemon" and "start-sync" as separate
-  # arguments, the shape of the real one (<cli>/versions/<v>/happier daemon
-  # start-sync). Anything else at that PID is not a daemon to protect.
+  # True when $1 is the PID of a running `happier daemon start-sync` here:
+  # "daemon" and "start-sync" as separate arguments right after either a
+  # `happier` executable (any directory; happier.mjs too), the shape of the
+  # managed install (<cli>/versions/<v>/happier daemon start-sync), or the
+  # CLI's package-dist/index.mjs, the shape the image's npm fallback spawns
+  # (node --no-warnings --no-deprecation <cli>/package-dist/index.mjs daemon
+  # start-sync; its spawnHappyCLI, @happier-dev/cli 0.2.16). Anything else at
+  # that PID is not a daemon to protect.
   [[ $1 =~ ^[1-9][0-9]*$ ]] || return 1
   local -a argv
   local i
   mapfile -d '' -t argv 2>/dev/null <"/proc/$1/cmdline" || return 1
   for ((i = 0; i + 2 < ${#argv[@]}; i++)); do
-    [[ ${argv[i]##*/} == happier* ]] && [ "${argv[i + 1]}" = daemon ] \
+    [[ ${argv[i]##*/} == happier* || ${argv[i]} == */package-dist/index.mjs ]] \
+      && [ "${argv[i + 1]}" = daemon ] \
       && [ "${argv[i + 2]}" = start-sync ] && return 0
   done
   return 1
