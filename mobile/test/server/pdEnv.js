@@ -65,5 +65,8 @@ export function spawnEnv(overrides = {}) {
   // leave one running (inside pocket-dev, against the live cgroup) and hold the
   // test's stderr pipe open. memguard.test.js sets it where it means to
   // exercise the launch.
-  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0', PD_MEMGUARD: '0' }, overrides);
+  //
+  // PD_SSHD=0 by DEFAULT for the same reason: pd-sshd loops forever in the
+  // background. sshd.test.js sets it where it means to exercise the launch.
+  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0', PD_MEMGUARD: '0', PD_SSHD: '0' }, overrides);
 }
