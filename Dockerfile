@@ -300,9 +300,9 @@ RUN corepack enable pnpm
 COPY mobile/ /mobile/
 RUN chmod +x /mobile/pd-lavish-axi.mjs && \
     ln -sfn /mobile/pd-lavish-axi.mjs /usr/local/bin/lavish-axi
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace pd-happier-supervise pd-memguard && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace pd-happier-supervise pd-memguard pd-sshd && \
     pnpm install --prod --frozen-lockfile && \
-    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace /mobile/pd-happier-supervise /mobile/pd-memguard && \
+    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace /mobile/pd-happier-supervise /mobile/pd-memguard /mobile/pd-sshd && \
     mkdir -p /etc/codex && \
     cp /mobile/codex-requirements.toml /etc/codex/requirements.toml && \
     chown -R claude:users /mobile
@@ -312,6 +312,18 @@ RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd
 # inside /home/claude, which is the single `Home` bind mount in pocket-dev.xml,
 # so it survives a container RECREATE with no volume of its own.
 ENV PD_STATE_DIR=/home/claude/.pocket-dev
+
+# The outage sshd that mobile/pd-sshd runs as claude (Multica WORK-332: how
+# jake-hypervisor reaches this container when Multica is down). Only the
+# server binary comes from here; pd-sshd writes its own config and host key
+# under $PD_STATE_DIR/sshd. The package's /etc/ssh host keys are DELETED: a key
+# baked into a public image is a key every container of it shares, and nothing
+# here uses them. /run/sshd is the privilege-separation directory sshd checks
+# for even when it runs unprivileged.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && rm -f /etc/ssh/ssh_host_* \
+    && mkdir -p /run/sshd && chmod 0755 /run/sshd \
+    && rm -rf /var/lib/apt/lists/*
 
 # dgvpn: the static tsnet proxy binary plus the two wrapper commands. Installed
 # as root into /usr/local/bin (on PATH for the claude user). The proxy runs as

@@ -631,5 +631,16 @@ if [ "${PD_MEMGUARD:-1}" != "0" ]; then
   "${PD_MEMGUARD_BIN:-/mobile/pd-memguard}" </dev/null >/dev/null &
 fi
 
+# The outage sshd (see mobile/pd-sshd for why it exists and how it is locked
+# down): key-only, unprivileged, and idle until ~/.ssh/authorized_keys exists.
+# It is how jake-hypervisor reaches this container when Multica is down. Behind
+# HOME_WRITABLE because its host key and config live in the home. Backgrounded
+# and stdout to /dev/null for the same reasons as the Happier supervisor above.
+# PD_SSHD=0 turns it off; PD_SSHD_SUPERVISOR is the test seam that swaps in a
+# stub, and nothing sets it in production.
+if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SSHD:-1}" != "0" ]; then
+  "${PD_SSHD_SUPERVISOR:-/mobile/pd-sshd}" </dev/null >/dev/null &
+fi
+
 # Execute the main command
 exec "$@"

@@ -73,6 +73,8 @@ The image ships the [Happier](https://github.com/happier-dev/happier) CLI and [O
 
 A memory limit alone does not save the container: when one process grows toward it, the kernel can keep reclaiming page cache instead of killing anything, and every session crawls. `mobile/pd-memguard`, started at boot, watches the container's memory cgroup and, when it is about to run out, stops the largest process of your user that is at least 1 GiB, never the Happier daemon, the terminal server or tmux. Set `PD_MEMGUARD=0` to turn it off. Details in CLAUDE.md "Memory guard".
 
+The image also ships a key-only outage sshd (`mobile/pd-sshd`): it runs as your user on container port 2222 once `~/.ssh/authorized_keys` exists, and the template publishes it on the docker bridge gateway only (`-p 172.17.0.1:2210:2222`), not on the host's LAN address. Set `PD_SSHD=0` to turn it off. Details in CLAUDE.md "Outage sshd".
+
 ## A second model in the box
 
 The image also ships [Codex](https://github.com/openai/codex), OpenAI's coding CLI, at `/usr/local/bin/codex`. On first boot the container also fetches the official standalone release that Codex's remote control needs; its launcher lands in `~/bin` (inside the home mount) and therefore wins on `PATH`, so the image copy is the fallback for when that download fails. Either way, Codex can run in its own session, and also provide a second opinion: a model from a different lab has different blind spots, so asking it to attack a diff catches things a self-review agrees with itself about.

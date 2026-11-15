@@ -1,0 +1,152 @@
+#!/bin/bash
+# Keep an unprivileged, key-only sshd running in this container.
+#
+# WHY this exists (Jacob-Lasky/pocket-dev, Multica WORK-332). Tower's agents
+# take their work through Multica. When Multica itself is down (2026-11-15
+# 05:27Z, a database outage), the only other way in was a Happier session, and
+# Happier is being retired. This sshd is the outage path: jake-hypervisor runs
+# `ssh tower-pocketdev`, which goes through the reverse tunnel Tower already
+# keeps to jake-hypervisor (container happier-hypervisor-tunnel, forward
+# 127.0.0.1:2210 on jake-hypervisor to 172.17.0.1:2210 on Tower), then through
+# the template's `-p 172.17.0.1:2210:2222` to this sshd. Runbook: the
+# tower-multica skill, "When Multica is down".
+#
+# HOW IT IS LOCKED DOWN, and DO NOT loosen any of it:
+# - It runs as claude (uid 99), never root, so it can only ever log in claude,
+#   and only with a key in AuthorizedKeysFile. No passwords, no keyboard-
+#   interactive, no PAM, no root login, no forwarding of any kind.
+# - The port is published on the docker bridge gateway (172.17.0.1) only, never
+#   0.0.0.0, so nothing on the LAN reaches it; the tunnel binds jake-hypervisor's
+#   loopback only. DO NOT publish it on 0.0.0.0 or set GatewayPorts.
+# - The host key is generated per home, under $PD_STATE_DIR/sshd, so it
+#   survives a recreate (stable known_hosts on jake-hypervisor) and is never
+#   baked into the shared image. The Dockerfile deletes the package's keys.
+#
+# It does nothing until ~/.ssh/authorized_keys exists, re-checking every
+# PD_SSHD_IDLE seconds (60), so a home with no key costs one sleeping loop. When
+# sshd exits it is restarted after a backoff that grows from 5 s to 60 s and
+# resets after a run that lasted a minute; a config sshd rejects (`sshd -t`) is
+# logged once per change and retried on the idle interval. Logs go to stderr,
+# which is the container log.
+#
+# entrypoint.sh starts it in the background; PD_SSHD=0 turns that off.
+# Test seams: PD_SSHD_BIN (the sshd to run), PD_SSHD_KEYGEN (ssh-keygen),
+# PD_SSHD_ONCE=1 (write the config, run sshd once in the foreground, exit with
+# its status; 3 when there is no authorized_keys). Nothing sets them in
+# production.
+
+state=${PD_SSHD_DIR:-${PD_STATE_DIR:-$HOME/.pocket-dev}/sshd}
+port=${PD_SSHD_PORT:-2222}
+keys=${PD_SSHD_AUTHORIZED_KEYS:-$HOME/.ssh/authorized_keys}
+idle=${PD_SSHD_IDLE:-60}
+sshd=${PD_SSHD_BIN:-/usr/sbin/sshd}
+keygen=${PD_SSHD_KEYGEN:-ssh-keygen}
+user=$(id -un 2>/dev/null || echo claude)
+
+log() { echo "pd-sshd: $*" >&2; }
+
+# Writes the config sshd runs with. Rewritten on every start so an image update
+# changes it with no state to migrate. SetEnv gives a login the image's PATH and
+# locale; without it sshd hands out its compiled-in PATH, and `claude`, `gh` and
+# everything in ~/.local/bin would not resolve.
+write_config() {
+  umask 077
+  mkdir -p "$state" || return 1
+  if [ ! -s "$state/ssh_host_ed25519_key" ]; then
+    rm -f "$state/ssh_host_ed25519_key" "$state/ssh_host_ed25519_key.pub"
+    "$keygen" -q -t ed25519 -N '' -C "pocket-dev sshd host key" \
+      -f "$state/ssh_host_ed25519_key" </dev/null >/dev/null || return 1
+    log "generated host key $state/ssh_host_ed25519_key"
+  fi
+  cat > "$state/sshd_config.tmp" <<EOF || return 1
+# Written by /mobile/pd-sshd on every start; edits here are overwritten.
+Port $port
+ListenAddress 0.0.0.0
+HostKey $state/ssh_host_ed25519_key
+PidFile none
+AuthorizedKeysFile $keys
+AllowUsers $user
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+UsePAM no
+StrictModes yes
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+PrintMotd no
+LoginGraceTime 30
+MaxAuthTries 3
+MaxStartups 4:50:10
+ClientAliveInterval 30
+ClientAliveCountMax 4
+SetEnv PATH=$PATH LANG=${LANG:-C.UTF-8} LC_ALL=${LC_ALL:-C.UTF-8} PD_STATE_DIR=${PD_STATE_DIR:-$HOME/.pocket-dev}
+Subsystem sftp internal-sftp
+EOF
+  mv -f "$state/sshd_config.tmp" "$state/sshd_config"
+}
+
+# Removes group and other write from $1 when it is ours and has either bit.
+tighten() {
+  local path=$1 mode
+  [ -O "$path" ] || return 0
+  mode=$(stat -c %a "$path" 2>/dev/null) || return 0
+  if [ $(( 8#$mode & 8#022 )) -ne 0 ]; then
+    chmod go-w "$path" && log "removed group/other write from $path (was $mode; sshd StrictModes refuses it)"
+  fi
+}
+
+backoff=5
+last_bad=
+waiting_logged=
+while :; do
+  if [ ! -s "$keys" ]; then
+    if [ -n "$PD_SSHD_ONCE" ]; then log "no $keys; not starting"; exit 3; fi
+    [ -n "$waiting_logged" ] || log "no $keys yet; sshd starts once it exists"
+    waiting_logged=1
+    sleep "$idle"
+    continue
+  fi
+  waiting_logged=
+
+  # StrictModes (kept on) refuses a key whose home, ~/.ssh or authorized_keys
+  # is group- or world-writable, and sshd -t cannot see that: sshd would run and
+  # turn every login away, which is the outage path failing exactly when it is
+  # needed. entrypoint.sh runs with umask 002, so a group-writable home is a
+  # real shape here. Tighten what we own and say so in the log.
+  tighten "$HOME"
+  tighten "$(dirname "$keys")"
+  tighten "$keys"
+
+  if ! write_config; then
+    log "could not write $state (host key or config); retrying in ${idle}s"
+    [ -n "$PD_SSHD_ONCE" ] && exit 1
+    sleep "$idle"
+    continue
+  fi
+  if ! check=$("$sshd" -t -f "$state/sshd_config" 2>&1); then
+    sum=$(cksum < "$state/sshd_config")
+    [ "$sum" = "$last_bad" ] || log "sshd rejects $state/sshd_config: $check"
+    last_bad=$sum
+    [ -n "$PD_SSHD_ONCE" ] && exit 1
+    sleep "$idle"
+    continue
+  fi
+  last_bad=
+
+  log "starting sshd on port $port for $user (keys: $keys)"
+  started=$SECONDS
+  "$sshd" -D -e -f "$state/sshd_config" </dev/null
+  status=$?
+  [ -n "$PD_SSHD_ONCE" ] && exit "$status"
+  if [ $((SECONDS - started)) -ge 60 ]; then backoff=5; fi
+  log "sshd exited with status $status; restarting in ${backoff}s"
+  sleep "$backoff"
+  backoff=$((backoff * 2)); [ "$backoff" -gt 60 ] && backoff=60
+done

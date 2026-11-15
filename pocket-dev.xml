@@ -20,7 +20,7 @@ Authentication: run 'claude login' once (or provide ANTHROPIC_API_KEY). Codex si
   <WebUI>http://[IP]:[PORT:7681]</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/Jacob-Lasky/pocket-dev/main/icon.png</Icon>
-  <ExtraParams>--group-add 281 --memory=16G --memory-swap=16G --pids-limit 8192 --init --restart=unless-stopped --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device-cgroup-rule='c 189:* rmw'</ExtraParams>
+  <ExtraParams>--group-add 281 --memory=16G --memory-swap=16G --pids-limit 8192 --init --restart=unless-stopped --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device-cgroup-rule='c 189:* rmw' -p 172.17.0.1:2210:2222</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
