@@ -1461,3 +1461,83 @@ describe('entrypoint.sh starts the supervisor', () => {
     expect(stderr).toContain(`happier resolves to ${path.join(stubBin, 'happier')}, not the Happier-managed install`);
   });
 });
+
+describe('entrypoint.sh starts the headless supervisor watcher without Happier (WORK-318)', () => {
+  // With PD_HAPPIER=0 no pd-happier-supervise runs, so nothing else would run
+  // `fleet.py resume-self`, the step that restarts the headless watcher after a
+  // recreate. The stub appends its argv per call (so a second run shows), waits
+  // DELAY seconds first (so a foreground run would hold up the boot), and exits
+  // with EXIT. stderr goes to a FILE, not a pipe: spawnSync waits for a piped
+  // stderr to close, which a background child holds open, so a pipe could not
+  // tell background from foreground.
+  let calls, log, script;
+  beforeEach(() => {
+    calls = path.join(tmproot, 'resume-calls');
+    log = path.join(tmproot, 'boot-stderr');
+    script = path.join(tmproot, 'fleet-stub.py');
+    fs.writeFileSync(script, [
+      'import os, sys, time',
+      'time.sleep(float(os.environ.get("DELAY", "0")))',
+      `open(${JSON.stringify(calls)}, "a").write(" ".join(sys.argv[1:]) + "\\n")`,
+      'print("resumed")',
+      'sys.exit(int(os.environ.get("EXIT", "0")))',
+      '',
+    ].join('\n'));
+  });
+
+  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+  function waitFor(predicate, ms = 8000) {
+    const end = Date.now() + ms;
+    while (!predicate() && Date.now() < end) pause(50);
+    return predicate();
+  }
+
+  function boot(env = {}) {
+    const fd = fs.openSync(log, 'w');
+    const started = Date.now();
+    const res = spawnSync('bash', [ENTRYPOINT, 'true'], {
+      env: spawnEnv({
+        HOME: home,
+        PD_SKEL_DIR: skel,
+        PD_CACHE_DIR: cache,
+        PD_SUPERVISOR_RESUME_SCRIPT: script,
+        PD_HAPPIER: '0',
+        ...env,
+      }),
+      stdio: ['ignore', 'ignore', fd],
+    });
+    fs.closeSync(fd);
+    expect(res.status).toBe(0);
+    return Date.now() - started;
+  }
+
+  it('runs resume-self once, in the background, when Happier is off', () => {
+    const elapsed = boot({ DELAY: '2' });
+    expect(elapsed).toBeLessThan(2000);
+    expect(read(calls)).toBe('');
+    expect(waitFor(() => read(log).includes('supervisor-resume: resumed'))).toBe(true);
+    pause(300);
+    expect(read(calls)).toBe('resume-self --timeout 600\n');
+    expect(read(log).match(/supervisor-resume: resumed/g)).toHaveLength(1);
+    expect(read(log)).not.toContain('exited');
+  });
+
+  it('logs a failed run with its exit status', () => {
+    boot({ EXIT: '3' });
+    expect(waitFor(() => read(log).includes('supervisor-resume: exited 3;'))).toBe(true);
+    expect(read(log)).toContain('supervisor-resume: resumed');
+  });
+
+  it('honours PD_SUPERVISOR_RESUME=0', () => {
+    boot({ PD_SUPERVISOR_RESUME: '0' });
+    pause(500);
+    expect(read(calls)).toBe('');
+  });
+
+  it('does nothing when the supervisor skill is not installed', () => {
+    boot({ PD_SUPERVISOR_RESUME_SCRIPT: path.join(tmproot, 'absent.py') });
+    pause(500);
+    expect(read(calls)).toBe('');
+  });
+});
