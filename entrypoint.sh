@@ -616,6 +616,37 @@ if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
       ;;
   esac
   "${PD_HAPPIER_SUPERVISOR:-/mobile/pd-happier-supervise}" </dev/null >/dev/null &
+elif [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SUPERVISOR_RESUME:-1}" != "0" ] && [ "$(id -u)" != "0" ] \
+  && [ -f "${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}" ]; then
+  # No Happier supervisor this boot (PD_HAPPIER=0, or no CLI), so nothing above
+  # runs `fleet.py resume-self`, and that is what restarts the machine's
+  # headless supervisor watcher after a recreate: the watcher that turns every
+  # alert into a Multica issue (supervisor skill, W503; WORK-318 retired
+  # Happier on Tower). DO NOT drop this branch when Happier is off: without it
+  # Tower raises no alerts from the first recreate on, and nothing says so here
+  # (the hypervisor's revive only notices the stale heartbeat later).
+  # resume-self starts the watcher first and needs no daemon for that; with the
+  # chat retired (retired.json) it then exits 0. One run, no retry loop: the
+  # loop in pd-happier-supervise exists to wait for a daemon, and there is none.
+  # Same log prefix as that loop. Not as root, for the reason the loop gives:
+  # a root run leaves root-owned state in claude's home.
+  # A nonzero exit is logged with its status: an outer timeout (124) prints
+  # nothing of its own, and a silent failure here is the one this branch exists
+  # to prevent.
+  (
+    resume_script="${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}"
+    # `|| rc=$?`, not a bare `rc=$?` after it: this script runs under `set -e`,
+    # which would end the subshell at a failing assignment before anything is
+    # logged.
+    rc=0
+    out=$(timeout 700 python3 -I "$resume_script" resume-self --timeout 600 </dev/null 2>&1) || rc=$?
+    if [ -n "$out" ]; then
+      while IFS= read -r line; do echo "pocket-dev: supervisor-resume: $line" >&2; done <<<"$out"
+    fi
+    if [ "$rc" != 0 ]; then
+      echo "pocket-dev: supervisor-resume: exited $rc; no retry with Happier off. By hand: python3 -I $resume_script resume-self" >&2
+    fi
+  ) >/dev/null &
 fi
 
 # The memory guard (see mobile/pd-memguard for why it exists and why not
