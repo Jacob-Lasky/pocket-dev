@@ -121,8 +121,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # until #106), for the same reason: a tool that installs and UPDATES ITSELF
   # there wrote into the container layer, so its update vanished on the next
   # recreate. Claude Code's native installer and `claude update` own
-  # ~/.local/bin/claude and ~/.local/share/claude, and the Happier app's update
-  # button runs exactly that `claude update` (CLAUDE.md "Happier daemon").
+  # ~/.local/bin/claude and ~/.local/share/claude.
   #
   # DO NOT put .local back in the link list above: that would move the whole
   # persisted ~/.local aside on the next boot and replace it with the image's,
@@ -146,9 +145,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # image's copy is only the first-boot fallback (still on PATH through the
   # skeleton) and is never linked over the home's. Linking it would point
   # ~/.local/bin/claude back at the image's frozen version on every boot,
-  # undoing every `claude update`, and Happier would report the result as
-  # "Installed by you" (it attributes an install to Claude's updater only when
-  # the executable's real path is under ~/.local/share/claude). A link into
+  # undoing every `claude update`. A link into
   # the skeleton that an older layout left at one of these names is removed,
   # so the bootstrap below can replace it with the home's own install.
   PD_HOME_OWNED="claude"
@@ -183,7 +180,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
 
   # CLAUDE CODE IS A HOME-OWNED NATIVE INSTALL: ~/.local/bin/claude ->
   # ~/.local/share/claude/versions/<v>, in the mount, kept current by
-  # `claude update` (which the Happier app's update button runs). This makes
+  # `claude update`. This makes
   # sure the launcher exists. EVERY STEP IS NON-FATAL: the image's own claude
   # stays on PATH through the skeleton, so a failure here degrades to "the
   # image's Claude, which nothing can update", never to "no Claude".
@@ -233,12 +230,12 @@ if [ "$HOME_WRITABLE" = "1" ]; then
     :
   elif [ -e "$CLAUDE_LAUNCHER" ] && [ ! -L "$CLAUDE_LAUNCHER" ]; then
     echo "pocket-dev: ~/.local/bin/claude is not Claude's native launcher; leaving it." >&2
-    echo "pocket-dev: The Happier app cannot update that copy. Move it aside to restore the native install." >&2
+    echo "pocket-dev: \`claude update\` cannot update that copy. Move it aside to restore the native install." >&2
   elif in_image "$CLAUDE_VERSIONS"; then
     # The removal above failed. The installer would follow the link and write
     # into the container layer, so neither scan nor install runs.
     echo "pocket-dev: ~/.local/share/claude/versions links into the image and could not be removed;" >&2
-    echo "pocket-dev: the image's Claude runs, and the Happier app cannot update it. Remove that link." >&2
+    echo "pocket-dev: the image's Claude runs, and \`claude update\` cannot update it. Remove that link." >&2
   else
     # Only plain release versions (Claude's installer names them N.N.N). A
     # prerelease or any other name never wins: sort -V orders 2.1.10-rc.1
@@ -267,12 +264,13 @@ if [ "$HOME_WRITABLE" = "1" ]; then
         echo "pocket-dev: installed Claude Code natively into the home" >&2
       else
         echo "pocket-dev: native Claude install failed; the image's Claude runs instead," >&2
-        echo "pocket-dev: and the Happier app cannot update it until the next boot retries." >&2
+        echo "pocket-dev: and \`claude update\` cannot update it until the next boot retries." >&2
       fi
     fi
   fi
   # Say so when something earlier on PATH (a stray ~/bin/claude, say) shadows
-  # a working native launcher: the app would update one copy and run another.
+  # a working native launcher: `claude update` would update one copy while PATH
+  # runs another.
   if [ -x "$CLAUDE_LAUNCHER" ] && claude_on_path=$(command -v claude 2>/dev/null) \
     && [ "$(readlink -m "$claude_on_path")" != "$(readlink -m "$CLAUDE_LAUNCHER")" ]; then
     echo "pocket-dev: claude on PATH is $claude_on_path, which shadows the native ~/.local/bin/claude." >&2
@@ -310,9 +308,8 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   # lives in the home mount, so those tools survive a recreate without a volume
   # of their own — that is what retired the old /opt/pd prefix. It is FIRST on
   # PATH, ahead of ~/.local/bin and the image's /usr/local/bin, which is why the
-  # Happier-managed CLI's launcher (~/bin/happier) and the standalone Codex
-  # launcher (~/bin/codex) live here: each must win over the image's npm
-  # fallback copy of the same command.
+  # standalone Codex launcher (~/bin/codex) lives here: it must win over the
+  # image's npm fallback copy of the same command.
   if ! mkdir -p "$HOME/.claude" "$HOME/.pocket-dev" "$HOME/.dgvpn" "$HOME/bin" "$HOME/.codex" 2>/dev/null; then
     # A regular file at one of these names used to end the boot under `set -e`.
     echo "pocket-dev: could not create one of ~/.claude ~/.pocket-dev ~/.dgvpn ~/bin ~/.codex; that tool's state will not persist" >&2
@@ -401,7 +398,7 @@ if [ "$HOME_WRITABLE" = "1" ]; then
   fi
   # The payload can survive while its ~/bin launcher does not (deleted, or a
   # dangling link). Then PATH runs the image's npm Codex, which neither remote
-  # control nor the Happier app can update. Restore the link the installer
+  # control nor `codex update` can update. Restore the link the installer
   # makes; never replace a real file someone put there.
   if [ -x "$CODEX_STANDALONE" ] \
     && { [ ! -e "$HOME/bin/codex" ] && [ ! -L "$HOME/bin/codex" ] \
@@ -578,61 +575,28 @@ if [ -z "${LAVISH_AXI_HOST:-}" ]; then
   fi
 fi
 
-# The Happier daemon supervisor (see mobile/pd-happier-supervise for why it
-# exists). Started HERE, after the Lavish export and just before exec, so it,
-# the daemon and the session runners it launches inherit the finished
-# environment. The `claude` a runner starts does not (Happier allowlists its
-# env); the ~/.claude SessionStart hook restores it, see CLAUDE.md "Happier
-# daemon" (#103). Started
-# in the background so it never delays the server, and it outlives the exec as
-# a child of the same PID.
-#
-# It runs whenever the CLI is installed, signed in or not: a never-signed-in
-# home costs one bash loop doing a glob check a minute, and in exchange a first
-# `happier auth login` needs no daemon start by hand. That matters because a
-# start typed through `docker exec` misses this script's exports. PD_HAPPIER=0
-# turns it off, the same shape as PD_RESUME and PD_REMOTE_CONTROL.
-# PD_HAPPIER_SUPERVISOR is the test seam that swaps in a stub; nothing sets it in
-# production.
-#
-# stdout goes to /dev/null and NOT to whoever started us: the suites that run
-# this script read stdout, and a background child holding that pipe open would
-# keep their process from ever closing. stderr stays the container log.
-if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_HAPPIER:-1}" != "0" ] \
-  && happier_bin=$(command -v happier 2>/dev/null); then
-  # The CLI that should run is the Happier-managed install in ~/.happier, whose
-  # launcher is ~/bin/happier: it is the one the Happier app can update, and
-  # pd-happier-supervise moves the daemon onto each new version. The image's
-  # npm copy (/opt/agent-tools, linked as /usr/local/bin/happier) is only the
-  # first-boot fallback. When anything else resolves (that fallback, or a stray
-  # copy earlier on PATH), the app shows the Happier CLI as "Installed by you"
-  # and cannot update it, so say so and name the fix.
-  case "$(readlink -m "$happier_bin")" in
-    "$(readlink -m "${HAPPIER_HOME_DIR:-$HOME/.happier}")"/cli/versions/*) ;;
-    *)
-      echo "pocket-dev: happier resolves to $happier_bin, not the Happier-managed install," >&2
-      echo "pocket-dev: so the Happier app cannot update it. Install the managed CLI:" >&2
-      echo "pocket-dev: see CLAUDE.md \"Happier daemon\" (happier.dev/install, HAPPIER_BIN_DIR=\$HOME/bin)." >&2
-      ;;
-  esac
-  "${PD_HAPPIER_SUPERVISOR:-/mobile/pd-happier-supervise}" </dev/null >/dev/null &
-elif [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SUPERVISOR_RESUME:-1}" != "0" ] && [ "$(id -u)" != "0" ] \
+# Resume this machine's supervisor once per container boot: `fleet.py
+# resume-self` is what restarts the headless supervisor watcher after a
+# recreate, the watcher that turns every alert into a Multica issue
+# (supervisor skill, W503). Nothing else in the container starts it. DO NOT
+# drop this: without it Tower raises no alerts from the first recreate on, and
+# nothing says so here (the hypervisor's revive only notices the stale
+# heartbeat later). WORK-318 added it as the Happier-off branch; WORK-689
+# removed Happier, whose daemon supervisor used to run it, from the image.
+# resume-self starts the watcher first and needs no daemon for that; with the
+# chat retired (retired.json) it then exits 0. One run, no retry loop. Not as
+# root: a root run leaves root-owned state in claude's home. Started here,
+# after the Lavish export and just before exec, so the watcher inherits the
+# finished environment; backgrounded so it never delays the server.
+# A nonzero exit is logged with its status: an outer timeout (124) prints
+# nothing of its own, and a silent failure here is the one this block exists
+# to prevent. stdout goes to /dev/null and NOT to whoever started us: the
+# suites that run this script read stdout, and a background child holding that
+# pipe open would keep their process from ever closing. stderr stays the
+# container log. PD_SUPERVISOR_RESUME=0 turns it off;
+# PD_SUPERVISOR_RESUME_SCRIPT is a test seam.
+if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SUPERVISOR_RESUME:-1}" != "0" ] && [ "$(id -u)" != "0" ] \
   && [ -f "${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}" ]; then
-  # No Happier supervisor this boot (PD_HAPPIER=0, or no CLI), so nothing above
-  # runs `fleet.py resume-self`, and that is what restarts the machine's
-  # headless supervisor watcher after a recreate: the watcher that turns every
-  # alert into a Multica issue (supervisor skill, W503; WORK-318 retired
-  # Happier on Tower). DO NOT drop this branch when Happier is off: without it
-  # Tower raises no alerts from the first recreate on, and nothing says so here
-  # (the hypervisor's revive only notices the stale heartbeat later).
-  # resume-self starts the watcher first and needs no daemon for that; with the
-  # chat retired (retired.json) it then exits 0. One run, no retry loop: the
-  # loop in pd-happier-supervise exists to wait for a daemon, and there is none.
-  # Same log prefix as that loop. Not as root, for the reason the loop gives:
-  # a root run leaves root-owned state in claude's home.
-  # A nonzero exit is logged with its status: an outer timeout (124) prints
-  # nothing of its own, and a silent failure here is the one this branch exists
-  # to prevent.
   (
     resume_script="${PD_SUPERVISOR_RESUME_SCRIPT:-$HOME/.claude/skills/supervisor/scripts/fleet.py}"
     # `|| rc=$?`, not a bare `rc=$?` after it: this script runs under `set -e`,
@@ -644,7 +608,7 @@ elif [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SUPERVISOR_RESUME:-1}" != "0" ] && [ 
       while IFS= read -r line; do echo "pocket-dev: supervisor-resume: $line" >&2; done <<<"$out"
     fi
     if [ "$rc" != 0 ]; then
-      echo "pocket-dev: supervisor-resume: exited $rc; no retry with Happier off. By hand: python3 -I $resume_script resume-self" >&2
+      echo "pocket-dev: supervisor-resume: exited $rc; no retry. By hand: python3 -I $resume_script resume-self" >&2
     fi
   ) >/dev/null &
 fi
@@ -653,9 +617,9 @@ fi
 # earlyoom or PSI). It kills the largest runaway process before this
 # container's memory cgroup livelocks in reclaim, which the kernel does not
 # OOM-kill its way out of here. Started unconditionally, not behind
-# HOME_WRITABLE like the Happier block: it needs no home, and a read-only home
-# is no reason to let one process stall every session. Backgrounded and
-# stdout to /dev/null for the same reasons as the Happier supervisor above.
+# HOME_WRITABLE like the supervisor resume: it needs no home, and a read-only
+# home is no reason to let one process stall every session. Backgrounded and
+# stdout to /dev/null for the same reasons as the supervisor resume above.
 # PD_MEMGUARD=0 turns it off; PD_MEMGUARD_BIN is the test seam that swaps in
 # a stub, and nothing sets it in production.
 if [ "${PD_MEMGUARD:-1}" != "0" ]; then
@@ -666,7 +630,7 @@ fi
 # down): key-only, unprivileged, and idle until ~/.ssh/authorized_keys exists.
 # It is how jake-hypervisor reaches this container when Multica is down. Behind
 # HOME_WRITABLE because its host key and config live in the home. Backgrounded
-# and stdout to /dev/null for the same reasons as the Happier supervisor above.
+# and stdout to /dev/null for the same reasons as the supervisor resume above.
 # PD_SSHD=0 turns it off; PD_SSHD_SUPERVISOR is the test seam that swaps in a
 # stub, and nothing sets it in production.
 if [ "$HOME_WRITABLE" = "1" ] && [ "${PD_SSHD:-1}" != "0" ]; then

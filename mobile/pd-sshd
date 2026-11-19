@@ -4,7 +4,7 @@
 # WHY this exists (Jacob-Lasky/pocket-dev, Multica WORK-332). Tower's agents
 # take their work through Multica. When Multica itself is down (2026-11-15
 # 05:27Z, a database outage), the only other way in was a Happier session, and
-# Happier is being retired. This sshd is the outage path: jake-hypervisor runs
+# Happier has since been retired. This sshd is the outage path: jake-hypervisor runs
 # `ssh tower-pocketdev`, which goes through the reverse tunnel Tower already
 # keeps to jake-hypervisor (container happier-hypervisor-tunnel, forward
 # 127.0.0.1:2210 on jake-hypervisor to 172.17.0.1:2210 on Tower), then through

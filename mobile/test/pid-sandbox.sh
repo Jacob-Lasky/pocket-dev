@@ -4,9 +4,10 @@
 # never in the container or VM you run it from.
 #
 # WHY. On 2026-11-03 a mutation run of pd-happier-supervise's stale-record
-# cleanup (a `kill $pids` mutant) met a test record naming PID 1 and SIGTERMed
-# tini: the live pocket-dev died twice. Since then every record in
-# happier.test.js names a PID no process can hold, and the few tests that need
+# cleanup (a `kill $pids` mutant; that script was removed with Happier in
+# WORK-689) met a test record naming PID 1 and SIGTERMed tini: the live
+# pocket-dev died twice. Since then every planted PID in the suites names a PID
+# no process can hold (pidSandbox.js NO_SUCH_PID), and the few tests that need
 # a real process are gated on PD_PID_SANDBOX=1 AND a PID 1 whose arguments
 # include "pd-pid-sandbox", which only this script's container has. In here,
 # kill(1) can only end this throwaway container.
@@ -19,8 +20,7 @@
 # Usage: test/pid-sandbox.sh <repo root AS THE DOCKER HOST SEES IT> [vitest args]
 #   in pocket-dev: the /coding path translates to /mnt/user/misc/coding/...
 #   in CI:         "$GITHUB_WORKSPACE"
-# Default vitest args: the PID-sandbox tests of test/server/happier.test.js and
-# test/server/memguard.test.js.
+# Default vitest args: the PID-sandbox tests of test/server/memguard.test.js.
 # PD_PID_SANDBOX_PREP, when set, is a shell command run in the copy's mobile/
 # directory before vitest (how a mutation is applied, to the copy only).
 set -euo pipefail
@@ -29,7 +29,7 @@ shift
 here=$(cd "$(dirname "$0")/../.." && pwd)
 image=$(awk '$1 == "FROM" && $2 ~ /^node:/ { img = $2 } END { print img }' "$here/Dockerfile")
 [ -n "$image" ] || { echo "pid-sandbox: no node base image in $here/Dockerfile" >&2; exit 2; }
-[ "$#" -gt 0 ] || set -- test/server/happier.test.js test/server/memguard.test.js -t 'PID sandbox'
+[ "$#" -gt 0 ] || set -- test/server/memguard.test.js -t 'PID sandbox'
 # Inside: a PREP must change the copy, and every "(PID sandbox)" test the
 # filter selected must actually RUN (pass or fail), with at least one doing so,
 # so a renamed describe, a filter that matches nothing, or a gate that no longer

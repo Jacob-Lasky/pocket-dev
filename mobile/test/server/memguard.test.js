@@ -127,10 +127,6 @@ describe('pd-memguard', () => {
     // picks one signals nothing and the assertions below catch it.
     let fake = NO_SUCH_PID;
     for (const cmd of [
-      '/home/claude/.happier/cli/versions/0.2.20/happier daemon start-sync', // the Happier daemon
-      // the same daemon from the image's npm fallback (its spawnHappyCLI shape)
-      'node --no-warnings --no-deprecation /opt/agent-tools/node_modules/@happier-dev/cli/package-dist/index.mjs daemon start-sync',
-      '/bin/bash /mobile/pd-happier-supervise',
       '/bin/bash /mobile/pd-memguard',
       'node /mobile/server.js', // the terminal server
       'tmux -u -f /mobile/tmux.conf new-session -A -s main-1', // the server keeps its client's argv

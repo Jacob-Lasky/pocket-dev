@@ -114,9 +114,7 @@ describe('entrypoint.sh seeding, executed', () => {
   describe('Claude is a home-owned native install', () => {
     // The image's claude is a fallback. The one that runs is ~/.local/bin/claude
     // -> ~/.local/share/claude/versions/<v>, inside the mount, which `claude
-    // update` (and the Happier app's update button) keeps current. Happier
-    // attributes an install to Claude's updater only when the real path is
-    // under ~/.local/share/claude; anything else shows as "Installed by you".
+    // update` keeps current.
     const local = (rel) => path.join(home, '.local', rel);
 
     it('never links the image claude into the home', () => {
