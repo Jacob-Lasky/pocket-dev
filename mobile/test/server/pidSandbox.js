@@ -1,5 +1,5 @@
 // Shared by every suite whose code under test signals a PID it read from
-// somewhere (pd-happier-supervise's daemon records, pd-memguard's /proc scan).
+// somewhere (pd-memguard's /proc scan).
 import fs from 'node:fs';
 
 // A PID for every test that needs no real process behind it: above the

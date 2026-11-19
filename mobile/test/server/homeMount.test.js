@@ -48,10 +48,10 @@ describe('Dockerfile: the image home is relocated out of the mount', () => {
   it('keeps the RELOCATED bin on PATH, behind the home installs that update themselves', () => {
     // The skeleton on PATH is what still runs when seeding never happened:
     // /opt/pd-home is self-contained after the rewrite above. Ahead of it,
-    // ~/bin holds the Happier-managed and standalone Codex launchers (which must
-    // beat the image's npm copies in /usr/local/bin) and ~/.local/bin holds
-    // Claude's native launcher (which must beat the skeleton's frozen claude).
-    // Reorder these and the Happier app shows "Installed by you" again.
+    // ~/bin holds the standalone Codex launcher (which must beat the image's
+    // npm copy in /usr/local/bin) and ~/.local/bin holds Claude's native
+    // launcher (which must beat the skeleton's frozen claude). Reorder these
+    // and the frozen copies run, and their updates stop taking effect.
     const pathLine = dockerfile.match(/^ENV PATH="([^"]+)"/m);
     expect(pathLine).not.toBeNull();
     const dirs = pathLine[1].split(':');
@@ -117,8 +117,7 @@ describe('entrypoint.sh: seeding the mounted home', () => {
   });
 
   it('never links the image claude over the home-owned native install', () => {
-    // Linking it would undo every `claude update` on each boot, and Happier
-    // would show Claude as "Installed by you" (not under ~/.local/share/claude).
+    // Linking it would undo every `claude update` on each boot.
     expect(script).toMatch(/^\s*PD_HOME_OWNED="claude"$/m);
   });
 

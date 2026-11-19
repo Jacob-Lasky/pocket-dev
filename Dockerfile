@@ -205,45 +205,29 @@ RUN curl -fsSL -o /tmp/bws.zip \
     && rm -rf /tmp/bws /tmp/bws.zip \
     && bws --version
 
-# Happier and OpenCode, the agent-orchestration CLIs. Happier's daemon is what
-# makes this container's sessions visible and drivable from the Happier phone,
-# desktop and web apps (relay on Tower, homelab#27); entrypoint.sh supervises
-# it. OpenCode is the any-model harness Happier drives.
+# OpenCode, the any-model agent harness. (Happier's CLI shipped here too until
+# WORK-689, 2026-11-19: Tower retired Happier, WORK-128.)
 #
 # PINNED, unlike codex and lavish above, and pinned in exactly ONE place:
-# agent-tools/package.json, with its lockfile installed by `npm ci`. Happier's
-# OpenCode 2 support and its daemon/relay protocol move between minor
-# releases, so a silent upgrade is a real behaviour change, not freshness.
-# Bump both by editing that file and regenerating the lockfile.
+# agent-tools/package.json, with its lockfile installed by `npm ci`. OpenCode
+# changes behaviour between minor releases, so an upgrade is a reviewed bump,
+# not freshness. Bump it by editing that file and regenerating the lockfile.
 #
 # npm (not pnpm) on purpose: this is a plain install tree, not a workspace, and
 # npm 11's `allowScripts` gives the two properties pnpm was chosen for here, a
 # lockfile and build scripts refused unless named. That list lives in
-# package.json and is deliberately exact; CLAUDE.md "Happier daemon" says why
-# each entry is there and why onnxruntime-node is denied.
+# package.json and is deliberately exact; CLAUDE.md "OpenCode" says why.
 #
 # Same /usr/local reasoning as codex: /home/claude ships EMPTY and is a bind
-# mount. The tree is root-owned and read-only to uid 99; both CLIs were
-# verified to run from a read-only tree (they keep state under ~/.happier and
-# ~/.local/share/opencode, never in their package).
-#
-# THIS HAPPIER IS A FIRST-BOOT FALLBACK, NOT THE ONE THAT RUNS. The CLI that
-# runs is Happier's own managed install in ~/.happier (launcher ~/bin/happier,
-# which precedes /usr/local/bin), because that is the install the Happier app
-# can update; an npm copy shows there as "Installed by you" and cannot be
-# updated from the app (Jake, 2026-11-02: standardize on the Happier update
-# surface). The pin still matters: it is what runs until the managed CLI is
-# installed, and the managed CLI's updates still have a gate, Jake pressing
-# Update in the app. OpenCode stays image-owned: Happier's catalog only knows
-# OpenCode 1.x. CLAUDE.md "Happier daemon" has the install command.
+# mount. The tree is root-owned and read-only to uid 99; OpenCode was verified
+# to run from a read-only tree (it keeps state under ~/.local/share/opencode,
+# never in its package).
 COPY agent-tools/package.json agent-tools/package-lock.json /opt/agent-tools/
 RUN cd /opt/agent-tools \
     && npm ci --no-fund --no-audit \
     && npm cache clean --force \
-    && ln -s /opt/agent-tools/node_modules/.bin/happier /usr/local/bin/happier \
     && ln -s /opt/agent-tools/node_modules/.bin/opencode /usr/local/bin/opencode \
     && ln -s /opt/agent-tools/node_modules/.bin/opencode2 /usr/local/bin/opencode2 \
-    && happier --version \
     && opencode --version
 
 # Add claude shortcut aliases. `opus`/`sonnet` are MOVING aliases: each resolves
@@ -300,9 +284,9 @@ RUN corepack enable pnpm
 COPY mobile/ /mobile/
 RUN chmod +x /mobile/pd-lavish-axi.mjs && \
     ln -sfn /mobile/pd-lavish-axi.mjs /usr/local/bin/lavish-axi
-RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace pd-happier-supervise pd-memguard pd-sshd && \
+RUN cd /mobile && sed -i 's/\r//' start.sh pd-claude-session pd-codex-session pd-codex-session-start pd-codex-bind-current pd-codex-thread-status pd-trust-workspace pd-memguard pd-sshd && \
     pnpm install --prod --frozen-lockfile && \
-    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace /mobile/pd-happier-supervise /mobile/pd-memguard /mobile/pd-sshd && \
+    chmod +x /mobile/start.sh /mobile/pd-claude-session /mobile/pd-codex-session /mobile/pd-codex-session-start /mobile/pd-codex-bind-current /mobile/pd-codex-thread-status /mobile/pd-trust-workspace /mobile/pd-memguard /mobile/pd-sshd && \
     mkdir -p /etc/codex && \
     cp /mobile/codex-requirements.toml /etc/codex/requirements.toml && \
     chown -R claude:users /mobile
@@ -435,12 +419,11 @@ ENV PD_CACHE_DIR=/var/tmp/pd-cache
 # PATH still names the RELOCATED skeleton, so `claude` and `uv` resolve even if
 # the home mount is empty and seeding has not run. AHEAD of it, in order:
 #   $HOME/bin         the prefix for CLIs a session installs for itself, and the
-#                     launchers of the Happier-managed CLI and standalone Codex.
-#                     It must precede /usr/local/bin, where the image's npm
-#                     fallbacks of both sit.
+#                     standalone Codex launcher. It must precede /usr/local/bin,
+#                     where the image's npm fallback of Codex sits.
 #   $HOME/.local/bin  a real directory in the mount (entrypoint.sh): Claude
-#                     Code's native launcher, which `claude update` (and so the
-#                     Happier app's update button) keeps current. It must
+#                     Code's native launcher, which `claude update` keeps
+#                     current. It must
 #                     precede the skeleton, whose claude is the frozen fallback.
 # Both are inside the home mount, so they persist across recreates with no
 # volume of their own. This replaced the old /opt/pd tool prefix, which existed

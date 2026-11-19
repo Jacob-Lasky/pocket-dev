@@ -26,14 +26,10 @@
 // what the test set up. Green in CI, red only inside pocket-dev, which is where
 // these tests get run at least as often.
 //
-// HAPPIER_ and BASH_ENV, added 2026-11-03 for a worse version of the same bug:
-// pd-happier-supervise reads HAPPIER_HOME_DIR before $HOME, and a Happier-
-// launched session carries HAPPIER_* variables. An inherited HAPPIER_HOME_DIR
-// would point the stale-daemon-record tests at the REAL ~/.happier, where their
-// future boot-time seam makes every live record look stale and deletes it.
-// BASH_ENV is sourced by every non-interactive bash a test starts, so an
-// inherited one runs arbitrary setup inside the script under test.
-const SCRUBBED_PREFIXES = ['PD_', 'LAVISH_', 'HAPPIER_'];
+// BASH_ENV and ENV, added 2026-11-03: BASH_ENV is sourced by every
+// non-interactive bash a test starts, so an inherited one runs arbitrary setup
+// inside the script under test.
+const SCRUBBED_PREFIXES = ['PD_', 'LAVISH_'];
 const SCRUBBED_NAMES = ['BASH_ENV', 'ENV'];
 
 export function spawnEnv(overrides = {}) {
@@ -48,25 +44,19 @@ export function spawnEnv(overrides = {}) {
   // Codex, and its log line lands where lavish.test.js reads stdout. Set it
   // explicitly in a test that means to exercise the block.
   //
-  // PD_HAPPIER=0 by DEFAULT for a related reason: entrypoint.sh starts a
-  // BACKGROUND loop when the home holds a Happier credential, and a background
-  // child outliving the script would keep the test's stderr pipe open. A temp
-  // HOME holds no credential, so this is belt and braces; happier.test.js sets
-  // it explicitly where it means to exercise the launch.
-  //
   // PD_CLAUDE_NATIVE=0 by DEFAULT, the PD_CODEX_RC reason again: with no Claude
   // in a temp HOME, entrypoint.sh runs the skeleton's `claude install`, which in
   // the image downloads Claude Code. A fixture skeleton's claude is a stub, but
   // a test that means to exercise the bootstrap sets it explicitly.
   //
-  // PD_MEMGUARD=0 by DEFAULT, the PD_HAPPIER reason without the "belt and
-  // braces": entrypoint.sh starts pd-memguard in the background on EVERY boot,
-  // and it loops forever. Left on, each suite that spawns entrypoint.sh would
+  // PD_MEMGUARD=0 by DEFAULT: entrypoint.sh starts pd-memguard in the
+  // background on EVERY boot, and it loops forever. A background child
+  // outliving the script would keep the test's stderr pipe open. Left on, each suite that spawns entrypoint.sh would
   // leave one running (inside pocket-dev, against the live cgroup) and hold the
   // test's stderr pipe open. memguard.test.js sets it where it means to
   // exercise the launch.
   //
   // PD_SSHD=0 by DEFAULT for the same reason: pd-sshd loops forever in the
   // background. sshd.test.js sets it where it means to exercise the launch.
-  return Object.assign(env, { PD_CODEX_RC: '0', PD_HAPPIER: '0', PD_CLAUDE_NATIVE: '0', PD_MEMGUARD: '0', PD_SSHD: '0' }, overrides);
+  return Object.assign(env, { PD_CODEX_RC: '0', PD_CLAUDE_NATIVE: '0', PD_MEMGUARD: '0', PD_SSHD: '0' }, overrides);
 }

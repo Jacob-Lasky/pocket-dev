@@ -6,9 +6,8 @@
 # large transcript) grows toward that limit, the kernel does NOT OOM-kill it:
 # reclaim keeps evicting page cache, executables included, and every
 # allocation still succeeds after a long stall. memory.events counted 446345
-# `max` events and 0 `oom_kill`. The container stays "up" while every session,
-# the Happier daemon and the terminal server crawl, which is worse than any one
-# process dying.
+# `max` events and 0 `oom_kill`. The container stays "up" while every session
+# and the terminal server crawl, which is worse than any one process dying.
 #
 # WHY THIS AND NOT A STOCK TOOL (measured inside pocket-dev, 2026-11-11):
 # - earlyoom reads /proc/meminfo, which shows the HOST's 64 GB, not this
@@ -42,8 +41,8 @@
 #
 # WHAT IT NEVER KILLS:
 # - PID 1 (tini), itself, and anything whose command line matches
-#   PD_MEMGUARD_PROTECT (default: the Happier daemon, pd-happier-supervise,
-#   this script, the terminal server and tmux). Killing those takes every
+#   PD_MEMGUARD_PROTECT (default: this script, the terminal server and tmux).
+#   Killing those takes every
 #   session down with it, which is the outcome this exists to prevent.
 # - Anything smaller than PD_MEMGUARD_MIN_VICTIM_MB (default 1024). Agent
 #   sessions sit at 300-400 MB each; a runaway is gigabytes. When the cgroup is
@@ -75,13 +74,9 @@ reserve_kb=$(( ${PD_MEMGUARD_RESERVE_MB:-2048} * 1024 ))
 min_victim_kb=$(( ${PD_MEMGUARD_MIN_VICTIM_MB:-1024} * 1024 ))
 grace=${PD_MEMGUARD_GRACE:-2}
 cooldown=${PD_MEMGUARD_COOLDOWN:-5}
-# The Happier daemon has two shapes: the managed install runs
-# "<cli>/versions/<v>/happier daemon start-sync", and the image's npm fallback
-# runs "node ... <cli>/package-dist/index.mjs daemon start-sync" (the same two
-# pd-happier-supervise's is_live_daemon accepts).
 # tmux( |:|$): the server keeps the argv of the client that started it, but
 # tmux may also retitle it "tmux: server", and either form must stay protected.
-protect=${PD_MEMGUARD_PROTECT:-'(^|/)happier[^ /]* daemon( |$)|/package-dist/index\.mjs daemon( |$)|(^|/)pd-happier-supervise( |$)|(^|/)pd-memguard( |$)|/mobile/server\.js|(^|/)tmux( |:|$)'}
+protect=${PD_MEMGUARD_PROTECT:-'(^|/)pd-memguard( |$)|/mobile/server\.js|(^|/)tmux( |:|$)'}
 log=${PD_MEMGUARD_LOG:-${PD_STATE_DIR:-$HOME/.pocket-dev}/memguard.log}
 once=${PD_MEMGUARD_ONCE:-0}
 
