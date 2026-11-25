@@ -59,7 +59,15 @@ function run({ sshdBody = 'exit 0', env = {} } = {}) {
   });
 }
 
-const authorize = () => fs.writeFileSync(path.join(home, '.ssh/authorized_keys'), 'ssh-ed25519 AAAA test\n');
+// The key file's mode is set explicitly, NOT left to the caller's umask: under
+// `docker exec` (umask 0000) or entrypoint.sh (umask 002) it would come out
+// group/other-writable, pd-sshd would fix it and say so, and the "already-safe"
+// case would fail for a reason that has nothing to do with pd-sshd.
+const authorize = () => {
+  const keys = path.join(home, '.ssh/authorized_keys');
+  fs.writeFileSync(keys, 'ssh-ed25519 AAAA test\n');
+  fs.chmodSync(keys, 0o600);
+};
 const config = () => fs.readFileSync(path.join(state, 'sshd_config'), 'utf8');
 const directive = (name) => (config().match(new RegExp(`^${name} (.*)$`, 'm')) || [])[1];
 
